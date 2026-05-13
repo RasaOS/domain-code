@@ -109,26 +109,44 @@ several times over during implementation.
 Quote the title + user story back. Confirm you're working on
 the intended task.
 
-#### Step 3.2 — Internal reconnaissance (read the repo)
+#### Step 3.2a — Initial reconnaissance (context + conventions)
 
-Read these in parallel where possible:
+Read in parallel:
 
 - **`CLAUDE.md`** — project facts, platform, gated files,
-  verification commands, any project-specific rules.
+  verification commands, project-specific rules.
 - **The stub itself** — every line, not just the title.
 - **Files referenced in the stub** — if the stub mentions
   patterns or modules, read them.
-- **Existing patterns matching this task's domain.** Use
-  `grep` / `glob`. If the task is "add work order CRUD to the
-  iOS app," find the existing CRUD slices (parts, inspections)
-  and read them. If the task is "add a webhook endpoint,"
-  find existing endpoints. The new code should match how the
-  repo already does this kind of thing.
-- **Likely-touched files.** Derive from the topic + repo
-  structure. Don't skip relevant ones.
+- **Likely-touched files** — derive from topic + repo
+  structure.
 
-Goal: when you draft the spec, every file in "Files expected
-to change" is grounded in code you actually read.
+**Extract and document:**
+- Tech stack, frameworks, languages
+- Code style conventions (naming, casing, patterns)
+- Project-specific rules or constraints
+- What gated files or schema ownership applies
+
+Goal: understand what we're dealing with and what the codebase expects.
+
+#### Step 3.2b — Pattern matching reconnaissance (find what to follow)
+
+Based on 3.2a findings, search for related code in the codebase
+that does similar things. Don't reinvent the wheel.
+
+**Search for:**
+- Existing code doing similar work (CRUD, API endpoints, UI
+  patterns, migrations, etc.). If the task is "add work order
+  CRUD," find existing CRUD slices (parts, inspections) and
+  read them. If "add webhook endpoint," find existing endpoints.
+- **Code conventions in action** — naming, file layout, error
+  handling, logging, testing patterns. The new code should
+  match how this repo already does this kind of thing.
+- **Reusable functionality** — shared utilities, helpers,
+  libraries already in the codebase.
+
+Goal: ground every design decision in what already exists.
+Build like the team already builds.
 
 #### Step 3.3 — External reconnaissance (read current docs)
 
@@ -200,6 +218,18 @@ read of the territory:
 ```markdown
 ## Reconnaissance — TASK-NNN
 
+### Codebase conventions (from 3.2a)
+- **Tech stack:** <languages, frameworks, key tools>
+- **Code style:** <naming (camelCase/snake_case), file layout,
+  module structure, error handling, logging patterns>
+- **Project rules:** <gated files, schema ownership, specific
+  constraints>
+
+### Related code & patterns (from 3.2b)
+- <existing pattern at file:line — what we'll match>
+- <existing utility at file:line — what we'll reuse>
+- <similar feature at file:line — code style to follow>
+
 ### What exists in this repo
 - <pattern 1, file:line — one-line description>
 - <pattern 2, file:line — one-line description>
@@ -221,7 +251,9 @@ read of the territory:
 - <constraint the task may violate that needs ruling>
 ```
 
-Show this report. Wait for the user's read. They may correct,
+Show this report. The conventions and related patterns sections
+answer: "what does this codebase already do like this, and how
+should we match it?" Wait for the user's read. They may correct,
 add, or clear items before you draft.
 
 #### Step 3.4.5 — Approach validation (complex tasks only)
@@ -421,6 +453,11 @@ The user has an idea but doesn't know where it fits.
   `/plan`'s job. Ask the user to switch skills.
 - **Don't write code.** Tasks are specs; implementation happens
   outside skills.
+- **Don't invent new conventions or patterns.** In 3.2b, find
+  existing code doing similar work and match its style. If the
+  codebase uses camelCase for functions, use camelCase. If it
+  has a standard error-handling pattern, follow it. Don't be
+  the first person to do something differently in this codebase.
 
 ## When NOT to use this skill
 
