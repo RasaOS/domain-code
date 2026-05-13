@@ -109,6 +109,22 @@ several times over during implementation.
 Quote the title + user story back. Confirm you're working on
 the intended task.
 
+#### Step 3.1.5 — Task splitting assessment
+
+Should this be one task or multiple?
+
+Ask:
+- Are there 2+ independent unit-of-work items here?
+- Could they ship separately?
+- Do they touch completely different files/domains?
+
+If yes to any: propose splitting. Example: "Update header"
++ "add header tests" = one task. But "update header" + "refactor
+sidebar" = two tasks.
+
+If split: create separate stubs for each, update ROADMAP, show
+the user the split.
+
 #### Step 3.2a — Initial reconnaissance (context + conventions)
 
 Read in parallel:
@@ -147,6 +163,32 @@ that does similar things. Don't reinvent the wheel.
 
 Goal: ground every design decision in what already exists.
 Build like the team already builds.
+
+#### Step 3.2.7 — Precedent & related work check
+
+Don't repeat mistakes. Search the project for what's been done
+before on the same or similar files/functionality.
+
+**Search:**
+- **`tasks/done/`** — completed similar work. Read the spec and
+  any blocker notes. What went well? What was hard?
+- **`tasks/archive/`** — deferred or abandoned work on this
+  area. Why was it paused? What did we learn?
+- **`tasks/active/`** — what's in progress touching the same
+  files? Coordinate to avoid conflicts.
+- **`docs/decisions/`** — architectural decisions affecting
+  this area. What was decided and why?
+- **`docs/postmortems/`** — incidents in this domain. What
+  broke? What guard rails are missing?
+
+**Document findings:**
+- Prior work on same files/feature
+- Gotchas discovered in past attempts
+- Lessons learned (what to do / what not to do)
+- Active work that might conflict
+- Architectural constraints from decisions
+
+These findings go into the recon report (Step 3.4).
 
 #### Step 3.3 — External reconnaissance (read current docs)
 
@@ -229,6 +271,15 @@ read of the territory:
 - <existing pattern at file:line — what we'll match>
 - <existing utility at file:line — what we'll reuse>
 - <similar feature at file:line — code style to follow>
+
+### Precedent & lessons learned (from 3.2.7)
+- **Prior work:** TASK-NNN tackled this in [date]. Result: <outcome>.
+  Key lesson: <what we learned>
+- **Gotchas to avoid:** <specific pitfall from past attempts>
+- **Active conflicts:** TASK-MMM is in progress touching the same
+  file at [location]. Coordinate with [person] on sequencing.
+- **Architectural constraint:** Decision from YYYY-MM-DD: <what
+  was decided and why>
 
 ### What exists in this repo
 - <pattern 1, file:line — one-line description>
