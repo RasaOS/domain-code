@@ -16,9 +16,11 @@ guess.
   current contents of `tasks/{backlog,active,done}/` before
   acting. The phase listings in ROADMAP are the registry.
 - **Respect the priority rule.** Default to a stub. Full specs
-  only when the user explicitly signals priority ("emergency",
-  "needs to ship before X", "this is next up", etc.). See
-  `task-rules.md` "Adding tasks to the backlog (priority rule)".
+  only when the user explicitly uses these exact signals:
+  "emergency", "urgent", "do it now", "needs to ship before X",
+  "this is next up", or "top priority". Any other phrasing →
+  stub + ask "backlog only, or should this jump the queue?"
+  See `task-rules.md` "Adding tasks to the backlog (priority rule)".
 - **Respect the phase structure rule.** Every new task belongs
   to exactly one phase. If the user doesn't say which, ASK
   before filing. Never invent a phase.
@@ -55,8 +57,10 @@ guess.
    phase does this belong to?" Show the current phase names
    from PHASES.md (just names, not full scopes). User picks
    or proposes a new phase (which is a `/plan` job — hand off).
-3. **Determine type.** Default = stub. If user signaled
-   priority, draft a full spec using `task-template.md`'s shape.
+3. **Determine type.** Default = stub. Full spec only if user
+   said one of: "emergency", "urgent", "do it now", "needs to
+   ship before X", "this is next up", "top priority". If unsure,
+   ask: "backlog only, or should this jump the queue?"
 4. **Assign ID.** Next available `TASK-NNN`.
 5. **Draft the file** at `tasks/backlog/TASK-NNN-slug.md`.
    - Stub format: title + 1-line user story + 1-line "why" +
@@ -345,6 +349,9 @@ The user has an idea but doesn't know where it fits.
 ## What you must NOT do
 
 - **Don't draft a full spec when the user didn't ask for one.**
+  The user must say "emergency", "urgent", "do it now", "needs
+  to ship before X", "this is next up", or "top priority". If
+  they said something else, file a stub and ask for clarification.
   Stubs are the default. The priority rule is explicit on this
   — re-read `task-rules.md` if uncertain.
 - **Don't subdivide a task into siblings unless explicitly
