@@ -47,6 +47,17 @@ guess.
   knowledge problem; the spec's job is to feed it accurate,
   current context.
 
+## Two-tier Operation 3
+
+**Simple tasks** (text updates, clear bug fixes, small tweaks):
+Steps 3.1 → 3.2 → 3.3 → 3.4 → 3.5 → 3.6 → 3.7 → 3.8.
+Skip 3.4.5.
+
+**Complex tasks** (schema changes, design work, perf-sensitive,
+cross-team, breaking changes, feature flags):
+Steps 3.1 → 3.2 → 3.3 → 3.4 → **3.4.5 (approach validation)** →
+3.5 → 3.6 → 3.7 → 3.8. Include relevant optional sections in 3.7.
+
 ## Common operations
 
 ### Operation 1 — File a new task
@@ -213,6 +224,39 @@ read of the territory:
 Show this report. Wait for the user's read. They may correct,
 add, or clear items before you draft.
 
+#### Step 3.4.5 — Approach validation (complex tasks only)
+
+For tasks touching schema, design, perf, dependencies, or
+backwards-compat, propose the approach before drafting:
+
+```markdown
+## Proposed approach — TASK-NNN
+
+<One-line what we're building>
+
+**Why this approach:**
+- Matches existing pattern at [file:line]
+- Doesn't conflict with [constraint]
+- Leaves room for [future work]
+
+**Contextual checks** (mark yes/no/skip as applicable):
+- [ ] Schema change / migration needed?
+- [ ] Perf implications / pagination / indexing?
+- [ ] Breaking change / backwards-compat issue?
+- [ ] Needs design review?
+- [ ] Blocks or blocked by other tasks?
+- [ ] Touches gated files (requires approval)?
+- [ ] Needs feature flag / gradual rollout?
+
+**Risks:** [if any]
+
+Sound right?
+```
+
+Wait for approval. If user says "try a different approach," iterate
+3.2-3.4 before proceeding. For simple tasks (text updates, bug fixes
+with clear scope), skip this step.
+
 #### Step 3.5 — Requirements drilling
 
 With the recon report on the table, sharpen the questions:
@@ -258,14 +302,28 @@ Use `task-template.md`'s shape. The spec should be
 **self-sufficient** — a developer reading only the spec, with
 no chat context, should be able to implement.
 
-Inline the recon report's findings:
-- "References" section cites both internal patterns and
-  external doc URLs.
-- "Files expected to change" lists every file with the WHAT/WHY.
+**Required sections (every spec):**
+- "References" cites internal patterns and external doc URLs.
+- "Files expected to change" lists every file with WHAT/WHY.
 - "Acceptance criteria" is the sharp bar drilled in 3.5.
 - "Test plan" lists specific scenarios drilled in 3.5.
-- "Open questions / risks" carries forward any unresolved
-  items from the recon report.
+- "Open questions / risks" carries forward unresolved items.
+
+**Optional sections (include only if applicable):**
+- **Decision rationale:** if alternatives exist and recon
+  revealed non-obvious choices.
+- **Risk & dependencies:** if schema-owned, gated files, or
+  blocks/blocked-by other work.
+- **Performance & scale:** if perf implications or scale
+  thresholds matter (pagination, indexing, etc.).
+- **Observability:** if this needs metrics, dashboards, or
+  alerts to verify success.
+- **Deployment strategy:** if rolling out in stages or
+  coordinating with other teams.
+- **Design & accessibility:** if UI/UX or a11y constraints
+  apply.
+- **Backwards compatibility:** if this is a breaking change or
+  requires migration.
 
 #### Step 3.8 — User-context check (judgment calls only the user can make)
 

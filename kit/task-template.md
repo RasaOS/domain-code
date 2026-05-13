@@ -75,6 +75,46 @@ Steps the human reviewer will run locally:
 
 (Agent fills this in if it gets stuck. Leave empty when creating.)
 
+## Optional sections (include if applicable)
+
+### Decision rationale
+
+Why this approach over alternatives. Reference recon findings.
+
+### Risk & dependencies
+
+- **Blocks / blocked by:** [task list if any]
+- **Schema-owned by:** [team / N/A]
+- **Requires:** [coordination, feature flag, migration, approval]
+
+### Performance & scale contract
+
+- **Expected scale:** [numbers / N/A]
+- **Pagination required at:** [threshold / N/A]
+- **Performance test:** [specific assertion / N/A]
+
+### Observability
+
+- **Key metrics:** [what to track]
+- **Alert condition:** [when to page / N/A]
+- **Dashboard:** [link or owner / N/A]
+
+### Deployment strategy
+
+- **Rollout:** [all at once | feature flag | gradual]
+- **Coordination:** [other teams, platforms / N/A]
+
+### Design & accessibility
+
+- **Design spec:** [link or file]
+- **A11y requirements:** [WCAG level, specific needs / N/A]
+
+### Backwards compatibility
+
+- **Breaking change?** [yes / no / N/A]
+- **Migration path:** [if breaking]
+- **Deprecation plan:** [if applicable]
+
 ---
 
 **Definition of done:**
