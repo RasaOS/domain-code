@@ -20,6 +20,46 @@ human-readable rollback).
 
 ---
 
+## v0.25.0 — 2026-05-16
+
+### `/secrets` — provision secrets the AI never touches
+
+New skill `secrets` (`kit/skills/secrets/`) and a new rule file
+`secrets-rules.md`, companion to `env-rules.md`.
+
+The problem it solves: getting real secret values into a project's
+`.env` without a value ever entering Claude's context — and without
+the user having to find, name, or think about a file. `env-rules.md`
+and `/import-env` already model *what* secrets a project needs; what
+was missing is *provisioning the values*.
+
+`/secrets` closes that gap:
+
+- **Central store outside the repo** — real values live at
+  `~/.claude/projects/<project-key>/secrets/env` (mode `0600`), per
+  the kit's user-separation convention. `<repo>/.env` is a gitignored
+  symlink to it, so the secret's bytes physically cannot sit inside
+  the repo. All worktrees of a project share one store.
+- **Guided form** — `provision` writes a commented skeleton (per key:
+  what it is, required/optional, type, a `Get it:` hint sourced from
+  the env-var stamp) and opens it in a GUI editor at the first blank
+  field. The user fills a form, not a blank page.
+- **Verify loop** — `check` reports `set` / `empty` / `missing` per
+  key, never a value, so completeness is confirmed, not assumed.
+- **Append-only** — re-running `provision` never clobbers a filled
+  value. `migrate` adopts a pre-existing real `.env` into the store.
+
+Two opt-in guard hooks (`/secrets hooks on`, per-machine, built on
+`/install-hook`): a `PreToolUse` hook denies the AI reading `.env*`
+or the store, and a `UserPromptSubmit` hook blocks secret-shaped chat
+pastes before they reach the model (override: prefix `!secret-ok`).
+
+The script may read a value to tell `set` from `empty`, but never
+prints one. v1 handles the default `.env`; profiles and non-`.env`
+targets are follow-ons.
+
+---
+
 ## v0.24.0 — 2026-05-16
 
 ### `/git-guard` — git-hygiene lockdown + multi-machine work safety

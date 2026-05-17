@@ -4,6 +4,8 @@ Conventions for environment variables in kit-bootstrapped projects. Every env va
 
 Pairs with `runtime-rules` (per-runtime env requirements), `cloud-rules` (per-cloud deploy credentials), and `pipeline-rules` (per-deploy-env exports). Those existing systems declare *which* env vars they need; the env-var stamps in this system declare *what each var is* — the canonical registry.
 
+`secrets-rules.md` is the companion: this file is the registry (what each var *is*), `secrets-rules.md` governs the *values* (how a secret value gets entered, and how it is kept out of the AI's context). The `/secrets` skill provisions values; `/import-env` and `/export-env` move keys between `.env` files and stamps.
+
 ## Why a separate system
 
 Runtime stamps already say "this runtime requires `POSTGRES_HOST`." Cloud stamps say "this cloud needs `AZURE_CLIENT_ID`." Build env scripts export per-deploy-target vars. What's missing:
