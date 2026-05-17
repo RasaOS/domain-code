@@ -1,7 +1,7 @@
 {
   "$schema": "https://ChazzCoin.github.io/claude-kit/manifest.schema.json",
   "name": "claude-kit",
-  "version": "0.24.0",
+  "version": "0.25.0",
   "description": "Portable Claude Code foundation — skills, rules, and templates that work across any repo, any language, any platform.",
   "source": {
     "repo": "https://github.com/ChazzCoin/claude-kit",
@@ -153,6 +153,12 @@
         "to": ".claude/env-rules.md",
         "policy": "file-replace",
         "note": "Env-var stamp model, profile naming convention, secret discipline. Paired with stamps.md."
+      },
+      {
+        "from": "kit/secrets-rules.md",
+        "to": ".claude/secrets-rules.md",
+        "policy": "file-replace",
+        "note": "Secret-value handling — central store outside the repo, the .env symlink, how values get entered without entering the AI's context, the two guard hooks. Companion to env-rules.md; implemented by the /secrets skill."
       },
       {
         "from": "kit/environment-rules.md",
