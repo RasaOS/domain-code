@@ -16,6 +16,39 @@ human-readable rollback).
 
 ## Unreleased
 
+### `/contract` — system-contract registry with lock + ledger
+
+New skill `contract` (`kit/skills/contract/`), a new rule file
+`contract-rules.md`, and a new `contract` stamp model in `stamps.md`.
+
+The problem it solves: a project has a few definitions other code is
+bound to — the database schema, an API endpoint shape, a system doc.
+When one drifts silently, things break far from the change. There
+was no single guarded home for them.
+
+`/contract` gives them one — a repo-root `contracts/` folder:
+
+- **Versioned, date-stamped contracts** — each is a stamp under
+  `contracts/stamps/`, kind `schema` / `endpoint` / `doc`, carrying
+  `version`, `created`, `last_updated`, and an `is_locked` flag.
+- **The lock is a hard block** — a locked contract cannot change.
+  `contract.sh update`/`bump` refuse it (exit 3), and a `PreToolUse`
+  guard hook denies hand-edits anywhere under `contracts/`. A task
+  that needs a locked contract stops until the user unlocks it.
+- **Append-only ledger** — `contracts/LEDGER.md` records every
+  change: who, what, why, when. `--why` is required on every
+  mutating verb.
+- **Guard hook is shared** — installs into `.claude/settings.json`
+  (committed) so every contributor's session enforces the discipline.
+
+Subcommands: `init`, `status`, `new`, `update`, `bump`, `lock`,
+`unlock`, `check`, `off`. Script-driven (`contract.sh` owns all file
+mutation so the ledger can't lie); built on `/install-hook`. Opt-in
+per project via `/contract init`. Propagates via `/sync`.
+
+This is the single-repo half of the contracts feature. Cross-repo
+contract linking and drift detection is a separate, later change.
+
 ### `/instruct` — turn human instructions into an AI instruction recipe
 
 New skill `instruct` (`kit/skills/instruct/`).

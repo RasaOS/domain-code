@@ -186,6 +186,41 @@ The `var_name` ↔ runtime stamp `env.required` link is by name, not enforced. D
 
 ---
 
+## Stamp: contract
+
+**Where it lives:** `contracts/stamps/<name>.md`
+**Purpose:** Declare a system contract — a schema, API endpoint, or system doc that other code (and other repos) depend on being stable.
+**Shipped in:** v0.26.0
+
+| Field | Required | Type | Description |
+|---|---|---|---|
+| `name` | yes | string (kebab-case) | Stamp identity. Matches filename. |
+| `kind` | yes | enum | `schema` / `endpoint` / `doc` — the contract discriminator. |
+| `version` | yes | string (`MAJOR.MINOR.PATCH`) | Contract version. Bumped deliberately via `/contract bump`. |
+| `status` | yes | enum | `draft` / `active` / `deprecated` |
+| `is_locked` | yes | bool | `true` = frozen. A locked contract cannot change until `/contract unlock`. |
+| `created` | yes | date (YYYY-MM-DD) | When the contract was created. |
+| `last_updated` | yes | date (YYYY-MM-DD) | When the body or version last changed. |
+| `owner` | no | string | The repo or team that owns this contract. Forward-looking for cross-repo linking. |
+| `consumers` | no | array | Repos or teams that depend on this contract. Forward-looking for cross-repo linking. |
+| `references` | no | array | Paths or URLs to related material — mockups, source files, external docs. |
+| `tags` | no | array | Free-form classification. |
+
+The `is_locked` flag is the load-bearing field: when `true`,
+`contract.sh update`/`bump` refuse the change (exit 3) and the
+`PreToolUse` guard hook denies hand-edits. See `contract-rules.md`.
+
+Body of the stamp is the contract itself — the schema DDL, the
+endpoint request/response shape, the system doc. Every change is
+recorded in `contracts/LEDGER.md`. Managed exclusively by the
+`/contract` skill; never hand-edited.
+
+The `owner` / `consumers` fields are populated but unused in the
+single-repo model — they exist so a future cross-repo linking
+feature can resolve who publishes and who depends on each contract.
+
+---
+
 ## Stamp: save
 
 **Where it lives:** `~/.claude/projects/<key>/saves/SAVED.md` (current) and `<YYYY-MM-DD-HHMM>.md` (archived)

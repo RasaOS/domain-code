@@ -207,6 +207,7 @@ Durable records — each writes to a typed location under `docs/`.
 | `/sync` | Reconcile this project's `.claude/` with claude-kit |
 | `/update-docs` | Reconcile core docs against reality |
 | `/inbox` | Multi-dev messaging plus personal scratchpad |
+| `/contract` | System-contract registry — version, lock, and ledger for schemas, endpoints, and system docs |
 
 ### Universal — kit-level meta
 

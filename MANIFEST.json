@@ -161,6 +161,12 @@
         "note": "Secret-value handling — central store outside the repo, the .env symlink, how values get entered without entering the AI's context, the two guard hooks. Companion to env-rules.md; implemented by the /secrets skill."
       },
       {
+        "from": "kit/contract-rules.md",
+        "to": ".claude/contract-rules.md",
+        "policy": "file-replace",
+        "note": "System-contract model — the contracts/ folder, the contract stamp (schema/endpoint/doc), the lock flag that blocks tasks until the user unlocks, the append-only ledger, and the PreToolUse guard hook. Read when a task touches contracts/. Implemented by the /contract skill; stamp model in stamps.md."
+      },
+      {
         "from": "kit/environment-rules.md",
         "to": ".claude/environment-rules.md",
         "policy": "file-replace",
