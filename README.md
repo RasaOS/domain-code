@@ -173,6 +173,7 @@ surface?" without touching the working tree.
 | `/prototype` | Rapid R&D mode in a `proto/<slug>` branch |
 | `/spec-phase` | Expand every stub in a phase to a spec; propose order |
 | `/task` | Per-task action skill (file, move, expand) |
+| `/instruct` | Convert human instructions into an atomic AI instruction recipe |
 | `/brainstorm` | Resume or start a tradeoff session at `.claude/tradeoffs/<topic>.md` |
 | `/stuck` | Socratic unblock-the-human partner |
 

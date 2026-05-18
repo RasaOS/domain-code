@@ -16,7 +16,31 @@ human-readable rollback).
 
 ## Unreleased
 
-(no entries yet)
+### `/instruct` — turn human instructions into an AI instruction recipe
+
+New skill `instruct` (`kit/skills/instruct/`).
+
+The problem it solves: humans explain how to do something the way
+humans do — prose, brain-dumps, half-formed lists that mix a whole
+task with a sub-step. An AI needs the opposite: an ordered set of
+atomic, verifiable instructions with no ambiguity.
+
+`/instruct` is the converter. It's a **pre-task** — it produces the
+instruction recipe the next session executes against, and never runs
+the steps itself:
+
+- **Accepts any input shape** — prose, a paragraph, a rough list.
+- **Decomposes to smallest deliverables** — splits every step until
+  each produces exactly one verifiable deliverable; refuses to leave
+  steps coarse or over-split into keystrokes.
+- **Mock run-through** — dry-runs the recipe start to finish to catch
+  missing steps, bad ordering, and implicit steps before rendering.
+- **Assumptions flagged inline** — judgment calls become a visible
+  flagged list, no round-trip questions.
+- **Chat-only, read-only** — renders one recipe; writes nothing.
+
+Report-only, no script (decomposition is AI judgment). Propagates to
+projects via `/sync`.
 
 ---
 
