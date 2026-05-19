@@ -20,6 +20,53 @@ human-readable rollback).
 
 ---
 
+## v0.29.0 — 2026-05-19
+
+### `auto-*` skills — autonomous execution
+
+A new skill family — `/auto-task`, `/auto-phase`, `/auto-develop`,
+`/auto-test` — and a shared contract, `autonomy-rules.md`.
+
+Each `auto-*` skill is a hands-off variant: it makes every decision
+itself and runs to completion without returning to the user for
+clarification. Where the base skill would ask, the autonomous
+variant decides — grounded in the repo and docs — and flags the
+decision as an assumption (the `/instruct` discipline). The user
+reviews assumptions once, after, instead of being asked N times.
+
+- **`/auto-task`** — autonomous `/task`: file and fully spec a task.
+- **`/auto-phase`** — autonomous `/spec-phase`: expand every stub in
+  a phase to a full spec.
+- **`/auto-develop`** — autonomously implement a task spec (new
+  capability — the kit had no `/develop`).
+- **`/auto-test`** — autonomously write and run a task's tests (new
+  capability — the kit had no `/test`).
+
+**Autonomy has a boundary.** `autonomy-rules.md` defines the hard
+gates where an `auto-*` skill stops and surfaces rather than
+proceeding: a locked `/contract`, gated files, merging/pushing to
+`main`, release tagging, deploys, and destructive or irreversible
+operations. Autonomy removes the "what do you prefer?" gate — never
+the safety gates. The kit's quality bars (`craft-rules.md`,
+`task-rules.md`, `test-rules.md`, `git-flow-rules.md`) and the
+"never auto-commit" rule still apply in full.
+
+**Pairs with `/goal`.** `autonomy-rules.md` documents how to run an
+`auto-*` skill as a verified multi-turn loop using Claude Code's
+built-in `/goal` command (v2.1.139+): `/goal` is the loop engine,
+the `auto-*` skill is the methodology. A skill cannot invoke
+`/goal` — slash commands are user-input only — so the user runs the
+skill under a `/goal` condition. The rule file covers the
+transcript-only evaluator and the hard-gate escape clause a goal
+condition must carry so the loop terminates at a gate instead of
+spinning. (Distinct from the **Goal** section in `CLAUDE.md` from
+v0.28.0 — that's a static planning artifact; `/goal` is a loop.)
+
+The contract lives once in `autonomy-rules.md`; the four SKILL.md
+files are thin and defer to it. Propagates via `/sync`.
+
+---
+
 ## v0.28.0 — 2026-05-19
 
 ### Project vision & goal

@@ -178,6 +178,19 @@ surface?" without touching the working tree.
 | `/brainstorm` | Resume or start a tradeoff session at `.claude/tradeoffs/<topic>.md` |
 | `/stuck` | Socratic unblock-the-human partner |
 
+### Universal — autonomous execution
+
+Hands-off variants — decide everything, ask nothing, flag every
+assumption, stop only at hard gates. Shared contract in
+`autonomy-rules.md`.
+
+| Skill | Purpose |
+|---|---|
+| `/auto-task` | Autonomous `/task` — file and fully spec a task without questions |
+| `/auto-phase` | Autonomous `/spec-phase` — expand every stub in a phase to a full spec |
+| `/auto-develop` | Autonomously implement a task spec — write the code, run the build |
+| `/auto-test` | Autonomously write and run the tests for a task or feature |
+
 ### Universal — capture & reflect
 
 Durable records — each writes to a typed location under `docs/`.

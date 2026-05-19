@@ -1,7 +1,7 @@
 {
   "$schema": "https://ChazzCoin.github.io/claude-kit/manifest.schema.json",
   "name": "claude-kit",
-  "version": "0.28.0",
+  "version": "0.29.0",
   "description": "Portable Claude Code foundation — skills, rules, and templates that work across any repo, any language, any platform.",
   "source": {
     "repo": "https://github.com/ChazzCoin/claude-kit",
@@ -165,6 +165,12 @@
         "to": ".claude/contract-rules.md",
         "policy": "file-replace",
         "note": "System-contract model — the contracts/ folder, the contract stamp (schema/endpoint/doc), the lock flag that blocks tasks until the user unlocks, the append-only ledger, and the PreToolUse guard hook. Read when a task touches contracts/. Implemented by the /contract skill; stamp model in stamps.md."
+      },
+      {
+        "from": "kit/autonomy-rules.md",
+        "to": ".claude/autonomy-rules.md",
+        "policy": "file-replace",
+        "note": "Shared contract for the auto-* skill family (/auto-task, /auto-phase, /auto-develop, /auto-test) — decide don't ask, flag every assumption, run to completion, the hard-gate stop list (locked contracts, gated files, merge-to-main, destructive ops), and the autonomy report. Read before authoring or running any auto-* skill."
       },
       {
         "from": "kit/environment-rules.md",
