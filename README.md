@@ -152,6 +152,7 @@ surface?" without touching the working tree.
 | `/review` | Senior line-by-line peer review of a given area |
 | `/wrangle` | Tame an unfamiliar codebase; writes durable map under `docs/wrangle/` and `.claude/context/project-map.md` |
 | `/status` | Quick "where do things stand right now" snapshot |
+| `/dashboard` | Live HTML project dashboard — production, git state, tasks, PRs, activity, warnings |
 | `/onboard` | Guided onboarding for new contributors |
 | `/skills` | List every locally-defined skill |
 | `/backlog` | Forward-looking task list, grouped by phase |
@@ -173,6 +174,7 @@ surface?" without touching the working tree.
 | `/prototype` | Rapid R&D mode in a `proto/<slug>` branch |
 | `/spec-phase` | Expand every stub in a phase to a spec; propose order |
 | `/task` | Per-task action skill (file, move, expand) |
+| `/instruct` | Convert human instructions into an atomic AI instruction recipe |
 | `/brainstorm` | Resume or start a tradeoff session at `.claude/tradeoffs/<topic>.md` |
 | `/stuck` | Socratic unblock-the-human partner |
 
@@ -196,6 +198,9 @@ Durable records — each writes to a typed location under `docs/`.
 |---|---|
 | `/release` | End-to-end production release orchestrator (delegates to platform skills) |
 | `/setup-deploy` | Interactive walkthrough that fills `build/` and `tests/` with project-specific deploy commands |
+| `/environment` | Read and manage the `.claude/environments.json` registry; switch the current environment |
+| `/runtime` | Preflight `.claude/runtimes/<name>.md` stamps — env + dependency checks, READY / NOT-READY verdict |
+| `/secrets` | Provision secret values into `.env` without the AI ever seeing one |
 | `/import-env` | Parse an existing `.env*` file into env-var stamps under `env/stamps/`; one question per new var |
 | `/export-env` | Generate `.env-template` (or per-profile / per-runtime variant) from `env/stamps/`; inverse of `/import-env` |
 
@@ -206,6 +211,12 @@ Durable records — each writes to a typed location under `docs/`.
 | `/sync` | Reconcile this project's `.claude/` with claude-kit |
 | `/update-docs` | Reconcile core docs against reality |
 | `/inbox` | Multi-dev messaging plus personal scratchpad |
+| `/contract` | System-contract registry — version, lock, and ledger for schemas, endpoints, and system docs |
+| `/save` | Mid-session state-save for an active thread of work |
+| `/load` | Rehydrate context from the most recent `/save` snapshot |
+| `/auto-save` | Toggle session-lifecycle auto-save hooks — in-session merges, pre-compaction archive |
+| `/git-guard` | Toggle git-hygiene lockdown — auto-capture WIP, surface abandoned work, block trunk commits |
+| `/install-hook` | Install, remove, or list Claude Code event hooks in a settings file |
 
 ### Universal — kit-level meta
 
@@ -216,6 +227,7 @@ Push improvements back upstream so every project benefits.
 | `/new-skill` | Scaffold a new skill following the kit's canonical conventions |
 | `/contribute` | Package a local kit-file edit as a PR back to claude-kit |
 | `/rule-promote` | Find rules duplicated across projects; propose for kit graduation |
+| `/lint-kit` | Lint the kit for platform-specific drift in universal files |
 
 ### Universal — drive
 
