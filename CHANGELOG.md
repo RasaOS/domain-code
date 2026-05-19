@@ -20,6 +20,50 @@ human-readable rollback).
 
 ---
 
+## v0.31.0 — 2026-05-19
+
+### `/mission` — autonomous goal execution
+
+A new skill: `/mission`, the orchestrator above the `auto-*`
+family. Where each `auto-*` skill runs one operation hands-off,
+`/mission` runs a whole **goal** — it clarifies the goal into a
+verified instruction recipe, decomposes that into `TASK-NNN`
+specs, runs each through `auto-task → auto-develop → auto-test`,
+re-walks the goal to verify it actually holds, and opens a draft
+PR for the user to validate.
+
+`/mission` composes the family rather than reinventing it: the
+per-task work follows the existing `/instruct` and `auto-*`
+SKILL.md processes. What it adds is what the family had no home
+for — **goal clarification**, **decomposition**, a **verification
+re-walk**, **delivery**, and a **completion condition**.
+
+**Clarifies vague goals.** `/mission` folds in the `/instruct`
+methodology as its front end: before decomposing, it expands the
+goal — however rough — into a verified instruction recipe (atomic
+steps, dependency-wired, mock run-through for gaps, every
+judgment flagged). A fuzzy goal is clarified in place rather than
+punted back to the user.
+
+**The one auto-commit exception.** Every `auto-*` skill leaves its
+work uncommitted. `/mission` does not: a pull request is its
+deliverable, so it commits each completed task to its `feat/`
+branch (durable checkpoints for a run looped under `/goal`) and
+opens a draft PR as its terminal step — once the re-walk confirms
+the goal is met. The hard gates are untouched: it never merges to
+`main`, never deploys. `autonomy-rules.md` documents the exception.
+
+**Built for the `/goal` loop.** A whole goal spans many turns;
+`/mission` is the autonomous skill purpose-built to be run under
+Claude Code's `/goal` loop. Its on-disk `TASK` specs and per-task
+commits are what let a looped run resume after a context
+compaction.
+
+`autonomy-rules.md` updated to cover `/mission` alongside the
+`auto-*` family. Propagates via `/sync`.
+
+---
+
 ## v0.30.0 — 2026-05-19
 
 ### `/push` — commit and push, no questions
