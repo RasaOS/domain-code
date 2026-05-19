@@ -70,6 +70,8 @@ invoke with `bash` explicitly per `script-craft.md`.
 bash <skill-dir>/status.sh dashboard   (default)
     Emit the full status report to stdout. Sections rendered:
       - Title line + date
+      - Current goal (one line from CLAUDE.md's Goal section;
+        omitted if there's no CLAUDE.md or no goal)
       - §2 dashboard box (production, branch, worktrees, in-flight, pending)
       - Recent commits (markdown table, last 10)
       - Open pull requests (markdown table via `gh` if available)
@@ -78,9 +80,9 @@ bash <skill-dir>/status.sh dashboard   (default)
       - Inbox (unread count + list, for your `@handle`)
 
 bash <skill-dir>/status.sh data
-    Emit raw key=value lines (repo, branch, production_tag,
-    inbox_handle, inbox_unread, etc.) for composition / debugging.
-    Not the user-facing report.
+    Emit raw key=value lines (repo, current_goal, branch,
+    production_tag, inbox_handle, inbox_unread, etc.) for
+    composition / debugging. Not the user-facing report.
 ```
 
 Exit codes: `0` success, `1` operational error (not in a git
@@ -144,6 +146,8 @@ real data per invocation):
 
 ````markdown
 # Project status · <repo> · <YYYY-MM-DD>
+
+🎯 **Goal** — <current goal, one line from CLAUDE.md's Goal section>
 
 ```
 ┌─ <repo> · <YYYY-MM-DD HH:MM TZ> ──────────────────────────┐

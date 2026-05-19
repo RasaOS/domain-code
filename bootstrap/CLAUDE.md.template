@@ -53,6 +53,38 @@ gate, etc.) in `.claude/vocabulary-overrides.md`. Defaults are in
 uses it, why does it exist? Be specific. Not marketing. Replace this
 text.}}
 
+## Vision
+
+The long-term direction — what this project is ultimately for and
+where it's headed. Set deliberately; revisited rarely. Every phase
+and goal should serve it; when one doesn't, that's a flag worth
+raising. `/plan` is the place to think it through.
+
+{{2–4 SENTENCES. At maturity, what does this product do, for whom,
+and to what end? The destination, not a feature list — "this becomes
+X so that Y". Replace this text.}}
+
+## Goal
+
+The current objective — the one thing the project is working toward
+*right now*. Narrower than the vision, concrete enough to know when
+it's met. When it's hit, move it into **Achieved** below and set the
+next one. `/plan` helps think it through; `/status` surfaces it.
+
+**Current goal.** {{ONE OR TWO SENTENCES — what are we trying to
+achieve right now, and how will we know it's done? e.g. "Get the
+foundation laid and running properly: scaffolding, build, and the
+deploy path working end to end."}}
+
+**Set.** {{YYYY-MM-DD}}
+
+### Achieved
+
+Past goals, newest first — the project's trail of met objectives.
+
+- {{YYYY-MM-DD — a past goal, one line. Delete this placeholder once
+  there's a real entry.}}
+
 ## Platform
 
 {{Declare the project's platform so universal skills (especially
