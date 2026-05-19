@@ -167,6 +167,12 @@
         "note": "System-contract model — the contracts/ folder, the contract stamp (schema/endpoint/doc), the lock flag that blocks tasks until the user unlocks, the append-only ledger, and the PreToolUse guard hook. Read when a task touches contracts/. Implemented by the /contract skill; stamp model in stamps.md."
       },
       {
+        "from": "kit/autonomy-rules.md",
+        "to": ".claude/autonomy-rules.md",
+        "policy": "file-replace",
+        "note": "Shared contract for the auto-* skill family (/auto-task, /auto-phase, /auto-develop, /auto-test) — decide don't ask, flag every assumption, run to completion, the hard-gate stop list (locked contracts, gated files, merge-to-main, destructive ops), and the autonomy report. Read before authoring or running any auto-* skill."
+      },
+      {
         "from": "kit/environment-rules.md",
         "to": ".claude/environment-rules.md",
         "policy": "file-replace",
