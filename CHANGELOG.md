@@ -16,7 +16,29 @@ human-readable rollback).
 
 ## Unreleased
 
-(no entries yet)
+### `/push` — commit and push, no questions
+
+New skill `push` (`kit/skills/push/`) — the "save my work" button.
+
+`/save` snapshots thread context; `/push` is a step down from it —
+it just gets the code into git so nothing is lost. One command, no
+prompts:
+
+- **On a side branch** — commits all changes and pushes there.
+- **On the trunk** — creates a new branch first, commits there, and
+  pushes it PR-ready. It never commits or pushes the trunk directly
+  (git-flow Rules 1 & 4), and it does **not** open the PR — it
+  surfaces the link and leaves that to the user.
+- **Secret-shaped and oversized files are skipped**, not pushed,
+  and reported — safe by default, no question asked.
+- The commit message (and, on the trunk, the branch name) are
+  synthesized by the AI from the diff — never asked.
+
+Script-driven (`push.sh` owns the git plumbing; the AI synthesizes
+the message + branch name). `/push` is the deliberate exception to
+the kit's "never auto-commit" rule — committing is its whole job.
+Distinct from `/git-guard`'s background autosave: `/push` is the
+manual button. Propagates via `/sync`.
 
 ---
 
