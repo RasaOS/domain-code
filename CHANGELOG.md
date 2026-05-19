@@ -16,6 +16,12 @@ human-readable rollback).
 
 ## Unreleased
 
+(no entries yet)
+
+---
+
+## v0.29.0 — 2026-05-19
+
 ### `auto-*` skills — autonomous execution
 
 A new skill family — `/auto-task`, `/auto-phase`, `/auto-develop`,
