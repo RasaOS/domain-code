@@ -16,7 +16,39 @@ human-readable rollback).
 
 ## Unreleased
 
-(no entries yet)
+### `/task-guard` — enforce the change-audit rule
+
+New skill `task-guard` (`kit/skills/task-guard/`) and a new
+`task-rules.md` section, "Every change is task-linked".
+
+The policy: **every code change and every running-configuration
+change is linked to a task** — planned work and quick hotfixes
+alike. The task is the audit trail; a change with no task is a hole
+in the long-term record.
+
+`/task-guard on` makes it automatic — a git pre-commit hook that,
+on every commit touching code or runtime config:
+
+- checks for an active task; if there is none, **auto-creates a
+  minimal stub** (`tasks/active/TASK-NNN-auto-<slug>.md`, flagged
+  not-spec'd, with a "why" note) and rides it into the commit;
+- appends a row to an append-only **change ledger**
+  (`tasks/CHANGES.md`) — task, author, date, files — which rides
+  into the same commit, so `git blame` recovers the exact commit
+  for any row.
+
+It **never blocks a commit** — enforcement is by auto-creating, not
+rejecting, so a thirty-second hotfix still lands with a task and a
+ledger row and zero friction. Docs, `tasks/`, and `.claude/` meta
+changes are not auditable and pass through untouched.
+
+Scope of "auditable": source code + runtime/user-facing config.
+Honest limits (documented in the skill): the git hook is
+per-machine-install and `--no-verify` bypasses it — `task-guard`
+closes the honest-forgot-a-task gap, not a deliberate bypass.
+
+Built on the kit's git-hook pattern (`/git-guard`); script-driven.
+Subcommands `on` / `off` / `status`. Propagates via `/sync`.
 
 ---
 

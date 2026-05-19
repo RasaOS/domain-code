@@ -229,6 +229,7 @@ Durable records — each writes to a typed location under `docs/`.
 | `/load` | Rehydrate context from the most recent `/save` snapshot |
 | `/auto-save` | Toggle session-lifecycle auto-save hooks — in-session merges, pre-compaction archive |
 | `/git-guard` | Toggle git-hygiene lockdown — auto-capture WIP, surface abandoned work, block trunk commits |
+| `/task-guard` | Toggle the change-audit rule — every code/config commit gets a linked task, auto-stubbed if missing, ledgered |
 | `/install-hook` | Install, remove, or list Claude Code event hooks in a settings file |
 
 ### Universal — kit-level meta

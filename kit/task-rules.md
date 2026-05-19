@@ -86,6 +86,40 @@ starting work.
 - Do not add features, abstractions, or config not required by the
   acceptance criteria.
 
+## Every change is task-linked (the change-audit rule)
+
+**Every code change and every running-configuration change is
+linked to a task.** No exception — not a planned feature, not a
+one-line hotfix, not a "quick fix" made under pressure. The task is
+the audit trail; a change with no task is a hole in the record that
+no one can review later.
+
+This applies to **source code and runtime / user-facing
+configuration**. It does not apply to documentation, the task files
+themselves, or `.claude/` meta — those carry no runtime risk and
+need no task.
+
+- **Before a code/config change, there should be a task.** Working
+  a quick fix? It still gets a task. If a full spec is overkill for
+  a trivial change, a one-line stub is enough — but the task must
+  exist and be linked.
+- **A stub is acceptable; nothing is not.** The bar is "a task
+  exists," not "a task is fully spec'd." An honestly-flagged stub —
+  title, why it wasn't spec'd, the files touched — keeps the audit
+  trail whole. Spec it retroactively with `/task` if it matters.
+- **The change ledger.** `tasks/CHANGES.md` is the append-only
+  record: every code/config commit, its linked task, the author,
+  the date, the files. This is the long-term audit-and-review
+  surface.
+
+**Enforcement.** The `/task-guard` skill makes this automatic — a
+pre-commit hook that, when a commit touches code/config with no
+active task, auto-creates a stub task and appends the ledger row,
+both riding into the commit. The rule holds whether or not the hook
+is installed; `/task-guard` just removes the need to remember. Do
+not bypass the hook with `git commit --no-verify` — forbidden
+regardless (see "Verification gates").
+
 ## Schema discipline (extends CLAUDE.md)
 
 Some projects mirror schemas owned by another team or platform (iOS
