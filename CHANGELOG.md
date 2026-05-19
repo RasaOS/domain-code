@@ -16,6 +16,12 @@ human-readable rollback).
 
 ## Unreleased
 
+(no entries yet)
+
+---
+
+## v0.27.0 — 2026-05-19
+
 ### `/task` — sharper spec expansion and priority discipline
 
 Merged a line of `/task` improvements (branch `claude/nifty-banzai`):
