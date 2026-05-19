@@ -16,6 +16,12 @@ human-readable rollback).
 
 ## Unreleased
 
+(no entries yet)
+
+---
+
+## v0.28.0 — 2026-05-19
+
 ### Project vision & goal
 
 The kit planned at the phase and task level but had no home for
