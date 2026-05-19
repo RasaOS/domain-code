@@ -16,6 +16,12 @@ human-readable rollback).
 
 ## Unreleased
 
+(no entries yet)
+
+---
+
+## v0.30.0 — 2026-05-19
+
 ### `/push` — commit and push, no questions
 
 New skill `push` (`kit/skills/push/`) — the "save my work" button.
