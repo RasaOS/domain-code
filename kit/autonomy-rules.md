@@ -1,12 +1,19 @@
 # Autonomy Rules
 
-The shared contract for the kit's **`auto-*` skill family** —
-`/auto-task`, `/auto-phase`, `/auto-develop`, `/auto-test`. Each is
-an autonomous variant of a kit operation: it makes every decision
-itself and runs to completion without returning to the user for
-clarification. **Read this file before authoring or running any
-`auto-*` skill.** Every `auto-*` SKILL.md defers its autonomy
-behavior here rather than re-stating it.
+The shared contract for the kit's **autonomous skills**:
+
+- The **`auto-*` family** — `/auto-task`, `/auto-phase`,
+  `/auto-develop`, `/auto-test` — each an autonomous variant of a
+  single kit operation.
+- **`/mission`** — the orchestrator: it runs a whole goal end to
+  end by decomposing it and composing the family.
+
+Each makes every decision itself and runs to completion without
+returning to the user for clarification. **Read this file before
+authoring or running any of them.** Every such SKILL.md defers its
+autonomy behavior here rather than re-stating it. Where the rest of
+this file says "`auto-*` skill", the rule applies to `/mission`
+too — it is bound by the same contract.
 
 The autonomous variant differs from its base skill in exactly one
 way: **who decides.** The base skill asks the user; the autonomous
@@ -53,9 +60,12 @@ situation** in its report:
   skill does not modify them; it surfaces exactly what it needs.
 - **Merging or pushing to `main`, release tagging, deploys.** Per
   `git-flow-rules.md` Rules 2, 4, and 5 these are always
-  user-confirmed. An `auto-*` skill never merges to `main`, never
-  pushes `main`, never tags a release, never deploys. It works on
-  a branch and leaves it for the user.
+  user-confirmed. An autonomous skill never merges to `main`,
+  never pushes `main`, never tags a release, never deploys. It
+  works on a branch and leaves it for the user. (`/mission` may
+  push its own `feat/` branch and open a draft PR — see "The one
+  exception" below — but the merge-to-`main` gate is absolute, for
+  every autonomous skill, `/mission` included.)
 - **Destructive or irreversible operations.** History rewrites,
   force-pushes, data deletion, schema-destroying migrations,
   removing real content. Never auto-decided — the skill stops.
@@ -76,7 +86,28 @@ Autonomy changes *who decides*, never *how good the work is*. Every
 Autonomy never lowers a verification bar, never skips a test, never
 ships unreviewed work. **"Never auto-commit" still holds** — an
 `auto-*` skill leaves its work in the working tree, uncommitted,
-for the user to review with `git diff` and commit.
+for the user to review with `git diff` and commit. (`/mission` is
+the one documented exception — see the next section.)
+
+## The one exception — `/mission` commits and opens a PR
+
+"Never auto-commit" holds for the `auto-*` family without
+exception: each leaves its work in the working tree, uncommitted,
+for the user to review and commit.
+
+`/mission` is the single, deliberate exception — because a pull
+request *is* its deliverable and its review surface. A `/mission`
+run commits each completed task to its `feat/` branch (durable
+checkpoints that let a long run, looped under `/goal`, resume
+after a context compaction), and as its terminal step pushes the
+branch and opens a **draft PR** — but only once its verification
+re-walk confirms the goal is met.
+
+This bends the auto-commit rule; it does not touch the hard gates.
+`/mission` never merges to `main`, never pushes `main`, never tags
+a release, never deploys. The draft PR waits for the user to
+validate and merge. The commit and the PR are `/mission`'s to
+make; the merge is always the user's.
 
 ## The autonomy report
 
@@ -124,7 +155,13 @@ every stub is spec'd — pair the skill with Claude Code's built-in
 
 `/goal <condition>` sets a completion condition and loops turns
 until a separate fast-model evaluator confirms it holds. `/goal`
-is the loop engine; the `auto-*` skill is the methodology.
+is the loop engine; the autonomous skill is the methodology.
+
+`/mission` is the skill built for this loop. A whole goal
+genuinely spans many turns, so a mission is most often run as
+`/goal /mission <goal> — done when <condition>`. The four `auto-*`
+skills are looped this way for a single long operation; `/mission`
+is looped this way by design.
 
 **A skill cannot invoke `/goal`.** Slash commands are the
 user-input layer — a SKILL.md is instructions *to* Claude, and
