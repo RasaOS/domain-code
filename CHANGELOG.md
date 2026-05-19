@@ -16,7 +16,26 @@ human-readable rollback).
 
 ## Unreleased
 
-(no entries yet)
+### `/task` — sharper spec expansion and priority discipline
+
+Merged a line of `/task` improvements (branch `claude/nifty-banzai`):
+
+- **Two-tier Operation 3** — simple tasks run a short path; complex
+  tasks (schema changes, design, perf, breaking changes) add an
+  approach-validation step.
+- **Task-splitting assessment** (Step 3.1.5) — checks whether a stub
+  should be split before it is expanded into a spec.
+- **Two-round internal reconnaissance** — Step 3.2a (context +
+  conventions) then 3.2b (pattern matching), plus a precedent &
+  related-work check (Step 3.2.7).
+- **Approach validation** (Step 3.4.5) for complex tasks.
+- **Priority signal rule tightened** — a full spec is drafted only on
+  an exact signal ("emergency", "urgent", "do it now", "needs to ship
+  before X", "this is next up", "top priority"); any other phrasing
+  defaults to a stub with an explicit "jump the queue?" ask.
+
+Also extends `task-rules.md` and `task-template.md`. Synced to
+projects via `/sync`.
 
 ---
 

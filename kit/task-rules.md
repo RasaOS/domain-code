@@ -454,19 +454,30 @@ A minimal stub is title + 1-line user story + 1-line "why" +
 `STATUS: STUB — full spec drafted before implementation`.
 Anything more is speculative work.
 
-The user controls priority. They will say so explicitly when they
-want it. Common signals:
+## Full spec vs. stub: the priority signal rule
 
-- **"Emergency / do it now"** → halt current work; this jumps to the
-  front of the active queue.
-- **"Needs to ship before X"** → place ahead of X in the roadmap and
-  flag any sibling tasks that depend on it.
+**Default: stub.** A full spec is created *only* if the user
+explicitly says one of these exact phrases:
+- "emergency", "urgent", "do it now"
+- "needs to ship before X"
+- "this is next up"
+- "top priority"
+
+These signals trigger both placement (ahead in the roadmap) AND
+an immediate full spec. Anything else → stub + ask clarification.
+
+**Placement without spec:** The signals below are about *where*
+the task goes in the roadmap, not whether to spec it immediately:
+
+- **"Needs to ship before X"** → place ahead of X in the roadmap
+  and flag any sibling dependencies. Full spec later, via `/task`
+  Operation 3 (unless "emergency" was also said).
 - **"X needs to ship first, then this can come next"** → place
-  immediately after X.
+  immediately after X. Stub until X ships; then spec it.
 - **"For a future phase"** / **"later"** → backlog only, no
-  re-sequencing.
-- *No qualifier given* → backlog only, no re-sequencing. Default
-  behavior. Cheaper to ask later than re-task now.
+  re-sequencing. Stub.
+- *No qualifier given* → backlog only, no re-sequencing. Stub.
+  Default behavior. Cheaper to ask later than re-task now.
 
 When unsure, ask: *"backlog only, or should this jump the queue?"* —
 one round trip beats a wrong placement.
