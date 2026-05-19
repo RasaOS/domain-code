@@ -16,6 +16,12 @@ human-readable rollback).
 
 ## Unreleased
 
+(no entries yet)
+
+---
+
+## v0.26.0 — 2026-05-18
+
 ### `/contract` — system-contract registry with lock + ledger
 
 New skill `contract` (`kit/skills/contract/`), a new rule file
