@@ -14,8 +14,9 @@ document it. Default to asking questions, not proposing answers.
 - **Never write code.** This skill plans; the `/task` skill files
   individual tasks; other skills implement. Stay in your lane.
 - **Read first, then ask.** Always start by reading the current
-  state (PHASES.md, ROADMAP.md, AUDIT.md) so questions are
-  informed.
+  state — the **Vision** and **Goal** sections of `CLAUDE.md`,
+  then `tasks/PHASES.md`, `ROADMAP.md`, `AUDIT.md` — so questions
+  are informed.
 - **Socratic mode.** Default response shape: "Here's where we
   are. What are you trying to figure out?" — then follow with
   focused questions, not a wall of suggestions.
@@ -25,6 +26,12 @@ document it. Default to asking questions, not proposing answers.
 - **Honest tradeoffs.** When the user proposes something, push
   back if it conflicts with the existing scope, sequence, or
   honest tradeoffs already documented. Don't rubber-stamp.
+- **Anchor to the vision and goal.** The **Vision** section of
+  `CLAUDE.md` is the north star; the **Goal** section is the
+  current objective. Weigh proposals against both — when a phase
+  or a priority doesn't serve the goal or point toward the
+  vision, say so plainly. That's a flag to raise, not a veto to
+  enforce.
 - **No file edits in this skill.** Don't update PHASES.md,
   ROADMAP.md, or task specs from inside `/plan`. When a planning
   decision is final, hand off to `/task` (for individual tasks)
@@ -33,9 +40,11 @@ document it. Default to asking questions, not proposing answers.
 
 ## What to do on first invocation
 
-1. **Read** `tasks/PHASES.md`, `tasks/ROADMAP.md`, and the most
+1. **Read** the **Vision** and **Goal** sections of `CLAUDE.md`,
+   then `tasks/PHASES.md`, `tasks/ROADMAP.md`, and the most
    recent ~30 entries of `tasks/AUDIT.md`. Skim, don't quote.
 2. **Output a brief grounding paragraph** (3–5 sentences):
+   - The current goal — and whether in-flight work serves it
    - What's shipped (latest version + anchor tasks)
    - What's in flight (active phase + tasks)
    - What's queued (next phase or unfinished current phase)
@@ -107,6 +116,41 @@ When the user wants to add a phase:
 4. **Decide together** whether it's a new phase, an addition to
    an existing phase, or just a single task that needs filing.
 
+### Pattern E — Setting or revising the vision or goal
+
+The vision and goal live in the **Vision** and **Goal** sections
+of `CLAUDE.md`. `/plan` is where they get thought through; the
+edit itself happens outside this skill — same hand-off rule as
+phase docs.
+
+**Revising the vision** (rare — it's the north star):
+
+1. **Read the current vision back.** Confirm shared
+   understanding before changing anything.
+2. **Probe what changed.** A vision shift is significant — is the
+   product genuinely headed somewhere new, or is this really a
+   goal or phase change wearing a vision costume? Push back if
+   it's the latter.
+3. **Draft 2–4 sentences** — the destination, not a feature
+   list. Iterate until the user approves.
+4. **Hand off** to a small `CLAUDE.md` edit with the user's
+   explicit approval.
+
+**Setting or rotating the goal** (often — it's the current
+objective):
+
+1. **Check the current goal.** Still the focus, met, or
+   abandoned?
+2. **If met** — move it into the Goal section's **Achieved** log
+   with today's date, then draft the next one.
+3. **Draft the new goal** — one or two sentences, concrete
+   enough to know when it's done, reachable in the near term,
+   and serving the vision.
+4. **Sanity-check against phases.** The goal and the active
+   phase should agree. If they don't, one of them is wrong —
+   surface it.
+5. **Hand off** to a small `CLAUDE.md` edit.
+
 ## When NOT to use this skill
 
 - **Filing a specific task** → use `/task`.
@@ -120,6 +164,8 @@ When the user wants to add a phase:
 ## What "done" looks like for a /plan session
 
 The user leaves with one or more of:
+- A revised vision or a rotated goal, ready for a small
+  `CLAUDE.md` edit
 - A new or revised phase scope, ready to be added to PHASES.md
   + ROADMAP.md
 - A clearer picture of what should ship next

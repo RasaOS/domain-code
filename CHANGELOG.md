@@ -20,6 +20,38 @@ human-readable rollback).
 
 ---
 
+## v0.28.0 — 2026-05-19
+
+### Project vision & goal
+
+The kit planned at the phase and task level but had no home for
+*why* a project exists or *what it's working toward right now*.
+Two new sections in `CLAUDE.md` close that gap — the top of the
+planning stack, above phases:
+
+- **Vision** — the long-term direction, the north star. Set
+  deliberately, revisited rarely.
+- **Goal** — the current objective, narrow and concrete. Rotated
+  as it's hit, with an **Achieved** log of past goals.
+
+Both live in `bootstrap/CLAUDE.md.template`, so every newly
+bootstrapped project gets them; CLAUDE.md is auto-loaded, so
+vision and goal are in context every session.
+
+Wired into two skills:
+
+- **`/plan`** reads Vision + Goal as grounding, weighs proposals
+  against them, and gains a conversation pattern (Pattern E) for
+  setting/revising the vision and rotating the goal.
+- **`/status`** surfaces the current goal as a `🎯 Goal —` line
+  above the dashboard (`status.sh`; omitted gracefully when a
+  project has no CLAUDE.md or no goal set).
+
+No new skill, no hook — the user picked CLAUDE.md sections +
+`/plan` integration + on-demand surfacing. Implements TASK-011.
+
+---
+
 ## v0.27.0 — 2026-05-19
 
 ### `/task` — sharper spec expansion and priority discipline

@@ -65,6 +65,23 @@ repo_name() {
   basename "$(project_root)"
 }
 
+# Echo the project's current goal (one line) from the Goal section of
+# CLAUDE.md. Empty if there's no CLAUDE.md or no goal; a hint string if
+# the goal is still an unfilled {{placeholder}}.
+current_goal() {
+  local root cm line
+  root="$(project_root)" || return 0
+  cm="$root/CLAUDE.md"
+  [ -f "$cm" ] || return 0
+  line="$(grep -m1 '^\*\*Current goal\.\*\*' "$cm" 2>/dev/null \
+    | sed 's/^\*\*Current goal\.\*\*[[:space:]]*//')"
+  [ -n "$line" ] || return 0
+  case "$line" in
+    *'{{'*) echo "(not set — fill the Goal section in CLAUDE.md)" ;;
+    *)      echo "$line" ;;
+  esac
+}
+
 current_branch() {
   git symbolic-ref --short HEAD 2>/dev/null || echo "(detached)"
 }
@@ -418,6 +435,12 @@ cmd_dashboard() {
 
   echo "# Project status · ${repo} · $(date '+%Y-%m-%d')"
   echo ""
+  local goal
+  goal="$(current_goal)"
+  if [ -n "$goal" ]; then
+    echo "🎯 **Goal** — ${goal}"
+    echo ""
+  fi
   echo '```'
   render_dashboard
   echo '```'
@@ -435,6 +458,7 @@ cmd_data() {
 
   echo "repo=${repo}"
   echo "now=$(date '+%Y-%m-%d %H:%M %Z')"
+  echo "current_goal=$(current_goal)"
   echo "branch=$(current_branch)"
   echo "branch_state=$(branch_state)"
   echo "production_tag=$(production_tag)"
