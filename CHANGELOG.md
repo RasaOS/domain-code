@@ -16,6 +16,12 @@ human-readable rollback).
 
 ## Unreleased
 
+(no entries yet)
+
+---
+
+## v0.31.0 — 2026-05-19
+
 ### `/mission` — autonomous goal execution
 
 A new skill: `/mission`, the orchestrator above the `auto-*`
