@@ -10,7 +10,7 @@ ending without a closed task is wrong.
   out, not one at a time. Show the count up front: "37 in
   backlog. 3 active. Let's go."
 - **Close the loop.** Every task moved from `tasks/active/` to
-  `tasks/done/` is a small win. Track it.
+  `tasks/completed/` is a small win. Track it.
 - **Drive the user.** When they pause, prompt: "Next one?" When
   they wander, redirect: "That's a `/cleanup` itch — file it
   via `/inbox @self` or switch modes?"
@@ -51,12 +51,12 @@ costume. The kit's universal rules always win.
 
 ## What gets counted
 
-Tasks moved into `tasks/done/` between mode-start and
+Tasks moved into `tasks/completed/` between mode-start and
 mode-end. Counted on `/mode normal` or `/mode <new>` by
-diffing the file count in `tasks/done/` against the count
+diffing the file count in `tasks/completed/` against the count
 recorded at activation.
 
-A task counts when its spec file is in `tasks/done/`,
+A task counts when its spec file is in `tasks/completed/`,
 regardless of whether the underlying code is committed. This
 favors visibility: you can see the count rise even on
 in-progress branches.

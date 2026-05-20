@@ -212,7 +212,9 @@ this project. Common categories:
 - **Build / runtime config** (e.g. `vite.config.*`, `webpack.*`,
   `tsconfig*.json`, `babel.config.*`)
 - **Process / kit files** (`CLAUDE.md`, `.claude/task-rules.md`,
-  `.claude/task-template.md`, `.claude/skills/`, `.github/`, `.git/`)
+  `.claude/task-template.md`, `.claude/task-template-stub.md`,
+  `.claude/task-template-bug.md`, `.claude/task-template-hotfix.md`,
+  `.claude/intake-template.md`, `.claude/skills/`, `.github/`, `.git/`)
 
 If a task requires one of these, surface it in the task file's blocker
 section and stop.
@@ -277,19 +279,90 @@ blocker note**. Do not disable tests. Do not bypass hooks
 ## State machine
 
 ```
-tasks/triage/  →  tasks/backlog/  →  tasks/active/  →  tasks/done/
+tasks/intake.md  →  tasks/triage/  →  tasks/backlog/  →  tasks/active/  ⇄  tasks/blocked/  →  tasks/completed/
+   (raw)            (formalized,        (phase +              (in              (parked,            (PR merged)
+                     no phase/cat)       category assigned)    flight)          ext. dep)
 ```
 
+- **`intake.md`** is a single markdown file holding raw notes,
+  observations, and complaints that haven't yet decided to become
+  tasks. Pre-triage. No `TASK-NNN` id. The lowest-friction capture
+  layer. See "The intake layer" below.
 - **`triage/`** holds tracked-but-untriaged tasks — filed with a
-  `TASK-NNN` id but no phase and no priority. A task sits here until
-  it is *graduated* (assigned a phase → `git mv` to `backlog/`) or
-  pulled straight to `active/` to be worked. Triage tasks are the one
-  exception to the phase rule — they are deliberately not in
-  `ROADMAP.md`. See "The triage holding area" below.
+  `TASK-NNN` id but no phase, no category, and no priority. A task
+  sits here until it is *graduated* (category + phase assigned →
+  `git mv` to `backlog/`) or pulled straight to `active/` to be
+  worked. Triage tasks are the one exception to the phase rule —
+  they are deliberately not in `ROADMAP.md`. See "The triage
+  holding area" below.
+- **`backlog/`** holds phase-placed, category-assigned tasks ready
+  to be worked. The category (Stub / Spec / Bug / Hotfix) is
+  declared in the task's frontmatter. See "Categories" below.
+- **`active/`** should hold at most one task at a time per agent.
+- **`blocked/`** is a *parked state* for tasks that were in
+  `active/` but hit an external blocker (missing credential,
+  waiting on another team, third-party outage, undecided product
+  call). The task file moves to `tasks/blocked/`; status becomes
+  `blocked`; the blocker is named in the file under a "Blocker"
+  section. See "The blocked state" below.
+- **`completed/`** is the terminal state — PR merged, work shipped.
+  (This directory was named `done/` before v0.36.0; the
+  state-machine value was also `done`. Both renamed for clarity.
+  See the v0.36.0 changelog for the migration.) Open-but-unmerged
+  PRs stay in `active/`.
 - Move the task file with `git mv` as you transition states.
-- `active/` should hold at most one task at a time per agent.
-- `done/` only after PR is merged. Open-but-unmerged PRs stay in
-  `active/`.
+
+**Hotfixes skip part of the lifecycle.** A Hotfix-category task
+uses the `HOTFIX-NNN` id space (not `TASK-NNN`), is filed directly
+to `tasks/active/`, and bypasses phase placement entirely — it
+doesn't go in `ROADMAP.md`. See "Categories" below for the full
+contract.
+
+### The status field
+
+Every task spec declares `status:` in its frontmatter, matching
+the directory it lives in:
+
+```yaml
+status: triage | backlog | active | blocked | completed
+```
+
+Status and directory must agree — they are the same fact recorded
+twice for ease of inspection. The directory move (`git mv`) and
+the frontmatter change happen together. A task in
+`tasks/blocked/` with `status: active` is a bug; fix the
+frontmatter or fix the directory.
+
+### The blocked state
+
+A task in `blocked/` is one that was being worked but ran into an
+external dependency that prevents progress. Examples:
+
+- A third-party API is down or undocumented.
+- Waiting on a decision from another team / the product owner /
+  the user.
+- Missing a credential or access that only a specific person can
+  grant.
+- Waiting on an upstream task (cross-repo) that hasn't shipped.
+
+The blocked file must have a `## Blocker` section at the bottom
+with: what's blocking, who or what would unblock it, when to
+check back. Without that section, the task is not blocked — it's
+abandoned, and that's a different problem.
+
+Returning from blocked to active is a `git mv` back to `active/`
+plus a frontmatter status flip. The Blocker section moves into
+the task's "Notes" or stays as a record of why it was parked.
+
+A task is **not blocked** if:
+
+- The blocker is "I don't know how to do this." (That's a recon
+  problem — read more code, ask the user, do `/instruct`.)
+- The blocker is "this is hard." (That's just work.)
+- The blocker is "I forgot about it." (Move back to `backlog/`.)
+
+Blocked is for *external* dependencies. Internal-to-the-task
+problems get fixed inside the task.
 
 ## Closing report (mandatory)
 
@@ -462,7 +535,7 @@ has work in it.
 
 Single edit to `ROADMAP.md`: remove the task line from the old phase's
 list, add it to the new phase's list. The spec file itself doesn't
-move (it stays in `backlog/active/done` based on state, not phase).
+move (it stays in `backlog/active/blocked/completed` based on state, not phase).
 
 ### Cross-cutting tasks
 
@@ -470,6 +543,112 @@ Reserved for genuinely orthogonal work that doesn't belong to a named
 phase — typically infrastructure that any phase might depend on. Use
 sparingly. If two or more cross-cutting items accumulate that share a
 theme, that's a signal to lift them into a named phase.
+
+## Categories (mandatory)
+
+Every task in `backlog/`, `active/`, `blocked/`, or `completed/` has a **category** in
+its frontmatter. The category answers: *what kind of work is this,
+and how do we treat it?* Four categories:
+
+```yaml
+---
+id: TASK-042            # or HOTFIX-042 for Hotfix category
+category: spec          # stub | spec | bug | hotfix
+phase: phase-3          # null for hotfix (skips ROADMAP)
+status: backlog         # triage | backlog | active | blocked | completed
+---
+```
+
+### `stub` — track lightly, no full spec
+
+A Stub-category task is one the team has decided to **track but
+not spec further**. Title, brief description, optional notes, and
+that's it. The category signals: don't expand this; it exists to
+be visible and counted, not to be implemented from a contract.
+
+Use Stub when the work is small enough that a full spec is
+overhead, or when the user has named the task but doesn't have the
+detail yet. The template is `task-template-stub.md` — short and
+shallow by design.
+
+Stub tasks still belong to a phase, still appear in `ROADMAP.md`,
+still move through the state machine. They just don't get a full
+implementation contract. (For "not yet a task at all," see the
+intake layer below.)
+
+### `spec` — full task, user-story-based
+
+A Spec-category task is the default — feature work, new
+functionality, the canonical implementation contract. As-a /
+I-want / so-that, scope, acceptance criteria, test plan. The
+template is `task-template.md` (the original).
+
+A Spec-category task may start as stub-content at filing time
+(per the priority rule below) and be expanded close to
+implementation. The *category* says "this will be fully spec'd";
+the *content* may or may not be there yet.
+
+### `bug` — fix broken behavior
+
+A Bug-category task is a full spec for fixing something that
+doesn't work as intended. Same user-story shape as Spec, plus
+bug-specific fields: steps to reproduce, expected vs. actual
+behavior, root-cause notes (where determinable without fixing),
+and acceptance criteria for the fix. The template is
+`task-template-bug.md`.
+
+Bugs belong to the phase whose functionality is broken — not
+their own "bugs" phase. A login bug belongs to the auth phase,
+not "Phase B: bug fixes." This keeps the broken work co-located
+with the working work.
+
+### `hotfix` — urgent fix, separate ID space
+
+A Hotfix-category task is a Bug that needs to ship NOW. The
+distinction is procedural, not technical: hotfixes bypass normal
+planning. They get:
+
+- **A separate ID space.** `HOTFIX-NNN` (not `TASK-NNN`),
+  matching the existing branch convention from
+  `git-flow-rules.md` Rule 1 (`hotfix/HOTFIX-NNN-slug`) and the
+  🔥 AUDIT emoji.
+- **No phase placement.** Hotfixes do not go in `ROADMAP.md`.
+  They are emergency work, not planned work.
+- **Direct routing to `tasks/active/`.** A hotfix is filed
+  straight to active — there is no backlog stop, because by
+  definition it's being worked immediately.
+- **A hotfix-specific template.** `task-template-hotfix.md`:
+  urgency justification, what's broken in production, the
+  smallest fix that solves it, rollback plan, post-fix
+  verification.
+- **An AUDIT entry with 🔥** when shipped, per
+  `release-rules.md`.
+
+If the urgency dissipates before the fix ships — or it turns out
+not to be urgent after all — re-categorize as `bug`, change the
+ID prefix to `TASK-NNN`, and route through the normal lifecycle.
+Hotfix is a commitment to act fast; it is not a label you carry
+forever.
+
+### What about the existing "stub vs full spec" rule?
+
+The priority signal rule (below) governs *content level* at
+filing time — stub-content vs. full-content. The category
+governs *intended shape* of the work. Both apply:
+
+| Category | Stub-content at filing | Full-content at filing |
+|---|---|---|
+| `stub` | ✓ (and stays this way) | — (would change category to `spec`) |
+| `spec` | ✓ default, expanded close to implementation | only on urgency signal |
+| `bug` | ✓ default, expanded close to implementation | only on urgency signal |
+| `hotfix` | — never (hotfixes always have full content) | ✓ always |
+
+### Backwards compatibility
+
+Tasks that predate categories (no `category:` frontmatter)
+default to `category: spec`. Adding categories does not require
+re-filing existing tasks; the absence of the field is the same
+as declaring `spec`.
 
 ## Adding tasks to the backlog (priority rule)
 
@@ -555,6 +734,82 @@ A triage task leaves the holding area one of two ways:
 Don't let `tasks/triage/` rot. When it accumulates, that is the
 signal for a triage pass: graduate what matters, and move what won't
 be done to `.claude/wont-do.md`.
+
+## The intake layer
+
+`tasks/intake.md` is the **pre-triage capture surface** — a single
+markdown file where raw notes, complaints, observations, and rough
+ideas land before anyone has decided whether they should become
+tasks. The lowest-friction layer in the lifecycle.
+
+```
+intake.md (raw)  →  triage/ (TASK-NNN, no phase/category)
+                  →  backlog/ (phase + category)
+                  →  ...
+```
+
+### Why a separate file from triage
+
+Triage tasks are real — they have IDs, files, a place in the state
+machine. Filing to triage commits a small but real cost: an ID is
+spent, a file exists. For a half-formed thought ("the dashboard
+flickers on first load — did anyone else see that?") that may or
+may not be a task, that's too much ceremony.
+
+Intake is a one-line append: a bullet in `intake.md`. No ID. No
+file. No commitment beyond "I wrote it down."
+
+### Format
+
+A single markdown file at `tasks/intake.md`. Loosely structured —
+the contract is "easy to add to" first, "consistent" second.
+
+```markdown
+# Task Intake
+
+Pre-triage capture. Raw notes that may or may not become tasks.
+When an entry matures, promote it to triage via `/task promote`
+(creates a TASK-NNN in `tasks/triage/`) — or delete it.
+
+## 2026-05-20
+
+- **Login is slow on mobile** — felt during demo, 4-5s cold start.
+  Probably the analytics SDK init.
+- **Onboarding "skip" button** — multiple users asked.
+
+## 2026-05-19
+
+- **Dashboard timezone weirdness** — sometimes shows yesterday's
+  date.
+```
+
+H2 by date, bulleted entries with a bolded short title and a
+sentence or two of context. The date header groups related notes
+naturally; if a single day is sparse, the header is fine
+remaining empty until the next entry.
+
+### Promoting an entry to triage
+
+`/task promote "<short identifier>"` (or by selecting an entry)
+creates a `TASK-NNN` stub-content file in `tasks/triage/`,
+removes the entry from `intake.md`, and stops there. The new
+task has no phase, no category — the user (or `/task` itself, on
+the next operation) decides those when graduating from triage to
+backlog.
+
+### Deleting an entry
+
+`/task drop "<short identifier>"` removes the entry from
+`intake.md` without creating a task. Use for ideas that have been
+considered and discarded. Optionally moved to `.claude/wont-do.md`
+if the rationale is worth keeping.
+
+### Not for messages or scratchpad
+
+`tasks/intake.md` is for *future tasks* — work the project might
+do. For messages between contributors or personal scratchpad, use
+`/inbox` (which writes to `.claude/inbox/`). The two surfaces are
+adjacent but not interchangeable.
 
 ## Postmortem rule (incidents get captured)
 

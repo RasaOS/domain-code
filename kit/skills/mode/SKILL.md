@@ -125,7 +125,7 @@ activations.">
      - **Time:** now − started.
      - **Units:** depends on the prior mode's `count_unit` field
        in `.claude/mode.md`. For `tasks_done_count`:
-       `(current count of files in tasks/done/) − units_at_start`.
+       `(current count of files in tasks/completed/) − units_at_start`.
        For `stubs_remaining_count`: `units_at_start − (current
        count of *.md files under tasks/backlog/ containing the
        string "STATUS: STUB")`. (Direction is inverted because
@@ -204,7 +204,7 @@ hardcodes the detection logic per mode:
 
 | Mode | `count_unit` | How units are detected |
 |---|---|---|
-| `task` | `tasks_done_count` | Number of `*.md` files in `tasks/done/` (excluding `.gitkeep`). Activation records the baseline; finalization computes the delta. |
+| `task` | `tasks_done_count` | Number of `*.md` files in `tasks/completed/` (excluding `.gitkeep`). Activation records the baseline; finalization computes the delta. |
 | `cleanup` | `none` | Time-in-mode only; no per-unit counting. |
 | `project-manager` | `stubs_remaining_count` | Number of `*.md` files under `tasks/backlog/` containing the string `STATUS: STUB`. Activation records the baseline; finalization computes the inverse delta (`baseline - current` = stubs refined this session). Refining a stub removes the `STATUS: STUB` header, so the remaining count drops. |
 | `normal` | n/a | Not a mode — represented by `.claude/mode.md` absence. |
@@ -253,7 +253,7 @@ this file, so the prose loads transitively.
 ## Active
 
 **TASK** — started 2026-05-01T09:14:32Z. Tasks closed so far:
-0 (baseline: 47 in `tasks/done/`).
+0 (baseline: 47 in `tasks/completed/`).
 
 *(If no mode active: "No mode active.")*
 
@@ -326,7 +326,7 @@ When that file is absent, render "No mode active."
   via `/new-skill`-style scaffolding (or just a new file in
   `kit/modes/`).
 - **Don't lose stats on errors.** If finalization fails
-  partway (e.g., can't read `tasks/done/`), abort the switch
+  partway (e.g., can't read `tasks/completed/`), abort the switch
   and report the error — don't activate the new mode while
   losing the previous one's tally.
 
@@ -341,7 +341,7 @@ When that file is absent, render "No mode active."
   definition file — was `.claude/modes/task.md` removed?"),
   let the user finalize it cleanly with `/mode normal` even
   without the definition body.
-- **`tasks/done/` doesn't exist.** Task mode's unit detection
+- **`tasks/completed/` doesn't exist.** Task mode's unit detection
   fails gracefully — report units as `unknown` rather than
   zero. Don't create the dir.
 - **Switching to the currently-active mode.** No-op with a

@@ -319,14 +319,14 @@ visible *now*, before adoption drifts.
 | `duration_minutes` | int | Incident duration |
 | `was_hotfix` | bool | Triggered the hotfix path? |
 
-### task (proposed for `tasks/active/<name>.md`, `tasks/backlog/<name>.md`, `tasks/done/<name>.md`)
+### task (proposed for `tasks/active/<name>.md`, `tasks/backlog/<name>.md`, `tasks/completed/<name>.md`)
 
 | Field | Type | Description |
 |---|---|---|
 | `name` | string | TASK-NNN-slug |
 | `id` | string | TASK-NNN |
 | `phase` | string | Phase identifier |
-| `status` | enum | triage / backlog / active / blocked / done |
+| `status` | enum | triage / backlog / active / blocked / completed |
 | `priority` | enum | p0 / p1 / p2 / p3 |
 | `blocked_by` | array | Names of other tasks / external blockers |
 | `assignee` | string | Handle |

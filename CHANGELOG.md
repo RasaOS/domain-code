@@ -20,6 +20,368 @@ human-readable rollback).
 
 ---
 
+## v0.38.0 — 2026-05-20
+
+### Live release tracking — `RELEASES.md` reworked + `/release-add`
+
+`tasks/RELEASES.md` becomes a **live release tracker** that
+appends tasks as they merge to `main`, then stamps + opens a
+new accumulator entry when `/release` ships. No more
+hand-maintained release plans.
+
+#### New format (timeline shape, matching the §23 Activity style)
+
+```markdown
+🚧 v0.38.0  ◆  next release — accumulating since v0.37.0
+
+- TASK-042 — fix login bug on iOS
+- TASK-043 — add filter UI to the inbox
+- HOTFIX-007 — patch RBAC bypass on /admin
+
+---
+
+✅ v0.37.0  ◆  /sync-all — autonomous variant of /sync
+              shipped 2026-05-20 · tag v0.37.0 · sha f77a843
+
+- TASK-040 — /sync-all skill
+- TASK-041 — /sync When-NOT cross-reference
+
+---
+
+✅ v0.36.0  ◆  status overhaul — blocked added, done → completed (BREAKING)
+              shipped 2026-05-20 · tag v0.36.0 · sha 8274f0f
+
+(task list)
+```
+
+Conventions: status glyph + version + `◆` + theme summary on
+the first line; date / tag / sha on the detail line (shipped
+only); one bullet per task or hotfix beneath. The `📋 Planned`
+state from earlier kit versions is gone — the live-accumulator
+model replaces it.
+
+#### Auto-append on merge
+
+Three paths land tasks in the "🚧 Next" entry:
+
+1. **`/peer-review` merges a PR** → calls `/release-add` for
+   every TASK-NNN / HOTFIX-NNN in the merged commits. New Step 6
+   in `/peer-review`'s flow.
+2. **`/release` merges an integration branch** → pre-flight
+   silently fixes up any task missed by a manual merge; Step 1
+   now reads the "🚧 Next" entry as the release manifest.
+3. **Manual `gh pr merge`** → user invokes `/release-add
+   TASK-NNN` or `/release-add --since-last-tag` to catch up.
+
+#### `/release-add` — new skill
+
+Idempotent single-purpose: append a TASK-NNN / HOTFIX-NNN to
+the "🚧 Next" entry. Re-running is a no-op. The
+`--since-last-tag` mode bulk-catches-up by scanning commits
+since the last tag.
+
+Resolves task titles automatically by reading the spec file's
+H1 (looks in `tasks/completed/`, then `active/`, then
+`backlog/`). Falls back to the merge-commit subject if no spec
+is findable.
+
+#### `/release` Step 7 reworked
+
+Three sub-steps now:
+
+1. **Stamp the "🚧 Next" entry**: change `🚧` → `✅`, fill in
+   the theme summary, add the `shipped … tag … sha …` detail
+   line.
+2. **Cross-check task list** against commits since the last
+   tag; silently add any missed by manual merges (pre-flight
+   already caught the inverse — stale claims).
+3. **Create a new "🚧 Next" entry** above the stamped entry,
+   with the next expected version and an empty task list.
+
+The AUDIT entry (🚀) still happens — `RELEASES.md` is the
+release-shaped record, `AUDIT.md` is the chronological log.
+
+### Files touched
+
+- `kit/release-rules.md` — "Release planning" section
+  rewritten as "Release tracking", with the new format, the
+  three-lane auto-append paths, and the lifecycle (one "🚧
+  Next" + N "✅ Shipped").
+- `kit/skills/release-add/SKILL.md` — new.
+- `kit/skills/release/SKILL.md` — Step 1 reads the "🚧 Next"
+  entry as the manifest; Step 7 stamps + creates new "🚧 Next".
+- `kit/skills/peer-review/SKILL.md` — new Step 6 calls
+  `/release-add` after merging.
+
+### Why minor
+
+One new skill, one structural change to a kit-managed file
+(`RELEASES.md` format) that downstream projects can adopt
+incrementally (the existing 📋 Planned / 🚧 In progress /
+✅ Shipped entries still parse; only new releases use the new
+shape). Additive, no required migration.
+
+---
+
+## v0.37.0 — 2026-05-20
+
+### `/sync-all` — autonomous variant of `/sync`
+
+`/sync`, run with nobody at the keyboard. Same operation,
+same drift classifications, same backup discipline — but
+applies every safe case automatically and stops only at the
+destructive ambiguities.
+
+#### What auto-applies
+
+- **Kit changed, local unchanged** → pull.
+- **New file in kit** → install.
+- **File removed from kit, local unchanged** → remove (with
+  the same `.claude/_archive/` backup discipline `/sync` uses).
+- **Local override (kit unchanged, local changed)** → leave
+  alone, record awareness.
+
+#### What stops at a hard gate
+
+- **Conflict** — kit and local both changed. Picking either
+  side is potential data loss.
+- **File removed from kit, local changed.** Removing would
+  discard the local edits.
+- **Overlap with project file** (Capability B). The four
+  resolve options require human judgment.
+- **Override on the override list, kit changed.** Per
+  `/sync`'s contract, this needs explicit user confirmation.
+
+When any hard gate is hit, the safe cases still apply, but the
+`foundation.json` pin is **held** (not bumped) — the project
+isn't fully synced until the gates are resolved. The user runs
+`/sync` interactively to finish.
+
+#### Naming
+
+`/sync-all` doesn't follow the `/auto-X` convention used by the
+rest of the autonomous variants (`/auto-task`, `/auto-bug`,
+`/auto-hotfix`, `/auto-phase`, `/auto-develop`, `/auto-test`).
+It was named `/sync-all` because "sync everything" communicates
+the intent more clearly than `/auto-sync` (which sounds like
+"sync on a schedule"). The autonomous-variant contract (per
+`autonomy-rules.md`) still applies — decide don't ask, flag
+every assumption, run to completion, stop at hard gates, end
+with the autonomy report.
+
+#### Files
+
+- `kit/skills/sync-all/SKILL.md` — new.
+- `kit/skills/sync/SKILL.md` — "When NOT to use this skill"
+  section gains a cross-reference to `/sync-all` so users
+  discover the variant.
+
+### Why minor
+
+One new skill, no contract changes, no breaking changes.
+Textbook minor.
+
+---
+
+## v0.36.0 — 2026-05-20
+
+### Status field overhaul — `blocked` added, `done` → `completed` (BREAKING)
+
+**⚠️ BREAKING for existing projects.** Two changes to the task
+lifecycle status field:
+
+1. **`done` is renamed to `completed`.** The directory
+   `tasks/done/` becomes `tasks/completed/`. The status enum
+   value `done` becomes `completed`. Same meaning ("PR merged,
+   work shipped") — cleaner word.
+2. **`blocked` is added.** A new lifecycle state for tasks
+   parked due to external dependencies (missing credentials,
+   waiting on another team, third-party outage, undecided
+   product call). Tasks live in `tasks/blocked/` and carry a
+   `## Blocker` section naming what's blocking and what would
+   unblock. Returns to `active/` when unblocked.
+
+#### Migration for existing projects
+
+```sh
+# In your project root:
+git mv tasks/done tasks/completed
+mkdir -p tasks/blocked
+
+# Optionally update existing task files' frontmatter:
+# - status: done  →  status: completed
+# (Tasks without explicit status: done in frontmatter need no edit.)
+```
+
+After `/sync`, the kit's references to `tasks/done/` are gone.
+Projects that don't run the migration will see their existing
+`tasks/done/` keep working as-is, but new tasks filed under the
+new contract will go to `tasks/completed/`. Mixing the two is
+visible drift — run the migration.
+
+#### State machine, after
+
+```
+tasks/intake.md  →  tasks/triage/  →  tasks/backlog/  →  tasks/active/  ⇄  tasks/blocked/  →  tasks/completed/
+```
+
+#### The blocked discipline
+
+`blocked` is for *external* dependencies — credentials, decisions,
+upstream tasks, third-party outages. The Blocker section is
+**mandatory** for any task in `blocked/`; without it the task is
+abandoned, not blocked. Reasons that are **not** blocked:
+
+- "I don't know how to do this" — recon problem; read more code.
+- "This is hard" — that's just work.
+- "I forgot about it" — move back to `backlog/`.
+
+Internal-to-the-task problems get fixed inside the task.
+
+### Files touched
+
+- `kit/task-rules.md` — state machine diagram updated; new
+  "Status field" subsection; new "The blocked state" subsection
+  with the rules above; the Categories example frontmatter shows
+  the full enum.
+- `kit/task-template.md`, `kit/task-template-stub.md`,
+  `kit/task-template-bug.md`, `kit/task-template-hotfix.md` —
+  status enum updated in frontmatter.
+- `kit/vocabulary.md` — Active/Blocked/Completed definitions;
+  Blocked is new; Completed's note acknowledges the rename.
+- `kit/stamps.md` — status enum updated.
+- `kit/skills/task/SKILL.md`, `kit/skills/mission/SKILL.md`,
+  `kit/skills/self-heal/SKILL.md`,
+  `kit/skills/self-improve/SKILL.md`,
+  `kit/skills/auto-test/SKILL.md`, `kit/skills/roadmap/SKILL.md`,
+  `kit/skills/backlog/SKILL.md`, `kit/skills/prototype/SKILL.md`,
+  `kit/skills/mode/SKILL.md`, `kit/skills/onboard/SKILL.md`,
+  `kit/skills/retro/SKILL.md`, `kit/skills/lessons/SKILL.md`,
+  `kit/skills/spec-phase/SKILL.md`,
+  `kit/skills/handoff/SKILL.md`,
+  `kit/skills/update-docs/SKILL.md`, `kit/skills/sync/SKILL.md`,
+  `kit/release-rules.md`, `kit/modes/task.md`,
+  `kit/modes/README.md`, `kit/skills/task-guard/task-guard.sh` —
+  references to `tasks/done/` updated to `tasks/completed/`.
+
+### Why minor vs. major
+
+This change is **breaking by the kit's own changelog rules**
+(major = "breaking changes to file layout, sync policy, or
+skill contracts that require projects to re-init or migrate" —
+the directory rename qualifies). Shipping as v0.36.0 rather
+than v1.0.0 follows the relaxed pre-1.0 convention common in
+the kit's history; a v1.0.0 major bump is the formally-correct
+version for this change and is a reasonable alternative if the
+user wants to mark the kit's maturity.
+
+The migration is one `git mv` and an optional `mkdir`. The
+deprecation cost is contained.
+
+---
+
+## v0.35.0 — 2026-05-20
+
+### Task categories + intake layer
+
+Two related additions to the task system.
+
+#### Task categories — `stub`, `spec`, `bug`, `hotfix`
+
+Every task in `backlog/`, `active/`, or `done/` now declares a
+**category** in its frontmatter — the kind of work it represents
+and how the kit treats it.
+
+- **`stub`** — track lightly, no full spec expected. The
+  category signals: this exists to be visible and counted, not
+  to be implemented from a contract.
+- **`spec`** — full task with user story, the canonical
+  implementation contract (this is the original
+  `task-template.md`).
+- **`bug`** — full task for fixing broken behavior. Adds
+  bug-specific fields: steps to reproduce, expected vs. actual,
+  root-cause notes, acceptance criteria for the fix. Belongs to
+  the phase whose functionality is broken (not a "bugs" phase).
+- **`hotfix`** — urgent prod fix. Uses `HOTFIX-NNN` id space
+  (separate from `TASK-NNN`, matching the existing branch
+  convention from `git-flow-rules.md` Rule 1). Bypasses
+  `ROADMAP.md`, files directly to `tasks/active/`. Comes with
+  hotfix-specific fields (urgency justification, smallest fix,
+  rollback plan).
+
+Backwards compatibility: tasks without a `category:` frontmatter
+field default to `spec`. No re-filing required.
+
+#### Intake layer — `tasks/intake.md`
+
+A new pre-triage capture surface — a single markdown file at
+`tasks/intake.md` for raw notes that may or may not become
+tasks. The lowest-friction layer in the lifecycle:
+
+```
+intake.md  →  tasks/triage/  →  tasks/backlog/  →  active/  →  done/
+  (raw)       (TASK-NNN,        (phase +
+               no phase/cat)     category)
+```
+
+Why a separate file from triage: triage commits real cost (an
+ID, a file). For a half-formed thought, that's too much
+ceremony. Intake is a one-line append. No ID, no file, no
+commitment beyond "I wrote it down."
+
+#### New files
+
+- `kit/task-template-stub.md` — minimal template for Stub
+  category.
+- `kit/task-template-bug.md` — full Bug-category template with
+  reproduction, expected/actual, root cause, rollback notes.
+- `kit/task-template-hotfix.md` — full Hotfix-category template
+  with urgency justification, smallest-fix discipline, rollback
+  plan, post-fix follow-ups.
+- `kit/intake-template.md` — recommended starting content for
+  a project's `tasks/intake.md`.
+- `kit/skills/auto-bug/SKILL.md` — autonomous Bug-category
+  filing. Files a `TASK-NNN` bug spec, attempts reproduction,
+  captures observable behavior.
+- `kit/skills/auto-hotfix/SKILL.md` — autonomous Hotfix-category
+  filing. Files a `HOTFIX-NNN` spec directly to `active/`,
+  enforces smallest-fix discipline, requires rollback plan.
+  Stops at a hard gate if urgency framing is absent (route to
+  `/auto-bug`).
+
+#### Updated files
+
+- `kit/task-rules.md` — state machine diagram extended with
+  intake; new "Categories" and "The intake layer" sections.
+  Existing "Stub vs. full spec" priority rule clarified to
+  interact correctly with the new category axis. Process /
+  kit-files reference list updated.
+- `kit/task-template.md` — gains category frontmatter
+  (`category: spec`) for consistency with the new templates.
+  Existing references to `task-template.md` still mean "the
+  Spec template, the default" — no breaking change.
+- `kit/skills/task/SKILL.md` — Operation 1 (File a new task)
+  gains a category-selection step. New Operation 8 (file a
+  hotfix), Operation 9 (file a note to intake), Operation 10
+  (promote intake to triage), Operation 11 (drop intake
+  entry). Operation 7 (graduate from triage) gains a category
+  assignment step.
+- `kit/skills/auto-task/SKILL.md` — clarifies it files only
+  Spec-category tasks. Routes Bug to `/auto-bug` and Hotfix to
+  `/auto-hotfix`.
+
+### Why minor (additive + backwards-compatible)
+
+Three new skills, three new templates, one new file convention
+(intake.md), and additive frontmatter (`category:`) with a
+sensible default for existing tasks. No existing task has to be
+re-filed. No skill that previously worked stops working. The
+contract for existing `/auto-task` users is unchanged — it
+still does what it did, just now explicitly named as the
+Spec-category variant.
+
+---
+
 ## v0.34.0 — 2026-05-20
 
 ### Two preset `/mission` variants — `/self-heal` and `/self-improve`

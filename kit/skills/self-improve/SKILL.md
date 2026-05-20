@@ -163,7 +163,7 @@ The branch name is `feat/self-improve-<scope-slug>`.
 ## What "done" looks like for a /self-improve session
 
 A `feat/self-improve-<scope-slug>` branch with one commit per
-improvement, every improvement's task spec in `tasks/done/`, the
+improvement, every improvement's task spec in `tasks/completed/`, the
 test suite's green/red profile unchanged from baseline, **two
 consecutive clean verification re-walks** with zero in-scope
 improvements remaining, and a **draft PR** open for review. The

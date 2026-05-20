@@ -17,7 +17,7 @@ closing commentary). Render in under 5 seconds.
 ## What to do
 
 1. **Read** every task file in `tasks/active/`, `tasks/backlog/`,
-   and `tasks/triage/`. Skip `tasks/done/` entirely. Skip
+   and `tasks/triage/`. Skip `tasks/completed/` entirely. Skip
    `.gitkeep`, `README.md`, `ROADMAP.md`, anything not matching
    `TASK-` prefix.
 

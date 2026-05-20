@@ -81,7 +81,7 @@ the underlying rule.
 The state machine for task spec files:
 
 ```
-tasks/backlog/  →  tasks/active/  →  tasks/done/
+tasks/backlog/  →  tasks/active/  →  tasks/completed/
 ```
 
 - **Backlog** — task is filed but not yet being worked. Lives in
@@ -90,9 +90,17 @@ tasks/backlog/  →  tasks/active/  →  tasks/done/
 - **Active** — task is being worked right now. Lives in
   `tasks/active/`. **At most one task at a time per agent.** Move
   the file with `git mv` as you transition states.
-- **Done** — task has shipped: PR merged to `main`. Lives in
-  `tasks/done/`. Open-but-unmerged PRs stay in `active/` — `done`
-  means *merged*, not *opened*.
+- **Blocked** — task was active but hit an external dependency
+  (missing credential, waiting on another team, third-party
+  outage, undecided product call). Lives in `tasks/blocked/` with
+  a `## Blocker` section naming what's blocking and what would
+  unblock. Returns to `active/` when unblocked. *Not* for "I
+  don't know how" (that's a recon problem) or "this is hard"
+  (that's just work). See `task-rules.md` "The blocked state".
+- **Completed** — task has shipped: PR merged to `main`. Lives
+  in `tasks/completed/`. Open-but-unmerged PRs stay in `active/`
+  — `completed` means *merged*, not *opened*. (Renamed from
+  `done` in kit v0.36.0; `done` was the prior term.)
 
 > Override in `.claude/vocabulary-overrides.md` if your project
 > tracks task state somewhere else (issue tracker, kanban tool,

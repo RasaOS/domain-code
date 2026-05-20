@@ -73,7 +73,7 @@ one. `/mode normal` is the off-switch.
 3. Decide what (if anything) the mode counts as a unit, and
    how `/mode` finalizes it. Add detection logic to the
    `/mode` skill if the unit isn't a file count under
-   `tasks/done/`.
+   `tasks/completed/`.
 4. Add the mode to the **Modes shipped** table above.
 5. PR upstream via `/contribute` so every project benefits.
 

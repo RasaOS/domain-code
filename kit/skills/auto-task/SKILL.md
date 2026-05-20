@@ -1,15 +1,21 @@
 ---
 name: auto-task
-description: Autonomous variant of /task — files a task and expands it to a full, implementation-ready spec without asking any questions. Decides the phase, runs the reconnaissance, drills the requirements, and resolves every judgment call itself, flagging each as an assumption. Triggered when the user wants a task fully spec'd hands-off — e.g. "/auto-task", "spec this autonomously", "auto-spec a task for X", "file and fully spec this without asking me", "just write the task spec yourself".
+description: Autonomous variant of /task — files a Spec-category task and expands it to a full, implementation-ready spec without asking any questions. Decides the phase, runs the reconnaissance, drills the requirements, and resolves every judgment call itself, flagging each as an assumption. For Bug-category tasks use /auto-bug; for urgent prod fixes use /auto-hotfix. Triggered when the user wants a Spec task fully spec'd hands-off — e.g. "/auto-task", "spec this autonomously", "auto-spec a task for X", "file and fully spec this without asking me", "just write the task spec yourself".
 ---
 
-# /auto-task — autonomous task spec
+# /auto-task — autonomous Spec-category task spec
 
-`/task`, run with nobody at the keyboard. The normal `/task` skill
-asks which phase, stub-or-spec, and a round of user-context
-questions before finalizing. `/auto-task` answers all of them
-itself, flags each answer as an assumption, and hands back a
-complete spec.
+`/task` (Operation 1, Spec category), run with nobody at the
+keyboard. The normal `/task` skill asks which phase, stub-or-spec,
+and a round of user-context questions before finalizing.
+`/auto-task` answers all of them itself, flags each answer as an
+assumption, and hands back a complete spec.
+
+**This skill files only Spec-category tasks.** For Bug-category
+tasks (fixing broken behavior with reproduction steps), use
+`/auto-bug`. For Hotfix-category tasks (urgent prod fixes), use
+`/auto-hotfix`. Per `task-rules.md` "Categories", the three are
+distinct work types with distinct templates.
 
 Per CLAUDE.md ethos: calibrated confidence. A decision grounded in
 the repo is a decision; a decision that needed product knowledge
@@ -53,9 +59,12 @@ the repo doesn't hold is a flagged assumption, surfaced loudly.
 
 1. **Read `autonomy-rules.md` and `task/SKILL.md`.** The contract
    and the operation.
-2. **Run `/task` Operation 1 autonomously.** Determine the phase
-   from `tasks/PHASES.md` — pick the best-fitting phase; if none
-   fits, file to `tasks/triage/`. Assign the next `TASK-NNN`.
+2. **Run `/task` Operation 1 autonomously, Spec category.** Set
+   `category: spec` in frontmatter. Determine the phase from
+   `tasks/PHASES.md` — pick the best-fitting phase; if none fits,
+   file to `tasks/triage/`. Assign the next `TASK-NNN`. (For Bug
+   or Hotfix category, the user should invoke `/auto-bug` or
+   `/auto-hotfix` instead.)
 3. **Run `/task` Operation 3 autonomously.** Full reconnaissance
    (internal + external). Where Step 3.5 (requirements drilling)
    and Step 3.8 (user-context check) would put questions to the

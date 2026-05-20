@@ -7,45 +7,133 @@ this file when shipping a release or auditing dependencies.** It
 extends `task-rules.md`; the five Git flow safety rules in
 `git-flow-rules.md` also apply to every release.
 
-## Release planning
+## Release tracking — `tasks/RELEASES.md`
 
-A release is **planned before it ships**, not assembled after the
-fact. `tasks/RELEASES.md` is the plan: one entry per release —
-version, status, and the phases / tasks slated for it.
+`tasks/RELEASES.md` is the **live release tracker**: a single
+timeline of releases, with the current "next" entry at the top
+accumulating tasks as they merge to `main`, and shipped entries
+below stamped with date + tag.
 
-### The release lifecycle
+Tasks **auto-append** to the top "🚧 Next" entry when they land
+on `main` (via `/peer-review`'s merge, via `/release`'s
+integration merge, or by the user invoking `/release-add` after
+a manual merge). The user does not maintain this file by hand.
 
-A release entry moves through three states:
+### Format
 
-- 📋 **Planned** — scope declared (which phases / tasks), not yet
-  building toward it.
-- 🚧 **In progress** — the integration branch is accumulating the
-  release's tasks.
-- ✅ **Shipped** — released; the entry records the git tag.
+```markdown
+# Releases
 
-### Declaring scope
+🚧 v0.38.0  ◆  next release — accumulating since v0.37.0
 
-Scope is **phases and tasks**, not freeform prose. A release usually
-ships one or more whole phases (`Phase 3 — Core CRUD`); a task that
-isn't covered by a scoped phase is listed individually
-(`TASK-204 — …`). Because phases and tasks carry IDs, the plan
-cross-references directly against `ROADMAP.md` and the code.
+- TASK-042 — fix login bug on iOS
+- TASK-043 — add filter UI to the inbox
+- HOTFIX-007 — patch RBAC bypass on /admin
 
-### How `/release` uses the plan
+---
 
-When you cut a release, `/release` reads the matching `RELEASES.md`
-entry and **cross-checks the declared scope against what actually
-merged**: every task in a scoped phase should be `done`, and anything
-planned-but-not-merged or merged-but-not-planned is surfaced before
-the deploy is confirmed. The release plan is the contract; the deploy
-verifies it. After a successful deploy, the entry's status moves to
-✅ Shipped with the git tag recorded.
+✅ v0.37.0  ◆  /sync-all — autonomous variant of /sync
+              shipped 2026-05-20 · tag v0.37.0 · sha f77a843
 
-### Planning vs. logging
+- TASK-040 — /sync-all skill
+- TASK-041 — /sync When-NOT cross-reference
 
-`RELEASES.md` is forward-looking — what *will* ship. `tasks/AUDIT.md`
-is the backward-looking log of what *did*. The two meet at ship time:
-the release entry flips to ✅ and a 🚀 AUDIT entry is appended.
+---
+
+✅ v0.36.0  ◆  status overhaul — `blocked` added, `done` → `completed` (BREAKING)
+              shipped 2026-05-20 · tag v0.36.0 · sha 8274f0f
+
+- TASK-038 — done → completed rename
+- TASK-039 — blocked state + Blocker discipline
+
+---
+
+✅ v0.35.0  ◆  task categories + intake layer
+              shipped 2026-05-20 · tag v0.35.0 · sha 78c3e9a
+
+- TASK-035 — categories (stub / spec / bug / hotfix)
+- TASK-036 — intake.md layer
+- TASK-037 — /auto-bug + /auto-hotfix
+```
+
+Format conventions, line by line:
+
+- **Status glyph + version + diamond + summary line.** The 🚧
+  marker means "in progress" (accumulating); ✅ means "shipped."
+  The diamond `◆` separates the version from the one-line
+  summary. The summary is the *release theme* — what makes this
+  version coherent — not a task list.
+- **Detail line** (shipped only). `shipped <YYYY-MM-DD> · tag
+  <tag> · sha <short-sha>`. Indented two spaces under the version
+  line.
+- **Task list.** One bullet per task or hotfix that landed in
+  the release. `TASK-NNN — <title>` or `HOTFIX-NNN — <title>`.
+  Order is merge order (oldest first).
+- **`---` separator** between entries.
+
+### The lifecycle of an entry
+
+Three states, but only two appear in the file at any given time:
+the **one** "🚧 Next" entry at the top, and the **N** "✅
+Shipped" entries below.
+
+1. **🚧 Next** — the active accumulator. Always exactly one of
+   these, at the top. The version number is the *next expected*
+   version (computed from the last shipped version + the
+   default bump). Tasks append as they merge.
+2. **✅ Shipped** — terminal. `/release` flips the "🚧 Next"
+   entry to "✅ Shipped" at ship time, fills in the date / tag /
+   sha, then creates a **new** "🚧 Next" entry above it for the
+   following release.
+
+(The 📋 Planned state from earlier kit versions is gone — the
+live-accumulator model replaces it. If you want to *plan*
+future scope before tasks exist, capture that in `intake.md`
+or a separate `tasks/ROADMAP.md` future-phase section.)
+
+### How tasks land in the "🚧 Next" entry
+
+Auto-append happens on **merge to `main`** — the moment a task
+becomes part of "what will ship next." Three paths land here:
+
+1. **`/peer-review` merges a PR** → calls `/release-add` with the
+   merged TASK-NNN or HOTFIX-NNN.
+2. **`/release` merges an integration branch** → calls
+   `/release-add` for every TASK-NNN / HOTFIX-NNN in the
+   integration's commits.
+3. **Manual `gh pr merge`** (no kit skill involved) → the user
+   runs `/release-add` after the fact, or `/release-add
+   --since-last-tag` to bulk-catch up.
+
+`/release-add` is **idempotent** — re-running it for the same
+task is a no-op. A task only appears once in the "🚧 Next"
+entry regardless of how many times the merge is replayed.
+
+### How `/release` uses the tracker
+
+`/release` reads the "🚧 Next" entry as the **release manifest**.
+At ship time:
+
+1. **Cross-check** against what actually merged (commit log
+   since last tag). Any TASK-NNN in commits-since-last-tag that
+   isn't in the "🚧 Next" entry → flag and add (the user
+   skipped a `/release-add`). Any TASK-NNN in the entry that
+   isn't in commits-since-last-tag → flag and remove (the entry
+   has a stale claim).
+2. **Stamp the entry**: change `🚧` to `✅`, fill in `shipped
+   <YYYY-MM-DD> · tag <tag> · sha <short-sha>`, fill in the
+   release theme summary if it was a placeholder.
+3. **Create the next "🚧 Next" entry** above the stamped entry,
+   with the next expected version and an empty task list.
+4. **Commit** the RELEASES.md change as part of `/release`'s
+   audit commit (per `/release` Step 7).
+
+### What's no longer here — moved to AUDIT
+
+The 🚀 AUDIT entry on ship still happens (per the audit-log
+rule in `task-rules.md`). RELEASES.md is the *release-shaped*
+record; AUDIT.md is the *chronological* record. The two are
+complementary, not redundant.
 
 ## Production deploy tagging (mandatory)
 

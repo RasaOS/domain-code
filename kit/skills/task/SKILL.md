@@ -13,7 +13,7 @@ guess.
 ## Behavior contract
 
 - **Read state first.** Always read `tasks/ROADMAP.md` and the
-  current contents of `tasks/{backlog,active,done}/` before
+  current contents of `tasks/{backlog,active,blocked,completed}/` before
   acting. The phase listings in ROADMAP are the registry.
 - **Respect the priority rule.** Default to a stub. Full specs
   only when the user explicitly uses these exact signals:
@@ -66,24 +66,45 @@ Steps 3.1 → 3.2 → 3.3 → 3.4 → **3.4.5 (approach validation)** →
 
 1. **Confirm intent.** "Filing a new task for: <reflect-back>.
    Right?"
-2. **Determine phase — or triage.** If the user didn't say, ask:
-   "Which phase does this belong to?" Show the current phase names
-   from PHASES.md (just names, not full scopes). The user picks one,
-   proposes a new phase (a `/plan` job — hand off), or has no home
-   for it yet — in which case file it to triage (Operation 6) and
-   stop.
-3. **Determine type.** Default = stub. Full spec only if user
-   said one of: "emergency", "urgent", "do it now", "needs to
-   ship before X", "this is next up", "top priority". If unsure,
-   ask: "backlog only, or should this jump the queue?"
-4. **Assign ID.** Next available `TASK-NNN`.
-5. **Draft the file** at `tasks/backlog/TASK-NNN-slug.md`.
-   - Stub format: title + 1-line user story + 1-line "why" +
-     `STATUS: STUB — full spec drafted before implementation`.
-   - Full spec: follow `task-template.md`.
-6. **Update `ROADMAP.md`.** Add the task line under its phase's
+2. **Determine category.** Per `task-rules.md` "Categories":
+   - `stub` — light tracking, no full spec ever.
+   - `spec` — feature work (default).
+   - `bug` — fix broken behavior.
+   - `hotfix` — urgent prod fix (separate `HOTFIX-NNN` id space,
+     skips phase, files straight to `active/`; see Operation 8).
+   If the user didn't say, ask: "Spec, Bug, Stub, or Hotfix?"
+3. **Determine phase — or triage.** Hotfix skips this step
+   (no phase). For other categories: if the user didn't say,
+   ask: "Which phase does this belong to?" Show the current
+   phase names from PHASES.md. The user picks one, proposes a
+   new phase (a `/plan` job — hand off), or has no home for it
+   yet — in which case file it to triage (Operation 6) and stop.
+4. **Determine content level.** Per the priority signal rule in
+   `task-rules.md`:
+   - **Stub category** → always stub-content.
+   - **Spec/Bug category** → stub-content by default;
+     full-content only on urgency signal ("emergency", "urgent",
+     "do it now", "needs to ship before X", "this is next up",
+     "top priority"). If unsure, ask: "backlog only, or should
+     this jump the queue?"
+   - **Hotfix category** → always full-content.
+5. **Assign ID.** Next available `TASK-NNN` (or `HOTFIX-NNN` for
+   the Hotfix category).
+6. **Draft the file** using the template for the category:
+   - `stub` → `task-template-stub.md` at
+     `tasks/backlog/<PHASE>/TASK-NNN-slug.md`.
+   - `spec` → `task-template.md` at
+     `tasks/backlog/TASK-NNN-slug.md` (stub-content or
+     full-content per Step 4).
+   - `bug` → `task-template-bug.md` at
+     `tasks/backlog/TASK-NNN-slug.md`.
+   - `hotfix` → `task-template-hotfix.md` at
+     `tasks/active/HOTFIX-NNN-slug.md` (straight to active per
+     Operation 8).
+7. **Update `ROADMAP.md`.** Add the task line under its phase's
    bulleted list. Order: by ID; insert in the right place.
-7. **Don't commit yet.** Show the user what was drafted and
+   Hotfix tasks are not in `ROADMAP.md` — skip this step for them.
+8. **Don't commit yet.** Show the user what was drafted and
    ask if they want to commit.
 
 ### Operation 2 — Move a task between phases
@@ -93,7 +114,7 @@ Steps 3.1 → 3.2 → 3.3 → 3.4 → **3.4.5 (approach validation)** →
    old phase's list, add it to the new phase's list (in ID
    order).
 3. **Don't move the spec file.** It stays in
-   `backlog/active/done` based on state, not phase.
+   `backlog/active/blocked/completed` based on state, not phase.
 4. **Don't commit yet.**
 
 ### Operation 3 — Expand a stub to a full spec
@@ -174,7 +195,7 @@ Don't repeat mistakes. Search the project for what's been done
 before on the same or similar files/functionality.
 
 **Search:**
-- **`tasks/done/`** — completed similar work. Read the spec and
+- **`tasks/completed/`** — completed similar work. Read the spec and
   any blocker notes. What went well? What was hard?
 - **`tasks/archive/`** — deferred or abandoned work on this
   area. Why was it paused? What did we learn?
@@ -509,10 +530,84 @@ For a task the user wants tracked but has no phase for yet. See
 
 1. **Confirm the destination.** "Graduate TASK-NNN into which
    phase?" (Or: pulled straight into `active/` to work now?)
-2. **`git mv`** the spec file from `tasks/triage/` to
+2. **Assign a category.** Per `task-rules.md` "Categories":
+   stub / spec / bug / hotfix. Hotfix promotion from triage is
+   unusual but possible — if so, change the ID prefix from
+   `TASK-NNN` to `HOTFIX-NNN`, drop the phase, and route to
+   `active/`.
+3. **`git mv`** the spec file from `tasks/triage/` to
    `tasks/backlog/` (or `tasks/active/` if it's being worked now).
-3. **Add the task line to `ROADMAP.md`** under the chosen phase's
-   list, in ID order.
+4. **Update frontmatter** in the spec file: set `category:` and
+   `phase:` to the assigned values. If the category changes the
+   template shape (e.g. triage stub → bug), restructure the file
+   to match the new template before committing.
+5. **Add the task line to `ROADMAP.md`** under the chosen phase's
+   list, in ID order. Skip for hotfix (no phase).
+6. **Don't commit yet.**
+
+### Operation 8 — File a hotfix
+
+Direct path for urgent production fixes. Hotfix is a procedural
+distinction, not a technical one — confirm urgency before filing.
+
+1. **Confirm urgency.** "Filing as a hotfix. Production is broken
+   or imminently failing — yes? If not, file as a bug instead."
+2. **Capture the urgency justification.** Per
+   `task-template-hotfix.md`: "Prod is down for all users",
+   "Data is being corrupted on every write", "Regulatory deadline
+   in <N hours>", "<Customer X>'s release ships tomorrow",
+   "Security vulnerability at <severity>". *Not* justifications:
+   "It would be nice to fix soon." Those are bugs.
+3. **Assign ID.** Next available `HOTFIX-NNN` (separate space
+   from `TASK-NNN`).
+4. **Draft the file** using `task-template-hotfix.md` at
+   `tasks/active/HOTFIX-NNN-slug.md` — direct to `active/`, no
+   backlog stop.
+5. **Do NOT touch `ROADMAP.md`.** Hotfixes are not in the
+   roadmap; they're emergency work.
+6. **Surface the branch convention.** Per `git-flow-rules.md`
+   Rule 1: branch name is `hotfix/HOTFIX-NNN-slug`. Implementation
+   starts on that branch.
+7. **Don't commit yet.** Show what was drafted.
+
+### Operation 9 — File a note to intake
+
+For raw thoughts that aren't yet tasks. Lowest-friction capture.
+See `task-rules.md` "The intake layer."
+
+1. **Confirm intent.** "Adding to `tasks/intake.md`:
+   '<reflect-back>'. Right?"
+2. **Append to `tasks/intake.md`** under today's date header. If
+   no header for today, add one. Format:
+   `- **<short title>** — <one or two sentences of context>`.
+3. **No ID assigned.** Intake entries don't have `TASK-NNN`.
+4. **Don't commit yet.** Show what was added.
+
+### Operation 10 — Promote an intake entry to triage
+
+1. **Identify the entry.** By short title, date, or by the user
+   selecting a line from `intake.md`.
+2. **Confirm.** "Promoting to triage: '<entry>'. Right?"
+3. **Assign ID.** Next available `TASK-NNN`.
+4. **Draft a stub** at `tasks/triage/TASK-NNN-slug.md` —
+   `task-template-stub.md` shape. The intake entry's context
+   carries into the "Notes" section.
+5. **Remove the entry from `intake.md`.** The intake layer is
+   for *future* tasks; once promoted, the entry has graduated.
+6. **Do NOT touch `ROADMAP.md`.** Triage tasks are not in the
+   roadmap.
+7. **Don't commit yet.**
+
+### Operation 11 — Drop an intake entry
+
+For ideas that have been considered and discarded.
+
+1. **Confirm.** "Dropping intake entry: '<entry>'. Move to
+   `.claude/wont-do.md` for the rationale, or just delete?"
+2. **Remove the entry from `intake.md`.**
+3. **If the user wanted the rationale kept,** append a line to
+   `.claude/wont-do.md` with the entry and the reason it was
+   dropped.
 4. **Don't commit yet.**
 
 ## What you must NOT do
