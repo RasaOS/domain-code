@@ -20,6 +20,277 @@ human-readable rollback).
 
 ---
 
+## v0.34.0 — 2026-05-20
+
+### Two preset `/mission` variants — `/self-heal` and `/self-improve`
+
+Both are thin specializations of `/mission`: same methodology,
+fixed goal recipe, optional scope arg, two-pass clean re-walk
+already inherited from `/mission`'s v0.32.0 Step 6.
+
+#### `/self-heal [scope]`
+
+Audit a screen, a functionality area, or the entire system (the
+default) for **real, verifiable problems** — failing tests, build
+failures, linter errors (not warnings), runtime errors, security
+vulnerabilities flagged by the project's tooling, accessibility
+violations, broken contracts, dead references. For each issue,
+file a fix-task and execute it through the per-task lifecycle.
+Iterate until two consecutive verification re-walks find zero
+remaining in-scope issues.
+
+Behavior-restoring by contract — fixes restore intended behavior,
+not redesign it. A bug that requires a redesign is flagged in
+the report, not executed silently. Ends at a draft PR; merge to
+main remains the user's call.
+
+#### `/self-improve [scope]`
+
+Same shape as `/self-heal`, different objective: find **obvious
+professional improvements** — linter warnings (not errors), dead
+code, magic numbers, outdated patterns the codebase has already
+moved past elsewhere, naming inconsistencies, missing public-API
+docs, long functions over configured limits, test-coverage gaps
+in modified files, import-order violations. Apply every one
+found.
+
+Behavior-preserving by contract — the test suite's green/red
+profile must be unchanged before vs. after. A redesign or
+architectural change is out of scope (route to `/brainstorm` or
+`/plan`). Subjective taste is out of scope by definition. Ends
+at a draft PR.
+
+#### The separation
+
+Both are intentionally distinct so the user picks the right tool:
+
+- **`/self-heal`** — repair. Something is broken; the
+  green/red answer is objective. Bias toward "the system isn't
+  doing what it should."
+- **`/self-improve`** — polish. Nothing is broken; the wins are
+  obvious-by-config or obvious-by-convention. Bias toward "the
+  system is doing what it should, but the codebase's own rules
+  flag improvements."
+
+A test that fails is a heal target. A test that passes but
+covers half the file is an improve target. A function whose
+behavior is wrong is heal; a function that's 200 lines when
+`craft-rules.md` caps at 80 is improve.
+
+#### Files touched
+
+- `kit/skills/self-heal/SKILL.md` — new.
+- `kit/skills/self-improve/SKILL.md` — new.
+- `kit/skills/mission/SKILL.md` — new "Preset mission templates"
+  section cross-references both, so users discover them.
+
+### Why minor (additive — two new skills)
+
+Both skills are pure compositions over `/mission`'s existing
+contract — no new policies, no contract changes, no extensions
+to autonomy-rules.md or git-flow-rules.md. They inherit
+`/mission`'s draft-PR-end pattern; merge to main remains the
+user's call.
+
+---
+
+## v0.33.0 — 2026-05-20
+
+### Two new skills + `/auto-test` extension + `/release` contract inversion
+
+#### `/release` — invocation is consent (contract inversion)
+
+The most consequential change. The pre-v0.33.0 `/release` skill
+asked for confirmation at six+ soft gates between invocation and
+deploy: platform delegation, pre-flight warnings, deploy command
+ambiguity, version, "deploy now?", and cleanup-on-failure. This
+caused alarm fatigue and missed deploys ("I thought I already
+confirmed", "I assumed it would auto-continue").
+
+v0.33.0 inverts the contract: **typing `/release` IS the consent
+to ship.** No soft confirmation prompts. The skill stops only on
+*real* blockers — failed auth, failed tests, failed build, dirty
+tree, missing deploy command, missing release-plan match, branch
+protection refusal, or deploy command itself failing.
+
+The flow order also changes: **pre-flight → merge integration →
+tag (local) → deploy → push tag → record**. The tag is created
+locally on the merge commit *before* deploy so the commit's
+identity is locked, then pushed *after* deploy succeeds so a
+failed deploy doesn't publish a stale release tag.
+
+Version selection: pass an arg (`/release patch`, `/release
+minor`, `/release major`, `/release v1.2.3`) or let the heuristic
+pick. Either way: no asking.
+
+The trade-off is named in the SKILL.md and the rule files: you
+gain no-missed-deploys and faster ship cycles; you give up the
+chance to abort mid-flow without invoking rollback. A typo of
+`/release` ships — the cost is mitigated by `/release` not being
+a common typo target.
+
+#### `/peer-review` — new skill (reviews a PR and acts)
+
+Takes a PR (number, URL, or "the open PR on this branch"),
+runs the focused review checklist (scope sanity, gated files,
+tests, quality bars, git hygiene, spec match), and **takes the
+action the verdict implies**:
+
+- **Accept** → `gh pr review --approve` + `gh pr merge --squash
+  --delete-branch`.
+- **Reject** → `gh pr review --request-changes` with a numbered
+  body naming each blocking issue, its file:line, and the rule
+  it violates.
+
+`/peer-review` is the second user-invoked merge-bearing skill
+(alongside `/release`). The merge authorization is static — the
+user's invocation of `/peer-review` IS the authorization to
+merge an accepted PR. Branch protection still wins: if the
+remote refuses the merge, the approval stays and the PR remains
+open.
+
+#### `/user-story` — new skill (chat-only output)
+
+Take a short description ("users should be able to filter the
+inbox"), return a fully-fleshed-out user story in the format
+from `task-template.md` — As-a/I-want/So-that, scope,
+acceptance criteria, assumptions. **No file is written.
+Nothing lands in the backlog. No `TASK-NNN` is assigned.**
+
+It's a thinking tool, upstream of `/task` and `/auto-task` — use
+it to converge on phrasing before deciding to file an actual
+task.
+
+#### `/auto-test` — test type selection + bootstrap
+
+`/auto-test` previously assumed test infrastructure existed and
+that the task spec named the scenarios. v0.33.0 adds:
+
+- **Test type selection.** Decide unit vs. component vs.
+  E2E/UI vs. integration vs. "no new test" from what the diff
+  touches and the project's existing conventions. A table in the
+  SKILL.md names the defaults.
+- **Bootstrap when missing.** If the project has no test
+  infrastructure for the type needed, install the smallest
+  viable framework, add a minimal config, write the first real
+  test for the actual change. If the bootstrap needs a user-only
+  call (a paid service account, a device ID, a credential that
+  can't be inferred from the repo), stop at a hard gate and
+  report exactly what's blocked.
+- **Loop pattern documentation.** Multi-pass test work runs
+  under `/goal` or under `/mission` (which composes
+  `/auto-test`). `/auto-test` itself does not invoke `/goal` or
+  `/mission` — slash commands are the user-input layer.
+
+### Contract files touched
+
+- `kit/git-flow-rules.md` — Rule 2 restructured into
+  per-invocation confirmation + **named static-authorization
+  carve-outs**. The list is closed: `/release`, `/peer-review`,
+  `/auto-task`+`/auto-phase` (spec-file fast-path). Adding a new
+  merge-bearing user-invoked skill requires adding it here. Rule
+  3's "tag and bag" order updated to reflect /release's new
+  pre-flight → merge → tag → deploy → push tag sequence. Rule 4
+  language updated to match. Rule 5 rewritten — invocation IS
+  consent, hard-stop on real blockers.
+- `kit/autonomy-rules.md` — hard-gates entry cross-references the
+  two additional Rule 2 carve-outs for user-invoked merge-bearing
+  skills (/release and /peer-review).
+- `kit/release-rules.md` — hotfix-path bullet updated to reflect
+  invocation-as-consent.
+- `kit/environment-rules.md` — version-string description
+  updated: `/release` selects the version (from arg or
+  heuristic), not "confirms".
+
+### New + extended skills
+
+- `kit/skills/user-story/SKILL.md` — new, chat-only output.
+- `kit/skills/peer-review/SKILL.md` — new, review-and-act.
+- `kit/skills/auto-test/SKILL.md` — extended with test type
+  selection + bootstrap + loop-pattern docs.
+- `kit/skills/release/SKILL.md` — rewritten for the inverted
+  contract; preserves the output structure, glyph semantics,
+  edge cases, and "when not to use" sections from the prior
+  version.
+
+### Why minor (additive policy + new skills)
+
+Per the changelog rules at the top of this file: minor =
+"additive changes (new files, new skills, new policies) that
+existing projects can pull via `/sync` without breakage". Two
+new skills and a contract carve-out extension are textbook
+additive. The `/release` overhaul is more debatable — it is a
+behavioral inversion of an existing skill — but no project that
+*used* the pre-v0.33.0 confirm-heavy `/release` will see it
+break; they'll just see the confirmations stop appearing.
+Projects that pinned to v0.32.0 keep the old behavior.
+
+---
+
+## v0.32.0 — 2026-05-20
+
+### Autonomy contract — three documented exceptions
+
+The kit's autonomy contract previously had one documented
+exception (`/mission` commits and opens a draft PR). v0.32.0
+restructures that section into three numbered exceptions, each
+opt-in by intent and bounded by precise conditions:
+
+1. **`/mission` commits and opens a draft PR** (unchanged).
+2. **`/auto-task` and `/auto-phase` may auto-merge spec-only
+   PRs to `main`** (new). Task and phase spec files are
+   documentation, not code. When the working tree contains only
+   files matching the spec-file allowlist (`tasks/**/*.md`,
+   `tasks/PHASES.md`, `tasks/ROADMAP.md`), the skill pushes to a
+   short-lived `spec/<id>` branch, opens a `spec-only` PR, and
+   merges via `gh pr merge --squash --delete-branch`. Any non-spec
+   file in the working tree falls back to the pre-v0.32.0
+   "leave uncommitted" behavior.
+3. **`/mission` may run an opt-in preview deploy** (new). When
+   the goal explicitly asks ("deploy a preview", "have it running
+   for me to test"), `/mission` MAY run `./build/deploy
+   --env=<non-prod-env>` after opening the PR. Never `prod`.
+   Never via `/release`. Best-effort: deploy failure is reported,
+   not retried, and never rolls back the PR.
+
+### `/mission` — two-pass verification re-walk
+
+Step 6 of `/mission` previously required one clean re-walk of the
+goal before delivering. v0.32.0 requires **two consecutive clean
+re-walks**. If any re-walk surfaces a new gap, the counter resets
+to zero. The honest enforcement of "done" per the global CLAUDE.md
+ethos — a single green re-walk could be the result of asking the
+same flawed question twice.
+
+### Contract files touched
+
+- `kit/autonomy-rules.md` — exceptions section restructured into
+  three numbered carve-outs; the "Hard gates" entry on
+  merging/deploying updated to reference them.
+- `kit/git-flow-rules.md` — Rule 2 (no auto-merge to `main`) and
+  Rule 5 (deploys route through `/release`) each gain a
+  narrowly-scoped carve-out paragraph.
+- `kit/skills/mission/SKILL.md` — Step 6 (two-pass), new Step 8
+  (opt-in preview deploy), Step 9 (autonomy report), updated
+  description and contract bullets.
+- `kit/skills/auto-task/SKILL.md` — new Step 5 (spec-file
+  fast-path), updated "Never auto-commit" bullet and "What done
+  looks like".
+- `kit/skills/auto-phase/SKILL.md` — same fast-path pattern,
+  whole-phase single-PR variant, plus a phase-collision note.
+
+### Why minor (additive policy + behavioral step changes)
+
+Per the changelog rules at the top of this file: minor =
+"additive changes (new files, new skills, new policies) that
+existing projects can pull via `/sync` without breakage". Three
+new contract carve-outs and a new step in `/mission` are
+textbook additive policy. Existing projects that pull v0.32.0
+see: the same skills, with two new opt-in behaviors that engage
+only when their preconditions hold.
+
+---
+
 ## v0.31.0 — 2026-05-19
 
 ### `/mission` — autonomous goal execution

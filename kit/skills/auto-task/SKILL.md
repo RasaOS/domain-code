@@ -39,8 +39,15 @@ the repo doesn't hold is a flagged assumption, surfaced loudly.
   in Step 3.5, the user-context check in Step 3.8 — is resolved by
   picking the best-grounded option and recording it as a ⚠️
   assumption in the report.
-- **Never auto-commit.** The spec file lands in `tasks/backlog/`
-  (or `tasks/triage/` if no phase fits), uncommitted.
+- **Spec-file fast-path is the default.** Per
+  `autonomy-rules.md` "Exception 2", `/auto-task` auto-commits the
+  spec and auto-merges a `spec-only` PR to `main` when the
+  working tree contains *only* allowlisted spec files
+  (`tasks/**/*.md`, `tasks/PHASES.md`, `tasks/ROADMAP.md`). If
+  any non-spec file is dirty, fall back to "leave uncommitted" —
+  the file lands in `tasks/backlog/` (or `tasks/triage/`), the
+  user commits manually, and the autonomy report notes why the
+  fast-path was skipped.
 
 ## Process
 
@@ -56,8 +63,25 @@ the repo doesn't hold is a flagged assumption, surfaced loudly.
    assumption.
 4. **Write the full spec** to `tasks/backlog/TASK-NNN-slug.md`
    using `task-template.md`'s shape. Update `tasks/ROADMAP.md`.
-5. **Render the autonomy report** (template in `autonomy-rules.md`)
-   — the spec path, every assumption, any hard gate hit.
+5. **Spec-file fast-path** (per `autonomy-rules.md` Exception 2).
+   Check the working tree:
+   - If every dirty file matches the spec-file allowlist
+     (`tasks/**/*.md`, `tasks/PHASES.md`, `tasks/ROADMAP.md`) and
+     nothing else is dirty: create a `spec/TASK-NNN-slug` branch
+     from a fresh `main`, commit the spec there
+     (`TASK-NNN spec — <title>`), push, open a PR labeled
+     `spec-only` with the autonomy report's assumptions in the
+     body, and merge via `gh pr merge --squash --delete-branch`.
+     If branch protection refuses the merge, leave the PR open
+     and report it.
+   - If any non-spec file is dirty: skip the fast-path, leave the
+     spec uncommitted, and note in the autonomy report that the
+     fast-path was skipped because of `<files>`.
+6. **Render the autonomy report** (template in `autonomy-rules.md`)
+   — the spec path, every assumption, any hard gate hit, and the
+   fast-path result: the merged PR URL, or "fast-path skipped —
+   non-spec files in working tree", or "PR open, merge blocked
+   by branch protection".
 
 ## When NOT to use this skill
 
@@ -70,7 +94,15 @@ the repo doesn't hold is a flagged assumption, surfaced loudly.
 ## What "done" looks like
 
 A complete, implementation-ready spec in `tasks/backlog/` (or
-`tasks/triage/`), `ROADMAP.md` updated, uncommitted — plus one
-autonomy report listing every decision made on the user's behalf.
-The user reviews the report, corrects any wrong assumption by
-re-running, and commits.
+`tasks/triage/`), `ROADMAP.md` updated, plus one autonomy report
+listing every decision made on the user's behalf.
+
+If the spec-file fast-path engaged: the spec is on `main` via a
+merged `spec-only` PR, the team has visibility, the autonomy
+report carries the PR URL. The user reviews the report and the
+PR after the fact; corrections happen by re-running or by
+amending the spec.
+
+If the fast-path was skipped (non-spec dirty files): the spec is
+in the working tree, uncommitted — same as the pre-v0.32.0
+behavior. The user commits manually.

@@ -181,9 +181,14 @@ that costs queue discipline; spend it carefully.
 - The verification gate is still the contract.
 - The deploy-tagging rule still applies (annotated tag, pushed to
   origin, AUDIT entry).
-- The user still confirms the deploy. "Hotfix" doesn't mean
-  "auto-ship" — it means "skip the integration-batch buffer and go
-  straight to a tagged release after the user confirms."
+- **Invocation is consent — same as a normal release.** Per
+  `git-flow-rules.md` Rule 5 and `kit/skills/release/SKILL.md`,
+  typing `/release` on a hotfix branch IS the deploy
+  authorization. "Hotfix" doesn't change the contract — it
+  changes the route (skip the integration-batch buffer, default
+  to a patch bump) but not the authorization model. The skill
+  still hard-stops on real blockers (failed tests, failed build,
+  missing deploy command).
 
 ## Dependency hygiene
 
