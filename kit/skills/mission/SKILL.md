@@ -214,6 +214,24 @@ turns ran out. Step 6 is where that honesty is enforced.
    report — the single surface where the user reviews every call
    the mission made.
 
+## Preset mission templates
+
+Two skills are documented preset variants of `/mission` — same
+methodology, fixed goal recipe, optional scope arg:
+
+- **`/self-heal [scope]`** — audit and fix every real problem in
+  scope. Two-pass clean re-walks required. Behavior-restoring.
+  See `kit/skills/self-heal/SKILL.md`.
+- **`/self-improve [scope]`** — audit and apply every obvious
+  professional improvement in scope. Two-pass clean re-walks
+  required. Behavior-preserving. See
+  `kit/skills/self-improve/SKILL.md`.
+
+Both follow this file end-to-end; they only fix the goal recipe
+and the branch-name slug. If a user types `/self-heal billing`,
+that is exactly `/mission` with the self-heal goal template
+substituted in.
+
 ## Running a mission under `/goal`
 
 `/mission` runs as far as it can in one invocation, but a real
