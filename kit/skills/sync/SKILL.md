@@ -693,6 +693,10 @@ remain minimal.
 
 ## When NOT to use this skill
 
+- **You want auto-apply on every safe case** → `/sync-all`.
+  Same operation, no per-file prompts; stops only at destructive
+  ambiguities (conflicts, override-overwrites, project-content
+  overlap, dirty-file removals).
 - **Bootstrapping a new project** → use the kit's `bin/init` script.
 - **Pushing improvements upstream** → manual git operation in the
   kit repo.
