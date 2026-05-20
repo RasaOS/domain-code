@@ -1,9 +1,21 @@
+---
+id: TASK-XXX
+category: spec
+phase: <phase-id>
+status: backlog | active | done
+---
+
 # TASK-XXX: <short title>
 
-> Copy this file to `tasks/backlog/TASK-XXX-slug.md`, fill in every
-> section, then move to `tasks/active/` when work begins.
+> Spec-category task — feature work, new functionality. Copy this
+> file to `tasks/backlog/TASK-XXX-slug.md`, fill in every section,
+> then move to `tasks/active/` when work begins.
 >
 > Before starting: read `CLAUDE.md` and `.claude/task-rules.md`.
+>
+> For other task categories: `task-template-stub.md` (light
+> tracking), `task-template-bug.md` (fix broken behavior),
+> `task-template-hotfix.md` (urgent prod fix).
 
 ## User story
 
