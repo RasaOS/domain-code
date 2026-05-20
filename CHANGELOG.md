@@ -20,6 +20,66 @@ human-readable rollback).
 
 ---
 
+## v0.37.0 — 2026-05-20
+
+### `/sync-all` — autonomous variant of `/sync`
+
+`/sync`, run with nobody at the keyboard. Same operation,
+same drift classifications, same backup discipline — but
+applies every safe case automatically and stops only at the
+destructive ambiguities.
+
+#### What auto-applies
+
+- **Kit changed, local unchanged** → pull.
+- **New file in kit** → install.
+- **File removed from kit, local unchanged** → remove (with
+  the same `.claude/_archive/` backup discipline `/sync` uses).
+- **Local override (kit unchanged, local changed)** → leave
+  alone, record awareness.
+
+#### What stops at a hard gate
+
+- **Conflict** — kit and local both changed. Picking either
+  side is potential data loss.
+- **File removed from kit, local changed.** Removing would
+  discard the local edits.
+- **Overlap with project file** (Capability B). The four
+  resolve options require human judgment.
+- **Override on the override list, kit changed.** Per
+  `/sync`'s contract, this needs explicit user confirmation.
+
+When any hard gate is hit, the safe cases still apply, but the
+`foundation.json` pin is **held** (not bumped) — the project
+isn't fully synced until the gates are resolved. The user runs
+`/sync` interactively to finish.
+
+#### Naming
+
+`/sync-all` doesn't follow the `/auto-X` convention used by the
+rest of the autonomous variants (`/auto-task`, `/auto-bug`,
+`/auto-hotfix`, `/auto-phase`, `/auto-develop`, `/auto-test`).
+It was named `/sync-all` because "sync everything" communicates
+the intent more clearly than `/auto-sync` (which sounds like
+"sync on a schedule"). The autonomous-variant contract (per
+`autonomy-rules.md`) still applies — decide don't ask, flag
+every assumption, run to completion, stop at hard gates, end
+with the autonomy report.
+
+#### Files
+
+- `kit/skills/sync-all/SKILL.md` — new.
+- `kit/skills/sync/SKILL.md` — "When NOT to use this skill"
+  section gains a cross-reference to `/sync-all` so users
+  discover the variant.
+
+### Why minor
+
+One new skill, no contract changes, no breaking changes.
+Textbook minor.
+
+---
+
 ## v0.36.0 — 2026-05-20
 
 ### Status field overhaul — `blocked` added, `done` → `completed` (BREAKING)
