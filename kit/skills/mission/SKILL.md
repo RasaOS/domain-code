@@ -1,6 +1,6 @@
 ---
 name: mission
-description: Autonomous end-to-end goal execution — the orchestrator above the auto-* family. Takes a goal (a statement, a rough decomposition, a definition of done), decomposes it into TASK specs, runs each through auto-task → auto-develop → auto-test, re-walks the goal to verify it actually holds, then opens a draft PR for the user to validate. Every judgment call is decided and flagged as an assumption. Stops at hard gates; never merges or deploys. Triggered when the user hands over a whole goal to run hands-off — e.g. "/mission", "run this goal autonomously", "take this goal end to end", "audit X, fix what's broken, put up a PR", a goal statement followed by numbered steps and a definition of done.
+description: Autonomous end-to-end goal execution — the orchestrator above the auto-* family. Takes a goal (a statement, a rough decomposition, a definition of done), decomposes it into TASK specs, runs each through auto-task → auto-develop → auto-test, re-walks the goal twice to verify it actually holds, then opens a draft PR for the user to validate. Every judgment call is decided and flagged as an assumption. Stops at hard gates; never merges to main, never deploys to prod (may run an opt-in preview deploy to a non-prod env when the goal asks for it). Triggered when the user hands over a whole goal to run hands-off — e.g. "/mission", "run this goal autonomously", "take this goal end to end", "audit X, fix what's broken, put up a PR", a goal statement followed by numbered steps and a definition of done.
 ---
 
 # /mission — autonomous goal execution
@@ -68,18 +68,28 @@ turns ran out. Step 6 is where that honesty is enforced.
   / "stay on this branch". If unstated, cut a new branch —
   `git-flow-rules.md` Rule 1. A mission spans tasks, so a new
   branch is `feat/<goal-slug>`. "Stay" onto `main` is a hard stop.
-- **Commit per task; PR at the end.** `/mission` is the one
-  autonomous skill that commits and opens a PR — the documented
-  exception in `autonomy-rules.md`. Each task is committed to the
-  branch as it completes. The branch is pushed and a **draft PR**
-  opened only as the final step, only once the verification
-  re-walk confirms the goal holds. Never merges to `main`, never
-  deploys.
-- **Verify before delivering.** The tasks finishing is not the
-  goal being met. Before delivery, re-walk the *original goal* and
-  *every step the user named*, and confirm each is true. Gaps the
-  re-walk finds become new tasks — the mission is not done while
-  any remain.
+- **Commit per task; PR at the end.** `/mission` is one of the
+  documented exceptions in `autonomy-rules.md` (Exception 1) —
+  the autonomous skill that commits and opens a PR. Each task is
+  committed to the branch as it completes. The branch is pushed
+  and a **draft PR** opened only as the final step, only once the
+  two-pass verification re-walk confirms the goal holds. Never
+  merges to `main`.
+- **Verify with two consecutive clean re-walks.** The tasks
+  finishing is not the goal being met. Before delivery, re-walk
+  the *original goal* and *every step the user named*. A clean
+  re-walk (zero gaps) is necessary but not sufficient — `/mission`
+  requires **two consecutive clean re-walks** before declaring
+  done. If any re-walk surfaces a new gap, fix it and reset the
+  counter to zero. Gaps become new tasks; the mission is not done
+  while any remain.
+- **Opt-in preview deploy.** Per `autonomy-rules.md` Exception 3,
+  `/mission` MAY run `./build/deploy --env=<non-prod-env>` after
+  opening the PR — but only when the goal explicitly asks for a
+  preview deploy ("deploy a preview", "have it running for me to
+  test", "stand it up so I can validate"). Never `prod`. Never
+  via `/release`. Best-effort: deploy failure is reported but
+  does not roll back the PR.
 - **Hard gates still stop the run.** A locked `/contract`, a gated
   file, a destructive operation, a required merge to `main`, a
   genuine blocker — `/mission` stops and surfaces it per
@@ -147,31 +157,62 @@ turns ran out. Step 6 is where that honesty is enforced.
    move the spec to `tasks/done/`. A hard gate hit here stops the
    mission.
 
-6. **Verification re-walk.** With every task done, re-walk the
-   *goal*, not the task list. Re-read the changed surface, re-run
-   the project's verification/build, re-run the test suite, and
-   confirm every deliverable in the goal recipe is met. Any gap →
-   file it as a new task and return to Step 5. Repeat until the
-   goal holds with no gaps. If successive re-walks surface the
-   same gaps without progress, stop and report it as a blocker —
-   a goal that will not converge is a hard finding, not a reason
-   to loop forever.
+6. **Two-pass verification re-walk.** With every task done,
+   re-walk the *goal*, not the task list. Re-read the changed
+   surface, re-run the project's verification/build, re-run the
+   test suite, and confirm every deliverable in the goal recipe
+   is met.
 
-7. **Deliver.** Only once Step 6 is clean: push the branch and
-   open a **draft PR** (via the project's GitHub tooling) — title
-   from the goal, body carrying the mission summary: the goal and
-   its recipe, the tasks done with their commits, the
-   verification result, how to validate and the command to run
-   the tests, and every flagged assumption. If the goal asked for
-   a handoff doc, produce it following `handoff/SKILL.md`. Never
-   merge, never deploy.
+   - **Pass 1** — find every gap. Any gap → file it as a new task,
+     return to Step 5, and re-enter Step 6 with the counter reset
+     to zero.
+   - **Pass 2** — repeat the full re-walk against the same
+     criteria. If Pass 2 finds *anything* the first pass missed,
+     reset the counter and start over. Two consecutive clean
+     re-walks are required before proceeding.
 
-8. **Render the autonomy report.** The `autonomy-rules.md` report,
+   This is the honest enforcement of "done" per the global
+   CLAUDE.md ethos: a single green re-walk could be the result of
+   asking the same flawed question twice. A second independent
+   re-walk catches what the first missed.
+
+   If successive re-walks surface the same gaps without progress,
+   stop and report it as a blocker — a goal that will not
+   converge is a hard finding, not a reason to loop forever.
+
+7. **Deliver — open the PR.** Only once Step 6 has two consecutive
+   clean passes: push the branch and open a **draft PR** (via the
+   project's GitHub tooling) — title from the goal, body carrying
+   the mission summary: the goal and its recipe, the tasks done
+   with their commits, the verification result (both passes), how
+   to validate and the command to run the tests, and every
+   flagged assumption. If the goal asked for a handoff doc,
+   produce it following `handoff/SKILL.md`. Never merge to
+   `main`.
+
+8. **Preview deploy (opt-in only).** *Skip this step unless the
+   goal explicitly asks for a preview deploy.* If it does, per
+   `autonomy-rules.md` Exception 3:
+   - Read `build/pipeline-config.toml` and `build/environments/`
+     to find a non-prod env. If the goal names one ("deploy to
+     staging", "preview env"), use it. Otherwise pick the first
+     non-prod env and flag the choice as an assumption.
+   - Refuse if the only configured env is `prod`/`production`,
+     or if no `./build/deploy` script exists, or if the project
+     has no deployable UI surface. Report the refusal; do not
+     fail the mission.
+   - Run `./build/deploy --env=<env>`. If it succeeds, capture
+     the resulting URL/host and add it to the PR body and the
+     autonomy report. If it fails, capture the error and report
+     it — do not retry, do not roll back the PR.
+
+9. **Render the autonomy report.** The `autonomy-rules.md` report,
    extended for a mission: the brief, the goal recipe (with the
    assumptions and gaps `/instruct` surfaced), the task list with
-   commits, the re-walk result, and the PR link. One report — the
-   single surface where the user reviews every call the mission
-   made.
+   commits, the two-pass re-walk result, the PR link, and — if
+   Step 8 ran — the preview deploy result (URL or error). One
+   report — the single surface where the user reviews every call
+   the mission made.
 
 ## Running a mission under `/goal`
 
@@ -205,15 +246,20 @@ clause and a turn bound, or the loop will spin against a gate.
   *clarifies* a vague goal itself (Step 3, via `/instruct`), but
   it still needs a goal to aim at — it cannot explore one into
   existence.
-- **Shipping — merge, tag, deploy** → `/release`. `/mission`
-  delivers a PR and stops; it never merges or deploys.
+- **Shipping — merge, tag, prod deploy** → `/release`.
+  `/mission` delivers a PR (and optionally a preview deploy) and
+  stops; it never merges to `main`, never tags, never deploys to
+  prod.
 
 ## What "done" looks like for a /mission session
 
 A `feat/` branch with one commit per completed task, every task's
-spec in `tasks/done/`, the verification re-walk green, and a
-**draft PR** open for the user to validate — plus one autonomy
-report listing every decision the mission made. The goal's
-definition of done is *verified*, not assumed. The user reviews
-the PR, validates it against the goal, and merges it (or sends it
-back). Merging and deploying remain the user's call.
+spec in `tasks/done/`, **two consecutive clean verification
+re-walks**, and a **draft PR** open for the user to validate —
+plus one autonomy report listing every decision the mission made.
+If the goal asked for a preview deploy, the PR body carries the
+preview URL (or the deploy error). The goal's definition of done
+is *verified twice over*, not assumed. The user reviews the PR,
+validates it against the goal (now against running behavior too,
+if a preview was deployed), and merges it (or sends it back).
+Merging to `main` and deploying to prod remain the user's call.

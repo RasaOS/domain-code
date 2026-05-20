@@ -47,9 +47,21 @@ not in GitHub config (the kit doesn't touch repo settings).
   Even if the merge has already been approved on GitHub.
 - **No "while you're in there" merges.** If you notice main is
   behind, don't fast-forward silently. Ask first.
+- **Narrow carve-out — spec-file fast-path.** `/auto-task` and
+  `/auto-phase` MAY auto-merge a PR to `main` *iff* every file in
+  the PR matches the spec-file allowlist (`tasks/**/*.md`,
+  `tasks/PHASES.md`, `tasks/ROADMAP.md`) and the working tree is
+  otherwise clean. The user's confirmation for this carve-out is
+  *static* — encoded in `autonomy-rules.md` as a deliberate
+  exception, not requested per-invocation. The merge runs via a
+  short-lived `spec/<id>` branch with a real PR record. Any
+  non-spec file in the working tree falls back to "leave
+  uncommitted" — same as today. See `autonomy-rules.md` "The
+  spec-file fast-path exception" for the full conditions.
 
-The only way `main` updates is: user says yes, agent (or user)
-merges. Otherwise `main` does not move.
+The only way `main` updates is: user says yes (per-invocation), or
+the spec-file carve-out above (which the user authorized once, in
+this rule). Otherwise `main` does not move.
 
 ### Rule 3 — Tag every deploy ("tag and bag")
 
@@ -83,9 +95,18 @@ with the same care as a deploy:
 
 ### Rule 5 — Deploys route through `/release`
 
-Production deploys are not free-floating actions. They flow
+**Production** deploys are not free-floating actions. They flow
 through `/release` (or its platform variants — `/ios-release`,
 future `/web-release`, etc.). The skill is the gate.
+
+**Non-production preview deploys** have one carve-out: `/mission`
+MAY run `./build/deploy --env=<env>` against a project-configured
+non-prod environment, but only when the goal explicitly asks for
+a preview deploy. The carve-out is opt-in (the goal must request
+it), bounded (never `prod`/`production`, never via `/release`,
+never tags), and best-effort (deploy failure is reported, not
+retried, and never rolls back the PR). See `autonomy-rules.md`
+"The preview-deploy exception" for the precise conditions.
 
 Reasons:
 

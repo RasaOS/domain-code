@@ -61,11 +61,15 @@ situation** in its report:
 - **Merging or pushing to `main`, release tagging, deploys.** Per
   `git-flow-rules.md` Rules 2, 4, and 5 these are always
   user-confirmed. An autonomous skill never merges to `main`,
-  never pushes `main`, never tags a release, never deploys. It
-  works on a branch and leaves it for the user. (`/mission` may
-  push its own `feat/` branch and open a draft PR — see "The one
-  exception" below — but the merge-to-`main` gate is absolute, for
-  every autonomous skill, `/mission` included.)
+  never pushes `main`, never tags a release, never deploys to
+  prod. It works on a branch and leaves it for the user. Three
+  narrow carve-outs, all documented in "The exceptions" below:
+  (a) `/mission` may push its own `feat/` branch and open a draft
+  PR; (b) `/auto-task` and `/auto-phase` may auto-merge
+  spec-only PRs to `main`; (c) `/mission` may run a non-prod
+  preview deploy when the goal asks for it. The
+  **merge-to-`main`-with-code** gate and the **deploy-to-prod**
+  gate are absolute — no carve-outs.
 - **Destructive or irreversible operations.** History rewrites,
   force-pushes, data deletion, schema-destroying migrations,
   removing real content. Never auto-decided — the skill stops.
@@ -84,30 +88,95 @@ Autonomy changes *who decides*, never *how good the work is*. Every
 `auto-*` skill remains fully bound by `task-rules.md`,
 `craft-rules.md`, `test-rules.md`, and `git-flow-rules.md`.
 Autonomy never lowers a verification bar, never skips a test, never
-ships unreviewed work. **"Never auto-commit" still holds** — an
-`auto-*` skill leaves its work in the working tree, uncommitted,
-for the user to review with `git diff` and commit. (`/mission` is
-the one documented exception — see the next section.)
+ships unreviewed work. **"Never auto-commit" still holds** as the
+default — an `auto-*` skill leaves its work in the working tree,
+uncommitted, for the user to review with `git diff` and commit.
+The three documented exceptions are below.
 
-## The one exception — `/mission` commits and opens a PR
+## The exceptions — three narrow carve-outs
 
-"Never auto-commit" holds for the `auto-*` family without
-exception: each leaves its work in the working tree, uncommitted,
-for the user to review and commit.
+The default — "never auto-commit, never merge to `main`, never
+deploy" — holds for the `auto-*` family. Three narrowly-scoped
+exceptions are encoded in the contract. Each is opt-in by *intent*
+(the skill triggers the carve-out only when its specific
+conditions hold), bounded (each names its scope precisely), and
+documented here so the carve-out is reviewable.
 
-`/mission` is the single, deliberate exception — because a pull
-request *is* its deliverable and its review surface. A `/mission`
-run commits each completed task to its `feat/` branch (durable
-checkpoints that let a long run, looped under `/goal`, resume
-after a context compaction), and as its terminal step pushes the
-branch and opens a **draft PR** — but only once its verification
-re-walk confirms the goal is met.
+### Exception 1 — `/mission` commits and opens a draft PR
 
-This bends the auto-commit rule; it does not touch the hard gates.
-`/mission` never merges to `main`, never pushes `main`, never tags
-a release, never deploys. The draft PR waits for the user to
-validate and merge. The commit and the PR are `/mission`'s to
-make; the merge is always the user's.
+A pull request *is* `/mission`'s deliverable and its review
+surface. A `/mission` run commits each completed task to its
+`feat/` branch (durable checkpoints that let a long run, looped
+under `/goal`, resume after a context compaction), and as a
+terminal step pushes the branch and opens a **draft PR** — but
+only once its verification re-walk confirms the goal is met.
+
+The draft PR waits for the user to validate and merge. The commit
+and the PR are `/mission`'s to make; **the merge to `main` is
+always the user's**.
+
+### Exception 2 — `/auto-task` and `/auto-phase` may auto-merge spec-only PRs
+
+Task and phase **spec files** are documentation, not code. They
+describe work; they do not run work. The team needs visibility
+into what has been spec'd, and the friction of "every spec file
+waits for a manual commit + PR + review + merge" is a real tax on
+the autonomous flow.
+
+The carve-out:
+
+- **Allowlist.** Every file in the PR must match the spec-file
+  allowlist: `tasks/**/*.md`, `tasks/PHASES.md`,
+  `tasks/ROADMAP.md`. Any file outside the allowlist disqualifies
+  the fast-path.
+- **Clean tree precondition.** The working tree must contain no
+  non-spec dirty files at the moment the fast-path runs. If it
+  does, fall back to "leave uncommitted" — same as the default.
+- **Short-lived branch + real PR.** Push to a `spec/<id>` branch
+  (e.g. `spec/TASK-NNN-slug`, `spec/PHASE-X-slug`), open a PR
+  labeled `spec-only` with the autonomy report's assumptions in
+  the body, then merge via `gh pr merge --squash --delete-branch`.
+- **Branch protection wins.** If branch protection refuses the
+  merge, the PR stays open and the autonomy report says so. The
+  skill does not use `--admin` or force the merge.
+- **Never code.** This carve-out exists *because* spec files are
+  not code. The moment any non-allowlist file is in the change
+  set, the fast-path is off — no exceptions.
+
+Rationale: spec content is the team's plan, not the team's
+runtime. Auto-merging a spec is the same review-tradeoff as
+auto-publishing a draft note to a shared Notion. It is reversible
+(`git revert`) and visible (PR record). Lifting the gate for code
+would change behavior on `main`; lifting it for specs only
+changes what plans are visible.
+
+### Exception 3 — `/mission` may run an opt-in preview deploy
+
+When the goal explicitly asks for a deployable preview ("deploy a
+preview", "have it running for me to test", "stand it up so I can
+validate"), `/mission` MAY run `./build/deploy --env=<env>`
+against a project-configured non-prod environment, but:
+
+- **Opt-in.** The goal must explicitly request a preview deploy.
+  If the goal does not mention deployment, `/mission` does not
+  deploy. Silence is "do not deploy".
+- **Never prod.** The selected env must be one of the project's
+  non-prod envs configured in `build/environments/`. The names
+  `prod` and `production` are forbidden, period.
+- **Never via `/release`.** The release skill remains the gate
+  for prod. This preview path is a separate, narrower channel.
+- **Never tags.** No `git tag -a v…-…-…` happens. Tags belong to
+  `/release`.
+- **Best-effort.** Deploy failure is reported in the autonomy
+  report and does not roll back the PR. The PR is the deliverable;
+  the deploy is a convenience on top.
+- **After the PR.** The deploy runs *after* the PR is opened, so
+  the PR exists regardless of whether the deploy succeeds.
+
+Rationale: a UI preview lets the user validate a `/mission` PR
+against running behavior, not just code review. The same opt-in
+gating that protects prod (route through `/release`) does not
+apply to ephemeral testing envs — those exist to be deployed to.
 
 ## The autonomy report
 
