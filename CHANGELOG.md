@@ -20,6 +20,80 @@ human-readable rollback).
 
 ---
 
+## v0.34.0 — 2026-05-20
+
+### Two preset `/mission` variants — `/self-heal` and `/self-improve`
+
+Both are thin specializations of `/mission`: same methodology,
+fixed goal recipe, optional scope arg, two-pass clean re-walk
+already inherited from `/mission`'s v0.32.0 Step 6.
+
+#### `/self-heal [scope]`
+
+Audit a screen, a functionality area, or the entire system (the
+default) for **real, verifiable problems** — failing tests, build
+failures, linter errors (not warnings), runtime errors, security
+vulnerabilities flagged by the project's tooling, accessibility
+violations, broken contracts, dead references. For each issue,
+file a fix-task and execute it through the per-task lifecycle.
+Iterate until two consecutive verification re-walks find zero
+remaining in-scope issues.
+
+Behavior-restoring by contract — fixes restore intended behavior,
+not redesign it. A bug that requires a redesign is flagged in
+the report, not executed silently. Ends at a draft PR; merge to
+main remains the user's call.
+
+#### `/self-improve [scope]`
+
+Same shape as `/self-heal`, different objective: find **obvious
+professional improvements** — linter warnings (not errors), dead
+code, magic numbers, outdated patterns the codebase has already
+moved past elsewhere, naming inconsistencies, missing public-API
+docs, long functions over configured limits, test-coverage gaps
+in modified files, import-order violations. Apply every one
+found.
+
+Behavior-preserving by contract — the test suite's green/red
+profile must be unchanged before vs. after. A redesign or
+architectural change is out of scope (route to `/brainstorm` or
+`/plan`). Subjective taste is out of scope by definition. Ends
+at a draft PR.
+
+#### The separation
+
+Both are intentionally distinct so the user picks the right tool:
+
+- **`/self-heal`** — repair. Something is broken; the
+  green/red answer is objective. Bias toward "the system isn't
+  doing what it should."
+- **`/self-improve`** — polish. Nothing is broken; the wins are
+  obvious-by-config or obvious-by-convention. Bias toward "the
+  system is doing what it should, but the codebase's own rules
+  flag improvements."
+
+A test that fails is a heal target. A test that passes but
+covers half the file is an improve target. A function whose
+behavior is wrong is heal; a function that's 200 lines when
+`craft-rules.md` caps at 80 is improve.
+
+#### Files touched
+
+- `kit/skills/self-heal/SKILL.md` — new.
+- `kit/skills/self-improve/SKILL.md` — new.
+- `kit/skills/mission/SKILL.md` — new "Preset mission templates"
+  section cross-references both, so users discover them.
+
+### Why minor (additive — two new skills)
+
+Both skills are pure compositions over `/mission`'s existing
+contract — no new policies, no contract changes, no extensions
+to autonomy-rules.md or git-flow-rules.md. They inherit
+`/mission`'s draft-PR-end pattern; merge to main remains the
+user's call.
+
+---
+
 ## v0.33.0 — 2026-05-20
 
 ### Two new skills + `/auto-test` extension + `/release` contract inversion
