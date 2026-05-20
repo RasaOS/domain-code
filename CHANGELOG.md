@@ -20,6 +20,109 @@ human-readable rollback).
 
 ---
 
+## v0.38.0 — 2026-05-20
+
+### Live release tracking — `RELEASES.md` reworked + `/release-add`
+
+`tasks/RELEASES.md` becomes a **live release tracker** that
+appends tasks as they merge to `main`, then stamps + opens a
+new accumulator entry when `/release` ships. No more
+hand-maintained release plans.
+
+#### New format (timeline shape, matching the §23 Activity style)
+
+```markdown
+🚧 v0.38.0  ◆  next release — accumulating since v0.37.0
+
+- TASK-042 — fix login bug on iOS
+- TASK-043 — add filter UI to the inbox
+- HOTFIX-007 — patch RBAC bypass on /admin
+
+---
+
+✅ v0.37.0  ◆  /sync-all — autonomous variant of /sync
+              shipped 2026-05-20 · tag v0.37.0 · sha f77a843
+
+- TASK-040 — /sync-all skill
+- TASK-041 — /sync When-NOT cross-reference
+
+---
+
+✅ v0.36.0  ◆  status overhaul — blocked added, done → completed (BREAKING)
+              shipped 2026-05-20 · tag v0.36.0 · sha 8274f0f
+
+(task list)
+```
+
+Conventions: status glyph + version + `◆` + theme summary on
+the first line; date / tag / sha on the detail line (shipped
+only); one bullet per task or hotfix beneath. The `📋 Planned`
+state from earlier kit versions is gone — the live-accumulator
+model replaces it.
+
+#### Auto-append on merge
+
+Three paths land tasks in the "🚧 Next" entry:
+
+1. **`/peer-review` merges a PR** → calls `/release-add` for
+   every TASK-NNN / HOTFIX-NNN in the merged commits. New Step 6
+   in `/peer-review`'s flow.
+2. **`/release` merges an integration branch** → pre-flight
+   silently fixes up any task missed by a manual merge; Step 1
+   now reads the "🚧 Next" entry as the release manifest.
+3. **Manual `gh pr merge`** → user invokes `/release-add
+   TASK-NNN` or `/release-add --since-last-tag` to catch up.
+
+#### `/release-add` — new skill
+
+Idempotent single-purpose: append a TASK-NNN / HOTFIX-NNN to
+the "🚧 Next" entry. Re-running is a no-op. The
+`--since-last-tag` mode bulk-catches-up by scanning commits
+since the last tag.
+
+Resolves task titles automatically by reading the spec file's
+H1 (looks in `tasks/completed/`, then `active/`, then
+`backlog/`). Falls back to the merge-commit subject if no spec
+is findable.
+
+#### `/release` Step 7 reworked
+
+Three sub-steps now:
+
+1. **Stamp the "🚧 Next" entry**: change `🚧` → `✅`, fill in
+   the theme summary, add the `shipped … tag … sha …` detail
+   line.
+2. **Cross-check task list** against commits since the last
+   tag; silently add any missed by manual merges (pre-flight
+   already caught the inverse — stale claims).
+3. **Create a new "🚧 Next" entry** above the stamped entry,
+   with the next expected version and an empty task list.
+
+The AUDIT entry (🚀) still happens — `RELEASES.md` is the
+release-shaped record, `AUDIT.md` is the chronological log.
+
+### Files touched
+
+- `kit/release-rules.md` — "Release planning" section
+  rewritten as "Release tracking", with the new format, the
+  three-lane auto-append paths, and the lifecycle (one "🚧
+  Next" + N "✅ Shipped").
+- `kit/skills/release-add/SKILL.md` — new.
+- `kit/skills/release/SKILL.md` — Step 1 reads the "🚧 Next"
+  entry as the manifest; Step 7 stamps + creates new "🚧 Next".
+- `kit/skills/peer-review/SKILL.md` — new Step 6 calls
+  `/release-add` after merging.
+
+### Why minor
+
+One new skill, one structural change to a kit-managed file
+(`RELEASES.md` format) that downstream projects can adopt
+incrementally (the existing 📋 Planned / 🚧 In progress /
+✅ Shipped entries still parse; only new releases use the new
+shape). Additive, no required migration.
+
+---
+
 ## v0.37.0 — 2026-05-20
 
 ### `/sync-all` — autonomous variant of `/sync`
