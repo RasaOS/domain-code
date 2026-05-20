@@ -20,6 +20,139 @@ human-readable rollback).
 
 ---
 
+## v0.33.0 — 2026-05-20
+
+### Two new skills + `/auto-test` extension + `/release` contract inversion
+
+#### `/release` — invocation is consent (contract inversion)
+
+The most consequential change. The pre-v0.33.0 `/release` skill
+asked for confirmation at six+ soft gates between invocation and
+deploy: platform delegation, pre-flight warnings, deploy command
+ambiguity, version, "deploy now?", and cleanup-on-failure. This
+caused alarm fatigue and missed deploys ("I thought I already
+confirmed", "I assumed it would auto-continue").
+
+v0.33.0 inverts the contract: **typing `/release` IS the consent
+to ship.** No soft confirmation prompts. The skill stops only on
+*real* blockers — failed auth, failed tests, failed build, dirty
+tree, missing deploy command, missing release-plan match, branch
+protection refusal, or deploy command itself failing.
+
+The flow order also changes: **pre-flight → merge integration →
+tag (local) → deploy → push tag → record**. The tag is created
+locally on the merge commit *before* deploy so the commit's
+identity is locked, then pushed *after* deploy succeeds so a
+failed deploy doesn't publish a stale release tag.
+
+Version selection: pass an arg (`/release patch`, `/release
+minor`, `/release major`, `/release v1.2.3`) or let the heuristic
+pick. Either way: no asking.
+
+The trade-off is named in the SKILL.md and the rule files: you
+gain no-missed-deploys and faster ship cycles; you give up the
+chance to abort mid-flow without invoking rollback. A typo of
+`/release` ships — the cost is mitigated by `/release` not being
+a common typo target.
+
+#### `/peer-review` — new skill (reviews a PR and acts)
+
+Takes a PR (number, URL, or "the open PR on this branch"),
+runs the focused review checklist (scope sanity, gated files,
+tests, quality bars, git hygiene, spec match), and **takes the
+action the verdict implies**:
+
+- **Accept** → `gh pr review --approve` + `gh pr merge --squash
+  --delete-branch`.
+- **Reject** → `gh pr review --request-changes` with a numbered
+  body naming each blocking issue, its file:line, and the rule
+  it violates.
+
+`/peer-review` is the second user-invoked merge-bearing skill
+(alongside `/release`). The merge authorization is static — the
+user's invocation of `/peer-review` IS the authorization to
+merge an accepted PR. Branch protection still wins: if the
+remote refuses the merge, the approval stays and the PR remains
+open.
+
+#### `/user-story` — new skill (chat-only output)
+
+Take a short description ("users should be able to filter the
+inbox"), return a fully-fleshed-out user story in the format
+from `task-template.md` — As-a/I-want/So-that, scope,
+acceptance criteria, assumptions. **No file is written.
+Nothing lands in the backlog. No `TASK-NNN` is assigned.**
+
+It's a thinking tool, upstream of `/task` and `/auto-task` — use
+it to converge on phrasing before deciding to file an actual
+task.
+
+#### `/auto-test` — test type selection + bootstrap
+
+`/auto-test` previously assumed test infrastructure existed and
+that the task spec named the scenarios. v0.33.0 adds:
+
+- **Test type selection.** Decide unit vs. component vs.
+  E2E/UI vs. integration vs. "no new test" from what the diff
+  touches and the project's existing conventions. A table in the
+  SKILL.md names the defaults.
+- **Bootstrap when missing.** If the project has no test
+  infrastructure for the type needed, install the smallest
+  viable framework, add a minimal config, write the first real
+  test for the actual change. If the bootstrap needs a user-only
+  call (a paid service account, a device ID, a credential that
+  can't be inferred from the repo), stop at a hard gate and
+  report exactly what's blocked.
+- **Loop pattern documentation.** Multi-pass test work runs
+  under `/goal` or under `/mission` (which composes
+  `/auto-test`). `/auto-test` itself does not invoke `/goal` or
+  `/mission` — slash commands are the user-input layer.
+
+### Contract files touched
+
+- `kit/git-flow-rules.md` — Rule 2 restructured into
+  per-invocation confirmation + **named static-authorization
+  carve-outs**. The list is closed: `/release`, `/peer-review`,
+  `/auto-task`+`/auto-phase` (spec-file fast-path). Adding a new
+  merge-bearing user-invoked skill requires adding it here. Rule
+  3's "tag and bag" order updated to reflect /release's new
+  pre-flight → merge → tag → deploy → push tag sequence. Rule 4
+  language updated to match. Rule 5 rewritten — invocation IS
+  consent, hard-stop on real blockers.
+- `kit/autonomy-rules.md` — hard-gates entry cross-references the
+  two additional Rule 2 carve-outs for user-invoked merge-bearing
+  skills (/release and /peer-review).
+- `kit/release-rules.md` — hotfix-path bullet updated to reflect
+  invocation-as-consent.
+- `kit/environment-rules.md` — version-string description
+  updated: `/release` selects the version (from arg or
+  heuristic), not "confirms".
+
+### New + extended skills
+
+- `kit/skills/user-story/SKILL.md` — new, chat-only output.
+- `kit/skills/peer-review/SKILL.md` — new, review-and-act.
+- `kit/skills/auto-test/SKILL.md` — extended with test type
+  selection + bootstrap + loop-pattern docs.
+- `kit/skills/release/SKILL.md` — rewritten for the inverted
+  contract; preserves the output structure, glyph semantics,
+  edge cases, and "when not to use" sections from the prior
+  version.
+
+### Why minor (additive policy + new skills)
+
+Per the changelog rules at the top of this file: minor =
+"additive changes (new files, new skills, new policies) that
+existing projects can pull via `/sync` without breakage". Two
+new skills and a contract carve-out extension are textbook
+additive. The `/release` overhaul is more debatable — it is a
+behavioral inversion of an existing skill — but no project that
+*used* the pre-v0.33.0 confirm-heavy `/release` will see it
+break; they'll just see the confirmations stop appearing.
+Projects that pinned to v0.32.0 keep the old behavior.
+
+---
+
 ## v0.32.0 — 2026-05-20
 
 ### Autonomy contract — three documented exceptions
