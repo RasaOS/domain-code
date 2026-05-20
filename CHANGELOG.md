@@ -20,6 +20,108 @@ human-readable rollback).
 
 ---
 
+## v0.35.0 — 2026-05-20
+
+### Task categories + intake layer
+
+Two related additions to the task system.
+
+#### Task categories — `stub`, `spec`, `bug`, `hotfix`
+
+Every task in `backlog/`, `active/`, or `done/` now declares a
+**category** in its frontmatter — the kind of work it represents
+and how the kit treats it.
+
+- **`stub`** — track lightly, no full spec expected. The
+  category signals: this exists to be visible and counted, not
+  to be implemented from a contract.
+- **`spec`** — full task with user story, the canonical
+  implementation contract (this is the original
+  `task-template.md`).
+- **`bug`** — full task for fixing broken behavior. Adds
+  bug-specific fields: steps to reproduce, expected vs. actual,
+  root-cause notes, acceptance criteria for the fix. Belongs to
+  the phase whose functionality is broken (not a "bugs" phase).
+- **`hotfix`** — urgent prod fix. Uses `HOTFIX-NNN` id space
+  (separate from `TASK-NNN`, matching the existing branch
+  convention from `git-flow-rules.md` Rule 1). Bypasses
+  `ROADMAP.md`, files directly to `tasks/active/`. Comes with
+  hotfix-specific fields (urgency justification, smallest fix,
+  rollback plan).
+
+Backwards compatibility: tasks without a `category:` frontmatter
+field default to `spec`. No re-filing required.
+
+#### Intake layer — `tasks/intake.md`
+
+A new pre-triage capture surface — a single markdown file at
+`tasks/intake.md` for raw notes that may or may not become
+tasks. The lowest-friction layer in the lifecycle:
+
+```
+intake.md  →  tasks/triage/  →  tasks/backlog/  →  active/  →  done/
+  (raw)       (TASK-NNN,        (phase +
+               no phase/cat)     category)
+```
+
+Why a separate file from triage: triage commits real cost (an
+ID, a file). For a half-formed thought, that's too much
+ceremony. Intake is a one-line append. No ID, no file, no
+commitment beyond "I wrote it down."
+
+#### New files
+
+- `kit/task-template-stub.md` — minimal template for Stub
+  category.
+- `kit/task-template-bug.md` — full Bug-category template with
+  reproduction, expected/actual, root cause, rollback notes.
+- `kit/task-template-hotfix.md` — full Hotfix-category template
+  with urgency justification, smallest-fix discipline, rollback
+  plan, post-fix follow-ups.
+- `kit/intake-template.md` — recommended starting content for
+  a project's `tasks/intake.md`.
+- `kit/skills/auto-bug/SKILL.md` — autonomous Bug-category
+  filing. Files a `TASK-NNN` bug spec, attempts reproduction,
+  captures observable behavior.
+- `kit/skills/auto-hotfix/SKILL.md` — autonomous Hotfix-category
+  filing. Files a `HOTFIX-NNN` spec directly to `active/`,
+  enforces smallest-fix discipline, requires rollback plan.
+  Stops at a hard gate if urgency framing is absent (route to
+  `/auto-bug`).
+
+#### Updated files
+
+- `kit/task-rules.md` — state machine diagram extended with
+  intake; new "Categories" and "The intake layer" sections.
+  Existing "Stub vs. full spec" priority rule clarified to
+  interact correctly with the new category axis. Process /
+  kit-files reference list updated.
+- `kit/task-template.md` — gains category frontmatter
+  (`category: spec`) for consistency with the new templates.
+  Existing references to `task-template.md` still mean "the
+  Spec template, the default" — no breaking change.
+- `kit/skills/task/SKILL.md` — Operation 1 (File a new task)
+  gains a category-selection step. New Operation 8 (file a
+  hotfix), Operation 9 (file a note to intake), Operation 10
+  (promote intake to triage), Operation 11 (drop intake
+  entry). Operation 7 (graduate from triage) gains a category
+  assignment step.
+- `kit/skills/auto-task/SKILL.md` — clarifies it files only
+  Spec-category tasks. Routes Bug to `/auto-bug` and Hotfix to
+  `/auto-hotfix`.
+
+### Why minor (additive + backwards-compatible)
+
+Three new skills, three new templates, one new file convention
+(intake.md), and additive frontmatter (`category:`) with a
+sensible default for existing tasks. No existing task has to be
+re-filed. No skill that previously worked stops working. The
+contract for existing `/auto-task` users is unchanged — it
+still does what it did, just now explicitly named as the
+Spec-category variant.
+
+---
+
 ## v0.34.0 — 2026-05-20
 
 ### Two preset `/mission` variants — `/self-heal` and `/self-improve`
