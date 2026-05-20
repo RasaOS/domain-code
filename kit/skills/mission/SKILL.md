@@ -154,7 +154,7 @@ turns ran out. Step 6 is where that honesty is enforced.
    reusable test stamps per `test-rules.md`). When the acceptance
    criteria hold and the tests pass, commit the task to the branch
    — spec, code, and tests together, `TASK-NNN — <title>` — and
-   move the spec to `tasks/done/`. A hard gate hit here stops the
+   move the spec to `tasks/completed/`. A hard gate hit here stops the
    mission.
 
 6. **Two-pass verification re-walk.** With every task done,
@@ -272,7 +272,7 @@ clause and a turn bound, or the loop will spin against a gate.
 ## What "done" looks like for a /mission session
 
 A `feat/` branch with one commit per completed task, every task's
-spec in `tasks/done/`, **two consecutive clean verification
+spec in `tasks/completed/`, **two consecutive clean verification
 re-walks**, and a **draft PR** open for the user to validate —
 plus one autonomy report listing every decision the mission made.
 If the goal asked for a preview deploy, the PR body carries the

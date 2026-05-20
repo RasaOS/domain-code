@@ -279,9 +279,9 @@ blocker note**. Do not disable tests. Do not bypass hooks
 ## State machine
 
 ```
-tasks/intake.md  →  tasks/triage/  →  tasks/backlog/  →  tasks/active/  →  tasks/done/
-   (raw)            (formalized,        (phase +              (in           (PR merged)
-                     no phase/cat)       category assigned)    flight)
+tasks/intake.md  →  tasks/triage/  →  tasks/backlog/  →  tasks/active/  ⇄  tasks/blocked/  →  tasks/completed/
+   (raw)            (formalized,        (phase +              (in              (parked,            (PR merged)
+                     no phase/cat)       category assigned)    flight)          ext. dep)
 ```
 
 - **`intake.md`** is a single markdown file holding raw notes,
@@ -298,16 +298,71 @@ tasks/intake.md  →  tasks/triage/  →  tasks/backlog/  →  tasks/active/  �
 - **`backlog/`** holds phase-placed, category-assigned tasks ready
   to be worked. The category (Stub / Spec / Bug / Hotfix) is
   declared in the task's frontmatter. See "Categories" below.
+- **`active/`** should hold at most one task at a time per agent.
+- **`blocked/`** is a *parked state* for tasks that were in
+  `active/` but hit an external blocker (missing credential,
+  waiting on another team, third-party outage, undecided product
+  call). The task file moves to `tasks/blocked/`; status becomes
+  `blocked`; the blocker is named in the file under a "Blocker"
+  section. See "The blocked state" below.
+- **`completed/`** is the terminal state — PR merged, work shipped.
+  (This directory was named `done/` before v0.36.0; the
+  state-machine value was also `done`. Both renamed for clarity.
+  See the v0.36.0 changelog for the migration.) Open-but-unmerged
+  PRs stay in `active/`.
 - Move the task file with `git mv` as you transition states.
-- `active/` should hold at most one task at a time per agent.
-- `done/` only after PR is merged. Open-but-unmerged PRs stay in
-  `active/`.
 
 **Hotfixes skip part of the lifecycle.** A Hotfix-category task
 uses the `HOTFIX-NNN` id space (not `TASK-NNN`), is filed directly
 to `tasks/active/`, and bypasses phase placement entirely — it
 doesn't go in `ROADMAP.md`. See "Categories" below for the full
 contract.
+
+### The status field
+
+Every task spec declares `status:` in its frontmatter, matching
+the directory it lives in:
+
+```yaml
+status: triage | backlog | active | blocked | completed
+```
+
+Status and directory must agree — they are the same fact recorded
+twice for ease of inspection. The directory move (`git mv`) and
+the frontmatter change happen together. A task in
+`tasks/blocked/` with `status: active` is a bug; fix the
+frontmatter or fix the directory.
+
+### The blocked state
+
+A task in `blocked/` is one that was being worked but ran into an
+external dependency that prevents progress. Examples:
+
+- A third-party API is down or undocumented.
+- Waiting on a decision from another team / the product owner /
+  the user.
+- Missing a credential or access that only a specific person can
+  grant.
+- Waiting on an upstream task (cross-repo) that hasn't shipped.
+
+The blocked file must have a `## Blocker` section at the bottom
+with: what's blocking, who or what would unblock it, when to
+check back. Without that section, the task is not blocked — it's
+abandoned, and that's a different problem.
+
+Returning from blocked to active is a `git mv` back to `active/`
+plus a frontmatter status flip. The Blocker section moves into
+the task's "Notes" or stays as a record of why it was parked.
+
+A task is **not blocked** if:
+
+- The blocker is "I don't know how to do this." (That's a recon
+  problem — read more code, ask the user, do `/instruct`.)
+- The blocker is "this is hard." (That's just work.)
+- The blocker is "I forgot about it." (Move back to `backlog/`.)
+
+Blocked is for *external* dependencies. Internal-to-the-task
+problems get fixed inside the task.
 
 ## Closing report (mandatory)
 
@@ -480,7 +535,7 @@ has work in it.
 
 Single edit to `ROADMAP.md`: remove the task line from the old phase's
 list, add it to the new phase's list. The spec file itself doesn't
-move (it stays in `backlog/active/done` based on state, not phase).
+move (it stays in `backlog/active/blocked/completed` based on state, not phase).
 
 ### Cross-cutting tasks
 
@@ -491,7 +546,7 @@ theme, that's a signal to lift them into a named phase.
 
 ## Categories (mandatory)
 
-Every task in `backlog/`, `active/`, or `done/` has a **category** in
+Every task in `backlog/`, `active/`, `blocked/`, or `completed/` has a **category** in
 its frontmatter. The category answers: *what kind of work is this,
 and how do we treat it?* Four categories:
 
@@ -500,7 +555,7 @@ and how do we treat it?* Four categories:
 id: TASK-042            # or HOTFIX-042 for Hotfix category
 category: spec          # stub | spec | bug | hotfix
 phase: phase-3          # null for hotfix (skips ROADMAP)
-status: backlog         # triage | backlog | active | done
+status: backlog         # triage | backlog | active | blocked | completed
 ---
 ```
 

@@ -1,6 +1,6 @@
 ---
 name: roadmap
-description: Display a phase-organized table of every task across `tasks/{backlog,active,done}/` — including completed tasks. Triggered when the user wants a per-phase progress view — e.g. "show me the roadmap", "/roadmap", "how is Phase N going", "everything we've built and queued".
+description: Display a phase-organized table of every task across `tasks/{backlog,active,blocked,completed}/` — including completed tasks. Triggered when the user wants a per-phase progress view — e.g. "show me the roadmap", "/roadmap", "how is Phase N going", "everything we've built and queued".
 ---
 
 # /roadmap — Task list by phase (full history)
@@ -22,14 +22,14 @@ glance.
    `018a`).
 
 2. **Read every task file** in `tasks/active/`,
-   `tasks/backlog/`, `tasks/done/`. For each:
+   `tasks/backlog/`, `tasks/completed/`. For each:
    - **ID** — from the filename (`TASK-014` from
      `TASK-014-vehicle-crud.md`). Preserve letter suffixes.
    - **Title** — first H1, with the `TASK-XXX:` prefix stripped.
    - **State** — derived from directory:
      - `🚧 Active` — `tasks/active/`
      - `📋 Backlog` — `tasks/backlog/`
-     - `✅ Done` — `tasks/done/`
+     - `✅ Done` — `tasks/completed/`
    - **Type** — only meaningful for non-Done states:
      - `📝 Stub` if the file contains `STATUS: STUB`
      - `📄 Spec` otherwise
@@ -47,7 +47,7 @@ glance.
 ```markdown
 # 📋 Task overview by Phase
 
-<one-line summary>: total tasks · ✅ N done · 🚧 N active · 📋 N backlog (M specs / K stubs)
+<one-line summary>: total tasks · ✅ N completed · 🚧 N active · 🚫 N blocked · 📋 N backlog (M specs / K stubs)
 
 ---
 

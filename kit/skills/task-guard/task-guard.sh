@@ -182,7 +182,7 @@ create_stub() {
     printf '\n## Next step\n\n'
     printf 'Spec this retroactively with `/task` (Operation 3), or — if\n'
     printf 'the change genuinely needs no spec — close it with a one-line\n'
-    printf 'note and move it to `tasks/done/`.\n'
+    printf 'note and move it to `tasks/completed/`.\n'
   } > "$path"
   echo "$path"
 }

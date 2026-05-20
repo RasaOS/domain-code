@@ -2,7 +2,7 @@
 id: TASK-XXX
 category: bug
 phase: <phase-id-of-broken-functionality>
-status: backlog | active | done
+status: backlog | active | blocked | completed
 severity: low | medium | high
 ---
 

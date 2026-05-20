@@ -2,7 +2,7 @@
 id: TASK-XXX
 category: stub
 phase: <phase-id-or-null>
-status: triage | backlog | active | done
+status: triage | backlog | active | blocked | completed
 ---
 
 # TASK-XXX: <short title>

@@ -2,7 +2,7 @@
 id: TASK-XXX
 category: spec
 phase: <phase-id>
-status: backlog | active | done
+status: backlog | active | blocked | completed
 ---
 
 # TASK-XXX: <short title>

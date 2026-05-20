@@ -4,7 +4,7 @@ Pre-triage capture for the project. Raw notes that may or may not
 become tasks. The lowest-friction layer in the task lifecycle.
 
 ```
-intake.md  →  tasks/triage/  →  tasks/backlog/  →  active/  →  done/
+intake.md  →  tasks/triage/  →  tasks/backlog/  →  active/  →  completed/
   (raw)       (TASK-NNN,        (phase +
                no phase)         category)
 ```

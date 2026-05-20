@@ -13,7 +13,7 @@ guess.
 ## Behavior contract
 
 - **Read state first.** Always read `tasks/ROADMAP.md` and the
-  current contents of `tasks/{backlog,active,done}/` before
+  current contents of `tasks/{backlog,active,blocked,completed}/` before
   acting. The phase listings in ROADMAP are the registry.
 - **Respect the priority rule.** Default to a stub. Full specs
   only when the user explicitly uses these exact signals:
@@ -114,7 +114,7 @@ Steps 3.1 → 3.2 → 3.3 → 3.4 → **3.4.5 (approach validation)** →
    old phase's list, add it to the new phase's list (in ID
    order).
 3. **Don't move the spec file.** It stays in
-   `backlog/active/done` based on state, not phase.
+   `backlog/active/blocked/completed` based on state, not phase.
 4. **Don't commit yet.**
 
 ### Operation 3 — Expand a stub to a full spec
@@ -195,7 +195,7 @@ Don't repeat mistakes. Search the project for what's been done
 before on the same or similar files/functionality.
 
 **Search:**
-- **`tasks/done/`** — completed similar work. Read the spec and
+- **`tasks/completed/`** — completed similar work. Read the spec and
   any blocker notes. What went well? What was hard?
 - **`tasks/archive/`** — deferred or abandoned work on this
   area. Why was it paused? What did we learn?

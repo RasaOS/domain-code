@@ -624,7 +624,7 @@ remain minimal.
   modifies files.
 - **Don't touch project-content files.** CLAUDE.md, PHASES.md,
   ROADMAP.md, AUDIT.md, the project's own task specs in
-  `tasks/{backlog,active,done}/` — never. Overwriting any of these
+  `tasks/{backlog,active,blocked,completed}/` — never. Overwriting any of these
   is a bug in the skill.
 - **Don't merge in the conflict case.** Three-way merge tooling
   (git merge-file, etc.) is tempting but produces wrong answers

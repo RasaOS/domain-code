@@ -1,6 +1,6 @@
 ---
 name: retro
-description: Agile-style retrospective over a date window — 1 week, 2 weeks, 3 weeks, 1 month, or custom. Synthesizes across `docs/notes/` (lessons), `tasks/done/`, `tasks/AUDIT.md`, `docs/decisions/`, `docs/postmortems/`, `docs/regrets/`, and the git log to find what went well, what didn't, recurring themes, and action candidates. Distinct from `/lessons` (per-task introspection) and `/postmortem` (single-incident) — `/retro` is the longitudinal cross-source view that surfaces patterns no single artifact catches. Output saved to `docs/retros/<YYYY-MM-DD>-<window>.md`. Schedule it weekly with `/loop 1w /retro 1w` for a recurring rhythm. Triggered when the user wants the look-back — e.g. "/retro", "weekly retro", "retro 2w", "retrospective for this month", "look back at the last few weeks".
+description: Agile-style retrospective over a date window — 1 week, 2 weeks, 3 weeks, 1 month, or custom. Synthesizes across `docs/notes/` (lessons), `tasks/completed/`, `tasks/AUDIT.md`, `docs/decisions/`, `docs/postmortems/`, `docs/regrets/`, and the git log to find what went well, what didn't, recurring themes, and action candidates. Distinct from `/lessons` (per-task introspection) and `/postmortem` (single-incident) — `/retro` is the longitudinal cross-source view that surfaces patterns no single artifact catches. Output saved to `docs/retros/<YYYY-MM-DD>-<window>.md`. Schedule it weekly with `/loop 1w /retro 1w` for a recurring rhythm. Triggered when the user wants the look-back — e.g. "/retro", "weekly retro", "retro 2w", "retrospective for this month", "look back at the last few weeks".
 ---
 
 # /retro — Look back, find patterns, decide what to try
@@ -72,7 +72,7 @@ In parallel, collect:
 
 1. **Notes** — `docs/notes/<date>-*.md` files where
    `<date>` ≥ start. Read each.
-2. **Tasks done** — `tasks/done/*.md` modified in the window.
+2. **Tasks done** — `tasks/completed/*.md` modified in the window.
    Read each (just title + outcome line).
 3. **AUDIT.md entries** — recent shipped items at the top of
    `tasks/AUDIT.md` whose date falls in the window.

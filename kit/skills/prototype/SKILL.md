@@ -28,7 +28,7 @@ tasks/proto/<slug>/
 ├── ROADMAP.md                # the phase + ordered task list
 ├── backlog/                  # task spec files (stubs and full specs)
 ├── active/
-└── done/
+└── completed/
 docs/proto/<slug>.md          # prose brief — what / why / acceptance / out-of-scope
 ```
 
@@ -48,7 +48,7 @@ Two parts:
 
 - **Isolation is the load-bearing rule.** Never read or write
   main `tasks/` files (`tasks/ROADMAP.md`, `tasks/PHASES.md`,
-  `tasks/AUDIT.md`, `tasks/{backlog,active,done}/`). The
+  `tasks/AUDIT.md`, `tasks/{backlog,active,blocked,completed}/`). The
   prototype is invisible to main planning by design. Graduation
   is the **only** path from prototype scope into main.
 - **Work happens on `proto/<slug>` and its sub-branches.** Per
@@ -94,7 +94,7 @@ checked out; otherwise prompts to `start`.
 | `add <title>` | file a stub task in the prototype's backlog |
 | `spec <id>` | expand stub → full spec (same rigor as /task Op 3) |
 | `move <id> active` | mv backlog/<id> → active/ |
-| `move <id> done` | mv active/<id> → done/ |
+| `move <id> completed` | mv active/<id> → completed/ |
 | `status` | §2 dashboard of prototype state |
 | `list` | all proto/* branches + their state |
 | `graduate` | promote prototype tasks → main `tasks/` (explicit) |
@@ -132,7 +132,7 @@ On confirmation, scaffold:
 
 ```sh
 git checkout -b proto/<slug> main
-mkdir -p tasks/proto/<slug>/backlog tasks/proto/<slug>/active tasks/proto/<slug>/done
+mkdir -p tasks/proto/<slug>/backlog tasks/proto/<slug>/active tasks/proto/<slug>/blocked tasks/proto/<slug>/completed
 # write PHASES.md, ROADMAP.md, brief
 ```
 
@@ -198,7 +198,7 @@ Render a §25 SUCCESS alert with the next-step hint:
 │                                                             │
 │  scaffolding written:                                       │
 │    tasks/proto/<slug>/{PHASES,ROADMAP}.md                   │
-│    tasks/proto/<slug>/{backlog,active,done}/                │
+│    tasks/proto/<slug>/{backlog,active,blocked,completed}/                │
 │    docs/proto/<slug>.md                                     │
 │                                                             │
 │  next · /prototype add <first task title>                   │
@@ -227,7 +227,7 @@ File a stub task into the prototype's backlog.
    on `proto/<slug>`). If not, surface and stop:
    *"Not on a proto branch. Run `/prototype resume <slug>` first."*
 2. **Determine next TASK-NNN** by scanning
-   `tasks/proto/<slug>/{backlog,active,done}/` for highest ID.
+   `tasks/proto/<slug>/{backlog,active,blocked,completed}/` for highest ID.
    Zero-padded three digits.
 3. **Write stub** at
    `tasks/proto/<slug>/backlog/TASK-NNN-<slug>.md`:
@@ -285,7 +285,7 @@ creation — implementation happens on a separate
 `task/TASK-NNN-<slug>` sub-branch off `proto/<slug>` per Rule 1,
 which the user creates when starting the work.
 
-### Step 5 — move <id> active|done
+### Step 5 — move <id> active|blocked|completed
 
 Lifecycle the task through the prototype's pipeline.
 
@@ -296,7 +296,7 @@ git mv tasks/proto/<slug>/backlog/TASK-NNN-*.md tasks/proto/<slug>/active/
 Implementation begins on a sub-branch
 (`task/TASK-NNN-<slug>` off `proto/<slug>`, per git-flow Rule 1).
 
-`done`: same pattern, active → done. Run after the task's PR
+`completed`: same pattern, active → completed. Run after the task's PR
 merges back into the proto branch.
 
 Render a §25 INFO alert:
@@ -358,8 +358,8 @@ Show all `proto/*` branches with their state.
 ```
 PROTOTYPES
 
-▸ <slug-1>      <N> active · <M> backlog · <K> done   (this branch)
-▸ <slug-2>      <N> active · <M> backlog · <K> done
+▸ <slug-1>      <N> active · <M> backlog · <K> completed   (this branch)
+▸ <slug-2>      <N> active · <M> backlog · <K> completed
 ▸ <slug-3>      shelved (no commits in 30+ days)
 ```
 
@@ -369,7 +369,7 @@ Promote the prototype's tasks into main `tasks/`. Explicit user
 action — confirm scope before moving anything.
 
 1. **Read all task spec files** in
-   `tasks/proto/<slug>/{backlog,active,done}/`.
+   `tasks/proto/<slug>/{backlog,active,blocked,completed}/`.
 2. **Propose a target phase** in main `tasks/ROADMAP.md` — an
    existing phase or a new phase to be created. Ask the user to
    confirm: *"Graduating N tasks → Phase X. Confirm?"*
@@ -482,7 +482,7 @@ Destructive. Confirm twice.
 ## What you must NOT do
 
 - **Don't touch main `tasks/`.** Not its ROADMAP, not its PHASES,
-  not its AUDIT, not its backlog/active/done. The prototype is
+  not its AUDIT, not its backlog/active/blocked/completed. The prototype is
   invisible to main task planning by design.
 - **Don't merge to `main`** during a prototype session. Per
   git-flow Rule 2, every merge to main is user-confirmed.
@@ -540,7 +540,7 @@ The user leaves with one of:
 
 - A new prototype scaffolded — branch + dir + brief — ready for
   task work.
-- A new task in the prototype's backlog (or active, or done).
+- A new task in the prototype's backlog (or active, blocked, or completed).
 - A clear status read of the current prototype.
 - A graduated prototype, with tasks now staged in main `tasks/`
   (uncommitted), ready for the user to review and merge per the

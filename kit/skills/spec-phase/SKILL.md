@@ -42,12 +42,12 @@ legible. Then do what they say.
 ## Behavior contract
 
 - **Read state first.** `tasks/ROADMAP.md` for the phase
-  registry; `tasks/backlog/`, `tasks/active/`, `tasks/done/` for
+  registry; `tasks/backlog/`, `tasks/active/`, `tasks/completed/` for
   current state. Never spec from memory.
 - **One phase per session.** If the user wants more than one
   phase prep'd, do them sequentially. Don't multiplex.
 - **Stubs only.** Tasks already in `tasks/active/` or
-  `tasks/done/`, or backlog tasks already in full-spec form,
+  `tasks/completed/`, or backlog tasks already in full-spec form,
   are skipped. Show them in the rollup but don't re-spec them.
 - **Don't commit during the session.** Drafts are written to
   `tasks/backlog/<file>.md` (overwriting the stub in place).

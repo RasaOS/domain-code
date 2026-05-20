@@ -109,7 +109,7 @@ Pulled from `.claude/task-rules.md` + the available skills.
 The shape of work in this repo, in one paragraph: <e.g. "Tasks
 are filed in `tasks/backlog/` as stubs, expanded to full specs
 when picked up, moved to `tasks/active/` while in-flight, then
-to `tasks/done/` after merge. One task = one PR. Every task
+to `tasks/completed/` after merge. One task = one PR. Every task
 has a paired E2E spec.">
 
 **Day-to-day commands:**

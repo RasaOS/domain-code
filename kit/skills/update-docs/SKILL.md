@@ -89,7 +89,7 @@ For each doc, compare claims to reality:
 - **task-rules.md** — are the documented rules still followed in
   recent task closing reports / PRs?
 - **PHASES.md / ROADMAP.md** — do the listed phases and tasks match
-  the contents of `tasks/{backlog,active,done}/`?
+  the contents of `tasks/{backlog,active,blocked,completed}/`?
 - **AUDIT.md** — does the most recent entry reflect the most
   recent shipped work? (Check git log against the audit's top
   entries.)

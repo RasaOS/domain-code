@@ -2,7 +2,7 @@
 id: HOTFIX-XXX
 category: hotfix
 phase: null
-status: active | done
+status: active | blocked | completed
 severity: high | critical
 filed: <YYYY-MM-DD HH:MM UTC>
 ---

@@ -333,8 +333,8 @@ handoff is dated and additive.*
   going great" is worse than no handoff. The next person needs
   the friction points.
 - **Don't reorganize tasks.** Active tasks stay in
-  `tasks/active/`. Don't move them to backlog or done as part
-  of handoff.
+  `tasks/active/`. Don't move them to backlog or completed as
+  part of handoff.
 - **Don't capture secrets.** If the user mentions an API key,
   password, or credential while answering tacit-knowledge
   questions, **flag it and refuse to write it down**. Suggest

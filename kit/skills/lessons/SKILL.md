@@ -346,7 +346,7 @@ project. None of these are mandatory.
 ### Pattern A — Pair with task-completion (recommended)
 
 When the user marks a task done (e.g. moves a file from
-`tasks/active/` to `tasks/done/`, or invokes a future
+`tasks/active/` to `tasks/completed/`, or invokes a future
 `/task done` flow), invoke `/lessons` next. This keeps
 captures tightly bound to task boundaries — the moment most
 worth introspecting.
