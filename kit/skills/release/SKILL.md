@@ -160,9 +160,15 @@ Run in parallel:
   Must exit 0 unless project config marks warnings as fatal.
 - Deploy command discoverable per "Discover" in the contract
   above. Must be present.
-- `tasks/RELEASES.md` lookup — if a `📋 Planned` or `🚧 In
-  progress` entry exists for an upcoming version, check it
-  against what merged. Mismatch = hard-stop with the diff.
+- `tasks/RELEASES.md` lookup — read the top "🚧 Next" entry
+  (per `release-rules.md`). Cross-check against commits since
+  the last tag:
+  - **Tasks in commits, missing from the entry** → silently
+    add them (the user skipped a `/release-add` for a manual
+    merge); not a stop condition, just a fix-up.
+  - **Tasks in the entry, missing from commits** → hard-stop
+    with the diff. The entry claims something that didn't
+    actually merge.
 
 Render the pre-flight summary as a §2 Live status dashboard:
 
@@ -318,9 +324,37 @@ Two files capture what shipped.
   `v1.2.0-<sha>-prod`. Integration: <branch>.
 ```
 
-**`tasks/RELEASES.md`** — flip this version's entry to ✅ Shipped
-and add a `**Tag.**` line with the git tag. If the release
-shipped with no plan entry, add one retroactively as ✅ Shipped.
+**`tasks/RELEASES.md`** — three sub-steps per
+`release-rules.md`:
+
+1. **Stamp the "🚧 Next" entry** as shipped:
+   - Change `🚧` to `✅`.
+   - Replace `next release — accumulating since vX.Y.Z` with
+     the actual release theme summary (from the release notes
+     drafted in Step 4).
+   - Add the detail line: `shipped <YYYY-MM-DD> · tag
+     <tag> · sha <short-sha>` (two-space indented under the
+     version line).
+2. **Cross-check the task list** against commits since the
+   last tag. Add any TASK-NNN / HOTFIX-NNN missed by manual
+   merges (silently — these were caught at pre-flight in
+   Step 1). Remove any stale claims (none should exist
+   because pre-flight would have hard-stopped).
+3. **Create a new "🚧 Next" entry** above the just-stamped
+   entry:
+
+```markdown
+🚧 v<next-version>  ◆  next release — accumulating since <this-version>
+
+(no tasks yet)
+
+---
+```
+
+The next version is the previous version plus the default bump
+(minor, unless project convention says otherwise). The empty
+task list `(no tasks yet)` is the placeholder — the first
+`/release-add` invocation will replace it with a real bullet.
 
 Commit these edits to `main` as the post-release audit commit:
 

@@ -118,7 +118,15 @@ at a hard gate and ask the user.
      "<numbered-list-of-blocking-issues-with-file:line-and-rule>"`.
      Do not also leave inline comments unless the issue is
      specifically at one line — the body is the canonical record.
-6. **Render the review report** — see template below.
+6. **Track the merge in `RELEASES.md`** (accept path only).
+   After a successful merge, follow `release-add/SKILL.md` to
+   append every TASK-NNN / HOTFIX-NNN landed by this PR to the
+   "🚧 Next" entry of `tasks/RELEASES.md`. Idempotent — re-runs
+   are no-ops. If `release-add`'s preconditions fail (file
+   shape unexpected, no "🚧 Next" entry), surface as a
+   non-blocking note in the review report; the merge already
+   happened and is fine.
+7. **Render the review report** — see template below.
 
 ## Output structure — the review report
 
