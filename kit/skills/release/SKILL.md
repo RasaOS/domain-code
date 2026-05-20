@@ -1,102 +1,103 @@
 ---
 name: release
-description: Cut a production release end-to-end — merge integration to main, build, deploy, tag, push tag, append AUDIT entry. Reads the project's CLAUDE.md / DEPLOY.md / package.json to discover the actual deploy command. User-confirms the version and the deploy at every gate. Triggered when the user wants to ship — e.g. "/release", "deploy v1.2.0", "ship it", "cut a release".
+description: Cut a production release end-to-end — preflight, merge integration into main, tag the release commit, deploy, push the tag, append AUDIT entry. Reads the project's CLAUDE.md / DEPLOY.md / manifests to discover the actual deploy command. **Invocation is consent: this skill does not ask for confirmation at any soft gate.** It stops only at hard blockers (auth, failed tests, dirty tree, missing deploy command, etc.). Triggered when the user wants to ship — e.g. "/release", "/release patch", "/release v1.2.0", "ship it", "cut a release".
 ---
 
 # /release — Cut a production release
 
-Orchestrate the deploy sequence from "integration approved" to
-"tag pushed + audit logged." Every project's deploy command is
-different; this skill discovers it from the project's docs and
-manifests rather than hardcoding.
+Orchestrate the deploy sequence end-to-end. Discover the project's
+deploy command from its docs and manifests rather than hardcoding,
+then run the canonical sequence: **preflight → merge integration
+→ tag → deploy → push tag → record**.
 
-Per the project's deploy-tagging rule: **production deploys are
-user-confirmed every time.** This skill never auto-deploys. It
-prepares, asks, executes only on explicit go.
+**Invocation is consent.** The user typed `/release` — that is the
+release authorization. This skill does not ask "are you sure?",
+does not ask "deploy now?", does not ask the user to confirm the
+version. Soft confirmation gates were removed in v0.33.0 because
+they caused alarm fatigue and missed deploys. The contract now:
+**run it, or stop hard on a real blocker**.
+
+See `git-flow-rules.md` Rule 2 carve-out (user-invoked
+merge-bearing skills) and Rule 5 (deploys route through
+`/release`; invocation is the deploy authorization).
 
 ## Behavior contract
 
-- **Detect platform before discovering deploy commands.** The kit
-  uses platform-prefixed skill names (e.g. `/ios-release`,
-  `/web-deploy`) for platform-specific release flows. Before doing
-  anything else, figure out which platform applies and decide
-  whether to delegate. Detection rules:
+- **Invocation is the user confirmation.** No "Deploy now?"
+  prompts. No "Confirm version?" prompts. No "Proceed through
+  these warnings?" prompts. The user invoked the skill — that is
+  the consent. The skill's job is to discover, verify, execute,
+  or stop hard on a real blocker.
+- **Hard blockers stop the run.** A hard blocker is a *real*
+  failure — not "we'd like to double-check." The full list:
+  - Auth failure (no credentials, expired token, gh/azure/etc.
+    not logged in).
+  - Pre-flight failure (dirty working tree, behind upstream,
+    branch in a state the deploy can't run from).
+  - Verification gate failure (the project's test command exits
+    non-zero).
+  - Build failure (the project's build command exits non-zero,
+    OR emits warnings the project's config marks as fatal).
+  - Missing deploy command (no `CLAUDE.md` / `DEPLOY.md` /
+    manifest entry, no `package.json` scripts match).
+  - Missing release-plan match (a `tasks/RELEASES.md` entry
+    declares scope that doesn't match what merged — surface the
+    mismatch and stop).
+  - Merge refused by branch protection (the integration → main
+    merge fails the remote's protection rules).
+  - Deploy command itself fails — stop, no retry, report exactly
+    what failed.
+- **Pick the version; do not ask.** If invoked with a version arg
+  (`/release patch`, `/release minor`, `/release major`,
+  `/release v1.2.3`), use that. Otherwise compute it from the
+  heuristic in `task-rules.md` / `release-rules.md`. The choice
+  is logged as a flagged assumption in the closing report.
+- **Order: preflight → merge → tag → deploy → push tag.** The
+  tag is created on the merge commit *before* deploy runs, so
+  the commit's identity is locked. The tag is pushed *after*
+  deploy succeeds, so a failed deploy doesn't publish a stale
+  release tag.
+- **Platform routing is automatic.** If a `<platform>-release`
+  skill exists for the detected platform, route to it. Do not
+  ask — the user invoked `/release`, they want the right release
+  skill for their platform. The closing report names which skill
+  actually ran.
+- **Discover, don't assume — except for deploy command tie-breaks.**
+  Read `CLAUDE.md`, `DEPLOY.md`, manifest files in order. If
+  multiple deploy commands are candidates, pick the most-specific
+  one (`deploy:prod` over `deploy`, `release:prod` over
+  `release`), flag as an assumption. If *no* command is
+  documented, hard-stop — guessing prod commands is the one
+  inference the skill won't make.
+- **Annotated tags only.** `git tag -a` with release notes.
+  Lightweight tags do not carry the notes message.
+- **AUDIT and RELEASES recorded.** `tasks/AUDIT.md` gets a 🚀
+  entry; `tasks/RELEASES.md` flips the version's entry to
+  ✅ Shipped with the tag. These edits are committed to `main`
+  as part of the release — they are not left dangling.
+- **Honest reporting on failure.** Partial state is the worst
+  state to leave undocumented. Any failure mid-flow is captured
+  in the closing report with the exact step that failed, the
+  exact command, the exact error. No retry without explicit user
+  re-invocation.
 
-  1. **Explicit declaration in `CLAUDE.md`.** Look for a `## Platform`
-     section or a "Platform: <name>" header. If present, use it
-     verbatim. Multi-platform declarations (e.g. "ios + python")
-     are valid — the user knows which release skill they want.
-  2. **Inferred from manifest files** when `CLAUDE.md` is silent:
-     - `*.xcodeproj` / `*.xcworkspace` / `Package.swift` at repo
-       root → `ios`
-     - `package.json` containing `"react-native"` dep → `react-native`
-       (no skill yet, fall through to universal flow)
-     - `package.json` only (no react-native) → `web` (no
-       `/web-release` skill yet, fall through)
-     - `pyproject.toml` / `setup.py` → `python`
-     - `build.gradle` / `*.gradle.kts` with `android` plugin →
-       `android`
-     - Otherwise → `universal`
+## What changed from the pre-v0.33.0 contract
 
-  Then check whether a `<platform>-release` skill exists in
-  `.claude/skills/`. If yes, **propose handoff explicitly**:
+Pre-v0.33.0 `/release` was a confirmation-heavy skill: ask on
+platform delegation, ask on warnings, ask on version, ask on
+deploy. Six+ soft gates between invocation and shipped. The
+v0.33.0 contract removes all of them. The trade-off is
+deliberate:
 
-  > This is an **iOS** project. The right tool is `/ios-release`,
-  > which handles the `xcodebuild` archive → `altool` upload flow.
-  > Want me to hand off, or are you intentionally invoking the
-  > universal `/release` flow?
+- **You gain:** no missed deploys from "I thought I already
+  confirmed", no alarm fatigue, faster ship cycle.
+- **You give up:** the chance to abort mid-flow without
+  invoking the project's rollback. If you typo'd `/release`, it
+  ships.
 
-  Wait for confirmation. **Do not auto-invoke another skill.** The
-  user might be running the universal flow on purpose (e.g., a
-  non-iOS deploy in an iOS-primary monorepo). Always ask.
-
-  If no platform-specific release skill exists, proceed with the
-  universal flow below.
-
-- **Discover, don't assume.** Read in this order:
-  1. `CLAUDE.md` — the "Deploy" / "Release" section if it exists.
-  2. `DEPLOY.md` — full deploy runbook.
-  3. `package.json` `scripts` — look for `deploy`, `deploy:prod`,
-     `release`, `publish`.
-  4. `Makefile` — `deploy` / `release` targets.
-  5. `Fastfile` (iOS), `fastlane`, `eas.json` (Expo), `firebase.json`,
-     `netlify.toml`, `vercel.json`, etc.
-  Surface what you found and the command you'd run before
-  running it.
-
-- **Confirm version with the user.** Per task-rules.md: closer
-  *proposes* a version with reasoning; reviewer confirms or
-  overrides. Don't pick unilaterally. Use the version-bump
-  heuristic (patch/minor/major) and propose with the *why*.
-
-- **Confirm deploy with the user.** Even with a known command and
-  a confirmed version, ask one final go: "Deploy now? `<command>`
-  on `<branch>` → tag `<vX.Y.Z>`." Wait for explicit yes.
-
-- **Run pre-flight gates.** Before deploying:
-  - Working tree clean.
-  - On `main` (or the project's release branch).
-  - `git pull` clean — no surprise upstream commits.
-  - The project's verification gate (test command from `CLAUDE.md`)
-    is green. Run it; don't trust a stale green from yesterday.
-  - The build succeeds (delegating to `/build` semantics, but
-    inline is fine since this skill is the orchestrator).
-
-- **Tag with annotated tags only.** Lightweight tags don't carry
-  the release-notes message. Use `git tag -a <tag> -m "..."`, where
-  `<tag>` is the `v<semver>-<sha>-<env>` string built in Step 8.
-
-- **Push the tag explicitly.** `git push origin <tag>` — main push
-  and tag push are separate operations.
-
-- **Append `tasks/AUDIT.md`** with a 🚀 entry per the audit-log
-  rule. Don't commit it as part of the deploy commit — it's a
-  separate, audited entry typically committed alongside the next
-  task.
-
-- **Honest reporting on failure.** If the deploy command fails
-  partway, **do not retry blindly**. Report what succeeded, what
-  failed, the exact error, and ask before any cleanup or retry.
+The cost of "typo ships" is mitigated by `/release` not being a
+common typo target. The cost of "ask 3 times" was missed
+deploys, which is documented worse.
 
 ## Output structure
 
@@ -105,270 +106,332 @@ catalogue entry per `output-rules.md`:
 
 - **Pre-flight check** (Step 1) → §2 Live status dashboard. Each
   check is a row; ● = passed, ◐ = running, ✗ = failed.
-- **Version proposal** (Step 5) → markdown blockquote with the
-  reasoning. Conversational, not a structured deliverable.
-- **Deploy confirmation prompt** (Step 6) → markdown blockquote.
-  Conversational.
-- **Any failure** (Steps 1–9) → §25 Alert variants (ERROR). Stops
-  the flow.
-- **Closing report** (Step 10) → §5 Deployment report. The big
+- **Version selection** (Step 2) → markdown blockquote stating
+  the version and the reasoning. No question; informational only.
+- **Merge to main** (Step 3) → §2 dashboard row (or its own
+  block if the merge fails).
+- **Any failure** (Steps 1–7) → §25 Alert variants (ERROR).
+  Stops the flow.
+- **Closing report** (Step 8) → §5 Deployment report. The big
   artifact the user takes away.
 
 Concrete templates are inlined in each step below.
 
 ## The flow
 
-### Step 0 — Platform detection + delegation
+### Step 0 — Platform detection + auto-routing
 
-Before pre-flight, determine the project's platform per the
-"Detect platform" rule in the Behavior contract. If a
-`<platform>-release` skill exists, surface the handoff option to
-the user and wait for their confirmation. Only proceed past Step 0
-if the user opts into the universal flow or the platform has no
-specific skill.
+Determine the project's platform:
+
+1. **Explicit declaration in `CLAUDE.md`.** A `## Platform`
+   section or a `Platform: <name>` header — use it verbatim.
+2. **Inferred from manifests** when `CLAUDE.md` is silent:
+   - `*.xcodeproj` / `*.xcworkspace` / `Package.swift` → `ios`
+   - `package.json` with `"react-native"` dep → `react-native`
+   - `package.json` (no react-native) → `web`
+   - `pyproject.toml` / `setup.py` → `python`
+   - `build.gradle` / `*.gradle.kts` with `android` plugin →
+     `android`
+   - Otherwise → `universal`
+
+3. **Check for a platform-specific release skill** in
+   `.claude/skills/`. If `<platform>-release` exists, **route
+   to it automatically** — execute that skill's flow. State
+   what's happening in the report; do not ask.
+
+If no platform-specific skill exists, continue with the
+universal flow below.
 
 ### Step 1 — Pre-flight check
 
 Run in parallel:
 
-- `git rev-parse --abbrev-ref HEAD` (must be main / release branch)
-- `git status --porcelain` (must be empty)
-- `git fetch origin && git log HEAD..origin/main --oneline` (must
-  be empty — no upstream commits we don't have)
-- Latest tag: `git describe --tags --abbrev=0` (so we know what
-  the previous version was)
-- `gh pr list --state open --base main` (any unmerged PRs that
-  should have shipped?)
+- `git rev-parse --abbrev-ref HEAD` — capture the current branch.
+- `git status --porcelain` — must be empty (no dirty files).
+- `git fetch origin` — capture remote state.
+- `git log HEAD..origin/main --oneline` — if non-empty AND on
+  main, the local is behind; hard-stop with "behind upstream."
+- `git describe --tags --abbrev=0` — capture the previous tag.
+- `gh pr list --state open --base main` — for visibility; not
+  a stop condition.
+- The project's verification gate (test command from `CLAUDE.md`).
+  Must exit 0.
+- The project's build command (from `CLAUDE.md` / manifest).
+  Must exit 0 unless project config marks warnings as fatal.
+- Deploy command discoverable per "Discover" in the contract
+  above. Must be present.
+- `tasks/RELEASES.md` lookup — if a `📋 Planned` or `🚧 In
+  progress` entry exists for an upcoming version, check it
+  against what merged. Mismatch = hard-stop with the diff.
 
 Render the pre-flight summary as a §2 Live status dashboard:
 
 ```
-┌─ pre-flight · vX.Y.Z release ──────────────────────────┐
+┌─ pre-flight · <version> release ───────────────────────┐
 │                                                        │
-│  ● branch         main                                 │
-│  ● working tree   clean                                │
-│  ● upstream       no surprise commits                  │
-│  ● tests          142/142 green                        │
-│  ● build          clean (no warnings)                  │
-│  ● open PRs       0 pending merge to main              │
+│  ●  branch          <branch>                           │
+│  ●  working tree    clean                              │
+│  ●  upstream        in sync                            │
+│  ●  tests           <count>/<count> green              │
+│  ●  build           clean                              │
+│  ●  deploy command  <discovered>                       │
+│  ●  release plan    matches                            │
 │                                                        │
-│  ✓ all checks passed — ready to propose version        │
+│  ✓ all checks passed — proceeding to merge             │
 └────────────────────────────────────────────────────────┘
 ```
 
-Glyph semantics: ● = passed, ◐ = running, ✗ = failed. If any check
-fails, that row's glyph becomes ✗, the footer becomes a §25 ERROR
-alert, and the skill stops:
+Glyph semantics: ● = passed, ◐ = running, ✗ = failed. Any ✗ →
+the footer becomes a §25 ERROR alert and the skill **stops**:
 
 ```
-┌─ ✗  ERROR ───────────────────────────────────────────────┐
-│  pre-flight failed — <which check>                       │
-│  <one-line reason; full output above>                    │
-└──────────────────────────────────────────────────────────┘
+┌─ ✗  ERROR ─────────────────────────────────────────────┐
+│  pre-flight failed — <which check>                     │
+│  <exact reason; full output above>                     │
+│  hard-stop per /release contract.                      │
+└────────────────────────────────────────────────────────┘
 ```
 
-### Step 2 — Discover deploy command
+### Step 2 — Pick version
 
-Read `CLAUDE.md` / `DEPLOY.md` / manifest files. State:
+If invoked with a version arg, use it:
 
-> **Deploy command:** `<exact command>`
-> **Source:** `<file where it was documented>`
+- `/release patch` → next patch bump from the previous tag.
+- `/release minor` → next minor bump.
+- `/release major` → next major bump.
+- `/release v1.2.3` → exactly that semver.
 
-If multiple candidates, ask which.
-
-If no deploy command is documented anywhere, **stop and ask** —
-this skill won't guess prod commands.
-
-### Step 3 — Run verification gate
-
-The project's contract test command from `CLAUDE.md`. Examples:
-`npm run test:e2e`, `pytest`, `go test ./...`, `cargo test`,
-`xcodebuild test`, etc. Must be green.
-
-If it fails, stop. Report the failure. Don't deploy.
-
-### Step 4 — Run build
-
-Run the project's build command (same discovery as `/build`).
-Surface warnings; ask before proceeding through them.
-
-### Step 5 — Propose version
-
-**Check `tasks/RELEASES.md` first.** If it has a `📋 Planned` or
-`🚧 In progress` entry for the upcoming release, that entry already
-names the version and the intended scope. Propose its version, and
-**cross-check the declared scope against what actually merged** —
-every task in a scoped phase should be in `tasks/done/`. Surface
-anything planned-but-not-shipped or shipped-but-not-planned before the
-deploy is confirmed. With no release plan, fall back to the heuristic.
-
-Compute next version using the heuristic from task-rules.md:
+If no arg, compute the next version from the
+`release-rules.md` / `task-rules.md` heuristic:
 
 - **Patch** — bug fixes, copy/styling tweaks.
-- **Minor** — new user-visible features, additive (default for
-  most batches).
+- **Minor** — new user-visible features, additive (default).
 - **Major** — breaking changes, schema migrations.
 
-Propose with reasoning:
+State the choice:
 
-> Previous: `v1.1.0` · Proposed: **`v1.2.0`** (minor) — batch ships
-> Part CRUD + Work Order CRUD + sidebar counts. Confirm or override.
+> **Version:** `v1.2.0` (minor) — proceeding without
+> confirmation per /release contract. Reasoning: <one-line>.
+> Override by re-invoking with explicit version arg.
 
-Wait for confirmation. The user confirms the **semver** (`v1.2.0`);
-the git tag is the full build stamp `v1.2.0-<sha>-<env>`, assembled in
-Step 8 by `environment.sh version`. See `environment-rules.md`.
+This is informational, not a question. The flow continues.
 
-### Step 6 — Confirm deploy
+### Step 3 — Merge integration → main
 
-> Ready to deploy:
-> - Branch: `main` @ `<sha>`
-> - Command: `<deploy command>`
-> - Tag (after success): `vX.Y.Z-<sha>-<env>`
->
-> Proceed?
+If the current branch is `main` and pre-flight confirmed nothing
+to merge, **skip this step**. The release is being cut on
+already-merged work; that's a valid path.
 
-Wait for explicit yes.
+Otherwise, merge the current branch into `main`:
 
-### Step 7 — Deploy
+1. `git checkout main`
+2. `git pull --ff-only origin main` — must succeed; failure
+   means main moved unexpectedly, hard-stop.
+3. `git merge --no-ff <integration-branch> -m "Merge
+   <integration-branch> into main (<version>)"` — `--no-ff`
+   preserves the integration branch's history as a merge bubble,
+   matching the project's existing release-merge convention.
+4. If the merge has conflicts, hard-stop. Report exactly which
+   files; do not attempt to resolve.
 
-Run the deploy command in the foreground. Capture full output.
-
-If it fails, stop. **Do not retry.** Report exactly what failed.
-
-### Step 8 — Tag and push
-
-After deploy success, build the canonical tag from the confirmed
-semver and the release environment, then tag and push:
+The merge commit is the release commit — its SHA is what the tag
+will reference. Capture it:
 
 ```sh
-# v<semver>-<sha>-<env>. <env> is the production environment from
-# .claude/environments.json (kit default: `prod`) — confirm the key
-# if the registry uses another name.
-TAG="$(bash .claude/skills/environment/environment.sh version prod --semver vX.Y.Z)"
-
-git tag -a "$TAG" -m "<release notes — see format below>"
-git push origin "$TAG"
+RELEASE_SHA=$(git rev-parse HEAD)
 ```
 
-`environment.sh version` is the single source of the version string —
-don't hand-assemble the tag. Release-notes message format (from
-task-rules.md):
+### Step 4 — Tag the release commit (local)
+
+Build the canonical tag string from version + sha + env using
+the kit's `environment.sh`:
+
+```sh
+TAG="$(bash .claude/skills/environment/environment.sh version prod --semver v1.2.0)"
+# Result: v1.2.0-<sha>-prod
+```
+
+Create the annotated tag locally (do not push yet):
+
+```sh
+git tag -a "$TAG" -m "<release notes — format below>"
+```
+
+Release-notes message format (from `release-rules.md`):
 
 ```
-vX.Y.Z — <one-line summary>
+v1.2.0 — <one-line summary>
 
 Tasks shipped:
 - TASK-NNN — <name>
 - TASK-NNN — <name>
 
 Deployed: <YYYY-MM-DD HH:MM UTC>
-Integration PR: #N
+Integration: <branch>
 ```
 
-Pull the task list from the integration PR's body or recent
-commit messages. Ask the user to confirm the summary line if
-unclear.
+Pull the task list from the integration branch's commit history
+or from the `tasks/RELEASES.md` entry's scope declaration.
 
-### Step 9 — Record the release
+The tag is **local-only** at this point. Push happens in Step 6,
+only if deploy succeeds.
 
-Two files record the shipped release.
+### Step 5 — Deploy
+
+Run the deploy command in the foreground. Capture full output.
+
+```sh
+<deploy-command>
+```
+
+If it succeeds → continue to Step 6.
+
+If it fails → **hard-stop**. Do not retry. Report exactly what
+failed, the exact command, the exact error. The local tag from
+Step 4 remains — the user decides whether to delete it (it
+represents "tried to ship v1.2.0; deploy failed") or keep it as
+a record of the attempt.
+
+### Step 6 — Push the tag
+
+After deploy success:
+
+```sh
+git push origin main
+git push origin "$TAG"
+```
+
+Two separate pushes — the main push (carrying the merge commit)
+and the tag push are distinct operations and should not be
+combined. If the tag push fails (network, auth), report it as a
+partial-state warning: the deploy went live but the tag isn't
+remote yet. The user resolves by pushing the tag manually.
+
+### Step 7 — Record the release
+
+Two files capture what shipped.
 
 **`tasks/AUDIT.md`** — add a 🚀 entry under today's date header:
 
 ```markdown
-- 🚀 **Released vX.Y.Z** — <one-line summary>. Tag
-  `vX.Y.Z-<sha>-prod`. Integration PR [#N](<url>).
+- 🚀 **Released v1.2.0** — <one-line summary>. Tag
+  `v1.2.0-<sha>-prod`. Integration: <branch>.
 ```
 
-**`tasks/RELEASES.md`** — flip this version's entry to ✅ Shipped and
-add a `**Tag.**` line with the git tag. If the release shipped with no
-plan entry, add one retroactively as ✅ Shipped.
+**`tasks/RELEASES.md`** — flip this version's entry to ✅ Shipped
+and add a `**Tag.**` line with the git tag. If the release
+shipped with no plan entry, add one retroactively as ✅ Shipped.
 
-Don't commit these edits by themselves — leave them staged or
-uncommitted unless the user says otherwise.
+Commit these edits to `main` as the post-release audit commit:
 
-### Step 10 — Closing report
+```sh
+git add tasks/AUDIT.md tasks/RELEASES.md
+git commit -m "audit: record v1.2.0 release"
+git push origin main
+```
 
-Render the deploy completion report per §5 Deployment report (per
-task-rules.md "Closing report after deploy"):
+This commit is part of the contract — partial state ("deploy
+shipped but no audit entry") is not acceptable. If the commit
+fails, report it as a partial-state warning.
+
+### Step 8 — Closing report
+
+Render the deploy completion report per §5 Deployment report
+(per `task-rules.md` "Closing report after deploy"):
 
 ````markdown
-# Release vX.Y.Z — shipped
+# Release v1.2.0 — shipped
 
 ```
-  ▲  DEPLOYMENT   ·   <env>   ·   vX.Y.Z
+  ▲  DEPLOYMENT   ·   <env>   ·   v1.2.0
 
 
   ┌─ release ──────────────────────────────────────────┐
   │                                                    │
-  │   ●  build           clean       <duration>        │
-  │   ●  verification    <count>     <duration>        │
+  │   ●  pre-flight      passed      <duration>        │
+  │   ●  merge to main   <branch>    <duration>        │
+  │   ●  tagged          <tag>       <duration>        │
   │   ●  deploy          succeeded   <duration>        │
-  │   ●  tag pushed      vX.Y.Z      ▲ <prev> → vX.Y.Z │
-  │   ●  audit appended  ✓                             │
+  │   ●  tag pushed      ✓                             │
+  │   ●  audit recorded  ✓                             │
   │                                                    │
   └────────────────────────────────────────────────────┘
 
 
-  tag           vX.Y.Z-<sha>-<env>
-  branch        main
-  integration   PR #N
+  tag           v1.2.0-<sha>-prod
+  branch        main  ←  <integration-branch>
   deployed by   <user>
   started       <YYYY-MM-DD HH:MM UTC>
   completed     <YYYY-MM-DD HH:MM UTC>  ·  <duration>
 
 
   →  <live URL from CLAUDE.md / DEPLOY.md>
-  →  https://github.com/<owner>/<repo>/releases/tag/vX.Y.Z-<sha>-<env>
+  →  https://github.com/<owner>/<repo>/releases/tag/v1.2.0-<sha>-prod
 ```
 
 **Tasks shipped**
 - TASK-NNN — <name>
 - TASK-NNN — <name>
 
+**Decisions made (no confirmation taken per /release contract)**
+- ⚠️ Version: `v1.2.0` (minor) — <reasoning>
+- ⚠️ Deploy command: `<cmd>` — <source-file>
+
 **Rollback** *(if needed)*
 - Hosting rollback: `<command, e.g. firebase hosting:rollback>`
 - Note: rollback reverts the live build; the tag stays in place
-  per task-rules.md "Rollback semantics".
+  per `task-rules.md` "Rollback semantics".
 ````
 
-**Glyph semantics for the release box.** ● = step succeeded,
-◐ = step running, ✗ = step failed (would have stopped the skill
-before this report). ▲ marks the version bump. The two-column
-key/value rows below the box carry the metadata the prior table
-held — short values read better in this shape.
+Glyph semantics: ● = step succeeded, ◐ = step running, ✗ = step
+failed (would have hard-stopped before this report). ▲ marks the
+version bump.
 
-If the deploy partially succeeded (e.g. deploy went through but
-tag push failed), use a §25 WARNING alert instead of §5 — the
-deployment box implies a clean release, which a partial state isn't.
+If any step partially succeeded (deploy went through, tag push
+failed; or deploy went through, audit commit failed), use a §25
+WARNING alert instead of §5 — the deployment box implies a clean
+release, which a partial state isn't.
 
 ## What you must NOT do
 
-- **Don't auto-deploy without confirmation.** Even on a clean
-  pre-flight, the deploy is a user-confirmed gate.
-- **Don't pick the version.** Propose with reasoning; user
-  decides.
+- **Don't ask for confirmation at soft gates.** Invocation is
+  consent. Soft gates are gone. If you find yourself prompting
+  "Proceed?", "Deploy now?", "Confirm version?" — stop. The
+  contract was inverted in v0.33.0 for documented reasons.
+- **Don't retry a failed step.** Hard-stop, report, let the user
+  re-invoke. Partial deploy state is dangerous; investigate
+  before retrying.
+- **Don't push a tag before deploy succeeds.** Tag is created
+  locally in Step 4, pushed in Step 6. A pushed tag for a failed
+  deploy is a misleading public record.
 - **Don't run lightweight tags.** Annotated only.
-- **Don't push tag and main commit together** if main needs a
-  separate push — separate pushes, one for the merge commit, one
-  for the tag.
-- **Don't retry a failed deploy** without the user's say-so.
-  Partial deploy state is dangerous; investigate before retrying.
-- **Don't deploy with a dirty working tree.** Stash, commit, or
-  abort — user's call.
+- **Don't deploy with a dirty working tree.** Hard-stop at
+  pre-flight.
+- **Don't auto-route to a platform skill the user didn't intend.**
+  Platform routing in Step 0 is the kit's convention. If the
+  user wanted the universal flow despite an iOS project, they
+  can invoke `/release-universal` (if it exists) or amend
+  `CLAUDE.md` with an explicit `Platform: universal`.
 
 ## Edge cases
 
 - **No annotated tags exist yet** (first release): bootstrap at
-  `v1.0.0` per the project's tagging rule.
-- **Hotfix path**: if the user invoked this skill via a hotfix,
-  defer to the project's hotfix rule (typically: branch off main,
-  patch bump, fast-track verification, audit entry tagged 🔥).
-  Confirm hotfix mode explicitly.
-- **No deploy command documented**: stop and ask. Don't infer
-  from filename ("ah, `firebase.json` exists, so probably
-  `firebase deploy`") — stating the inference and asking is
-  always cheaper than a wrong deploy.
+  `v1.0.0` per the project's tagging rule. No version arg
+  required; the bootstrap is the choice.
+- **Hotfix path**: if the user invoked this skill via a hotfix
+  branch (`hotfix/HOTFIX-NNN-slug`), defer to the project's
+  hotfix rule (typically: branch off main, patch bump,
+  fast-track verification, audit entry tagged 🔥). The contract
+  is the same — invocation is consent — but the version
+  defaults to patch.
+- **No deploy command documented**: hard-stop. Do not infer from
+  filename ("ah, `firebase.json` exists, so probably `firebase
+  deploy`"). The user documents the command in `CLAUDE.md` /
+  `DEPLOY.md` and re-invokes.
+- **Release plan mismatch**: a `tasks/RELEASES.md` entry declares
+  scope (tasks/phases). Pre-flight checks that the declared
+  scope matches what's about to merge. Mismatch = hard-stop with
+  the specific diff (planned-but-not-shipped, shipped-but-not-planned).
 
 ## When NOT to use this skill
 
@@ -380,13 +443,18 @@ deployment box implies a clean release, which a partial state isn't.
   do that by hand for now).
 - **Pre-release / staging deploy** that doesn't tag — most
   projects have a separate `deploy:preview` or `deploy:stage`
-  flow. That's not this skill. This is the prod tagged release.
+  flow. That's not this skill. `/mission` may run a non-prod
+  preview deploy when its goal asks for it (per
+  `autonomy-rules.md` Exception 3) — that's the preview path.
 
 ## What "done" looks like for a /release session
 
+- Pre-flight passed (every check ●).
+- Integration branch merged to main (the release commit exists).
+- Annotated tag created on the release commit AND pushed.
 - Live build deployed.
-- Annotated tag pushed.
-- AUDIT.md entry appended; RELEASES.md entry marked ✅ Shipped.
+- `AUDIT.md` entry appended; `RELEASES.md` entry marked ✅
+  Shipped; both committed to main.
 - Closing report rendered with the tag URL, commit SHA, and the
   rollback escape hatch.
 

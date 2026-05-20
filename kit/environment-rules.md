@@ -102,9 +102,10 @@ v<semver>-<shortsha>-<env>
 ```
 
 - **`<semver>`** — `MAJOR.MINOR.PATCH`. For a release, the version
-  `/release` confirms. For any non-release build, the **nearest
-  reachable release tag** (`git describe`), or `v0.0.0` before the
-  first release.
+  `/release` selects (from arg or heuristic — see
+  `kit/skills/release/SKILL.md`). For any non-release build, the
+  **nearest reachable release tag** (`git describe`), or `v0.0.0`
+  before the first release.
 - **`<shortsha>`** — `git rev-parse --short HEAD`: exactly the commit
   the build came from.
 - **`<env>`** — the active environment's name (its registry key).

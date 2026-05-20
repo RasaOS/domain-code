@@ -60,16 +60,24 @@ situation** in its report:
   skill does not modify them; it surfaces exactly what it needs.
 - **Merging or pushing to `main`, release tagging, deploys.** Per
   `git-flow-rules.md` Rules 2, 4, and 5 these are always
-  user-confirmed. An autonomous skill never merges to `main`,
-  never pushes `main`, never tags a release, never deploys to
-  prod. It works on a branch and leaves it for the user. Three
-  narrow carve-outs, all documented in "The exceptions" below:
+  user-authorized. An autonomous skill (auto-* family + /mission)
+  never merges to `main`, never pushes `main`, never tags a
+  release, never deploys to prod. Three narrow carve-outs for the
+  autonomous family, all documented in "The exceptions" below:
   (a) `/mission` may push its own `feat/` branch and open a draft
   PR; (b) `/auto-task` and `/auto-phase` may auto-merge
   spec-only PRs to `main`; (c) `/mission` may run a non-prod
-  preview deploy when the goal asks for it. The
-  **merge-to-`main`-with-code** gate and the **deploy-to-prod**
-  gate are absolute — no carve-outs.
+  preview deploy when the goal asks for it.
+
+  Two additional static-authorization carve-outs live in
+  `git-flow-rules.md` Rule 2 for the **user-invoked
+  merge-bearing skills** — `/release` (invocation = consent to
+  the full release flow) and `/peer-review` (invocation = consent
+  to merge if accepting). Those skills are not in the autonomous
+  family and not governed by this file; they are listed here for
+  cross-reference only. The **deploy-to-prod** gate remains
+  user-authorized in all cases — either per-invocation or via a
+  Rule 2 carve-out.
 - **Destructive or irreversible operations.** History rewrites,
   force-pushes, data deletion, schema-destroying migrations,
   removing real content. Never auto-decided — the skill stops.
