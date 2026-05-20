@@ -20,6 +20,70 @@ human-readable rollback).
 
 ---
 
+## v0.32.0 — 2026-05-20
+
+### Autonomy contract — three documented exceptions
+
+The kit's autonomy contract previously had one documented
+exception (`/mission` commits and opens a draft PR). v0.32.0
+restructures that section into three numbered exceptions, each
+opt-in by intent and bounded by precise conditions:
+
+1. **`/mission` commits and opens a draft PR** (unchanged).
+2. **`/auto-task` and `/auto-phase` may auto-merge spec-only
+   PRs to `main`** (new). Task and phase spec files are
+   documentation, not code. When the working tree contains only
+   files matching the spec-file allowlist (`tasks/**/*.md`,
+   `tasks/PHASES.md`, `tasks/ROADMAP.md`), the skill pushes to a
+   short-lived `spec/<id>` branch, opens a `spec-only` PR, and
+   merges via `gh pr merge --squash --delete-branch`. Any non-spec
+   file in the working tree falls back to the pre-v0.32.0
+   "leave uncommitted" behavior.
+3. **`/mission` may run an opt-in preview deploy** (new). When
+   the goal explicitly asks ("deploy a preview", "have it running
+   for me to test"), `/mission` MAY run `./build/deploy
+   --env=<non-prod-env>` after opening the PR. Never `prod`.
+   Never via `/release`. Best-effort: deploy failure is reported,
+   not retried, and never rolls back the PR.
+
+### `/mission` — two-pass verification re-walk
+
+Step 6 of `/mission` previously required one clean re-walk of the
+goal before delivering. v0.32.0 requires **two consecutive clean
+re-walks**. If any re-walk surfaces a new gap, the counter resets
+to zero. The honest enforcement of "done" per the global CLAUDE.md
+ethos — a single green re-walk could be the result of asking the
+same flawed question twice.
+
+### Contract files touched
+
+- `kit/autonomy-rules.md` — exceptions section restructured into
+  three numbered carve-outs; the "Hard gates" entry on
+  merging/deploying updated to reference them.
+- `kit/git-flow-rules.md` — Rule 2 (no auto-merge to `main`) and
+  Rule 5 (deploys route through `/release`) each gain a
+  narrowly-scoped carve-out paragraph.
+- `kit/skills/mission/SKILL.md` — Step 6 (two-pass), new Step 8
+  (opt-in preview deploy), Step 9 (autonomy report), updated
+  description and contract bullets.
+- `kit/skills/auto-task/SKILL.md` — new Step 5 (spec-file
+  fast-path), updated "Never auto-commit" bullet and "What done
+  looks like".
+- `kit/skills/auto-phase/SKILL.md` — same fast-path pattern,
+  whole-phase single-PR variant, plus a phase-collision note.
+
+### Why minor (additive policy + behavioral step changes)
+
+Per the changelog rules at the top of this file: minor =
+"additive changes (new files, new skills, new policies) that
+existing projects can pull via `/sync` without breakage". Three
+new contract carve-outs and a new step in `/mission` are
+textbook additive policy. Existing projects that pull v0.32.0
+see: the same skills, with two new opt-in behaviors that engage
+only when their preconditions hold.
+
+---
+
 ## v0.31.0 — 2026-05-19
 
 ### `/mission` — autonomous goal execution
