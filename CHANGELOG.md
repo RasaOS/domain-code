@@ -20,6 +20,103 @@ human-readable rollback).
 
 ---
 
+## v0.36.0 — 2026-05-20
+
+### Status field overhaul — `blocked` added, `done` → `completed` (BREAKING)
+
+**⚠️ BREAKING for existing projects.** Two changes to the task
+lifecycle status field:
+
+1. **`done` is renamed to `completed`.** The directory
+   `tasks/done/` becomes `tasks/completed/`. The status enum
+   value `done` becomes `completed`. Same meaning ("PR merged,
+   work shipped") — cleaner word.
+2. **`blocked` is added.** A new lifecycle state for tasks
+   parked due to external dependencies (missing credentials,
+   waiting on another team, third-party outage, undecided
+   product call). Tasks live in `tasks/blocked/` and carry a
+   `## Blocker` section naming what's blocking and what would
+   unblock. Returns to `active/` when unblocked.
+
+#### Migration for existing projects
+
+```sh
+# In your project root:
+git mv tasks/done tasks/completed
+mkdir -p tasks/blocked
+
+# Optionally update existing task files' frontmatter:
+# - status: done  →  status: completed
+# (Tasks without explicit status: done in frontmatter need no edit.)
+```
+
+After `/sync`, the kit's references to `tasks/done/` are gone.
+Projects that don't run the migration will see their existing
+`tasks/done/` keep working as-is, but new tasks filed under the
+new contract will go to `tasks/completed/`. Mixing the two is
+visible drift — run the migration.
+
+#### State machine, after
+
+```
+tasks/intake.md  →  tasks/triage/  →  tasks/backlog/  →  tasks/active/  ⇄  tasks/blocked/  →  tasks/completed/
+```
+
+#### The blocked discipline
+
+`blocked` is for *external* dependencies — credentials, decisions,
+upstream tasks, third-party outages. The Blocker section is
+**mandatory** for any task in `blocked/`; without it the task is
+abandoned, not blocked. Reasons that are **not** blocked:
+
+- "I don't know how to do this" — recon problem; read more code.
+- "This is hard" — that's just work.
+- "I forgot about it" — move back to `backlog/`.
+
+Internal-to-the-task problems get fixed inside the task.
+
+### Files touched
+
+- `kit/task-rules.md` — state machine diagram updated; new
+  "Status field" subsection; new "The blocked state" subsection
+  with the rules above; the Categories example frontmatter shows
+  the full enum.
+- `kit/task-template.md`, `kit/task-template-stub.md`,
+  `kit/task-template-bug.md`, `kit/task-template-hotfix.md` —
+  status enum updated in frontmatter.
+- `kit/vocabulary.md` — Active/Blocked/Completed definitions;
+  Blocked is new; Completed's note acknowledges the rename.
+- `kit/stamps.md` — status enum updated.
+- `kit/skills/task/SKILL.md`, `kit/skills/mission/SKILL.md`,
+  `kit/skills/self-heal/SKILL.md`,
+  `kit/skills/self-improve/SKILL.md`,
+  `kit/skills/auto-test/SKILL.md`, `kit/skills/roadmap/SKILL.md`,
+  `kit/skills/backlog/SKILL.md`, `kit/skills/prototype/SKILL.md`,
+  `kit/skills/mode/SKILL.md`, `kit/skills/onboard/SKILL.md`,
+  `kit/skills/retro/SKILL.md`, `kit/skills/lessons/SKILL.md`,
+  `kit/skills/spec-phase/SKILL.md`,
+  `kit/skills/handoff/SKILL.md`,
+  `kit/skills/update-docs/SKILL.md`, `kit/skills/sync/SKILL.md`,
+  `kit/release-rules.md`, `kit/modes/task.md`,
+  `kit/modes/README.md`, `kit/skills/task-guard/task-guard.sh` —
+  references to `tasks/done/` updated to `tasks/completed/`.
+
+### Why minor vs. major
+
+This change is **breaking by the kit's own changelog rules**
+(major = "breaking changes to file layout, sync policy, or
+skill contracts that require projects to re-init or migrate" —
+the directory rename qualifies). Shipping as v0.36.0 rather
+than v1.0.0 follows the relaxed pre-1.0 convention common in
+the kit's history; a v1.0.0 major bump is the formally-correct
+version for this change and is a reasonable alternative if the
+user wants to mark the kit's maturity.
+
+The migration is one `git mv` and an optional `mkdir`. The
+deprecation cost is contained.
+
+---
+
 ## v0.35.0 — 2026-05-20
 
 ### Task categories + intake layer
