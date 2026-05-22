@@ -1,0 +1,12 @@
+{
+  "lock_version": 1,
+  "element": {
+    "name": "rasa.domain.code",
+    "kind": "domain",
+    "repo": "https://github.com/rasa-os/domain-code",
+    "branch": "{{ELEMENT_BRANCH}}"
+  },
+  "pinned_sha": "{{ELEMENT_SHA}}",
+  "installed_at": "{{TODAY}}",
+  "overrides": []
+}

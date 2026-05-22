@@ -1,76 +1,76 @@
 #!/usr/bin/env bash
 #
-# claude-kit init — bootstrap a project with the claude-kit foundation.
+# rasa.domain.code init — bootstrap a project with this Element.
 #
 # Usage:
-#   claude-kit/bin/init [target-dir]
+#   bin/init [target-dir]
 #
 # If [target-dir] is omitted, the current working directory is used.
 #
-# What gets installed is declared entirely in MANIFEST.json — this
-# script holds NO hardcoded file list. It reads the manifest and applies
-# each entry by its policy:
+# This script is the Element-primitive installer per RasaOS canon v1.0.0
+# (see ~/rAI/rasaos-canon/01_system_specification.html §5–§7). What gets
+# installed is declared entirely in rasa.json — this script holds NO
+# hardcoded file list. It reads the Connection Contract and applies each
+# entry by its policy:
 #
-#   kit.files[]              files the kit owns (updated later via /sync)
+#   element.files[]          files the Element owns (updated later via /sync)
 #     directory-mirror       overlay a directory's contents into the target
 #     file-replace           copy a single file (overwrites)
 #     opt-in                 registered but NOT installed — added manually
-#   bootstrap.files[]        one-time files, never overwritten by /sync
+#   seed.files[]             one-time files, never overwritten by /sync
 #     skip-if-exists         copy only if the target is absent
-#     init-only-with-sha     copy + stamp {{KIT_SHA}} {{KIT_BRANCH}} {{TODAY}}
+#     init-only-with-sha     copy + stamp {{ELEMENT_SHA}} {{ELEMENT_BRANCH}} {{TODAY}}
 #   scaffold.directories[]   empty directories created with a .gitkeep
 #
 # Because the manifest is the single source of truth, adding a file to
-# the kit is a one-line MANIFEST.json edit — bin/init and /sync both
+# the Element is a one-line rasa.json edit — bin/init and /sync both
 # pick it up with no change to this script. bin/check-manifest guards
 # the manifest against drifting from the tree.
 #
 # Requirements:
-#   - python3, to parse MANIFEST.json. JSON parsing in pure bash is not
-#     worth the fragility; python3 ships on every macOS/Linux box and
-#     the kit already depends on it (runtime.sh).
-#   - The kit must already be on disk — clone it first. No network calls.
+#   - python3, to parse rasa.json.
+#   - The Element must already be on disk — clone it first. No network calls.
 
 set -euo pipefail
 
-# ─── Resolve target + kit location ─────────────────────────────────────────
+# ─── Resolve target + Element location ─────────────────────────────────────
 TARGET="${1:-$PWD}"
 mkdir -p "$TARGET"
 TARGET="$(cd "$TARGET" && pwd)"
 
-KIT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-KIT_REPO_URL="https://github.com/ChazzCoin/claude-kit"
-MANIFEST="$KIT_DIR/MANIFEST.json"
+ELEMENT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+ELEMENT_REPO_URL="https://github.com/rasa-os/domain-code"
+MANIFEST="$ELEMENT_DIR/rasa.json"
 
 # ─── Preflight ─────────────────────────────────────────────────────────────
 if ! command -v python3 >/dev/null 2>&1; then
-  echo "ERROR: bin/init requires python3 to parse MANIFEST.json — install it and re-run." >&2
+  echo "ERROR: bin/init requires python3 to parse rasa.json — install it and re-run." >&2
   exit 1
 fi
 if [ ! -f "$MANIFEST" ]; then
-  echo "ERROR: MANIFEST.json not found at $MANIFEST" >&2
+  echo "ERROR: rasa.json not found at $MANIFEST" >&2
   exit 1
 fi
 if ! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$MANIFEST" >/dev/null 2>&1; then
-  echo "ERROR: MANIFEST.json is not valid JSON: $MANIFEST" >&2
+  echo "ERROR: rasa.json is not valid JSON: $MANIFEST" >&2
   exit 1
 fi
 
-# ─── Resolve kit identity (for the foundation.json pin) ────────────────────
-if git -C "$KIT_DIR" rev-parse HEAD >/dev/null 2>&1; then
-  KIT_SHA="$(git -C "$KIT_DIR" rev-parse HEAD)"
-  KIT_BRANCH="$(git -C "$KIT_DIR" rev-parse --abbrev-ref HEAD)"
+# ─── Resolve Element identity (for the rasa.lock.json pin) ─────────────────
+if git -C "$ELEMENT_DIR" rev-parse HEAD >/dev/null 2>&1; then
+  ELEMENT_SHA="$(git -C "$ELEMENT_DIR" rev-parse HEAD)"
+  ELEMENT_BRANCH="$(git -C "$ELEMENT_DIR" rev-parse --abbrev-ref HEAD)"
 else
-  # Kit downloaded as a tarball — /sync still works, treats files as drifted.
-  KIT_SHA="unpinned"
-  KIT_BRANCH="main"
+  # Element downloaded as a tarball — /sync still works, treats files as drifted.
+  ELEMENT_SHA="unpinned"
+  ELEMENT_BRANCH="main"
 fi
 TODAY="$(date +%Y-%m-%d)"
 
-echo "claude-kit init"
-echo "  source:   $KIT_DIR (sha: ${KIT_SHA:0:12}, branch: $KIT_BRANCH)"
+echo "rasa.domain.code init"
+echo "  source:   $ELEMENT_DIR (sha: ${ELEMENT_SHA:0:12}, branch: $ELEMENT_BRANCH)"
 echo "  target:   $TARGET"
-echo "  manifest: MANIFEST.json"
+echo "  manifest: rasa.json"
 echo
 
 # ─── Manifest reader ───────────────────────────────────────────────────────
@@ -81,9 +81,9 @@ manifest_records() {
   python3 - "$MANIFEST" <<'PYEOF'
 import json, sys
 m = json.load(open(sys.argv[1]))
-for e in m.get("kit", {}).get("files", []):
+for e in m.get("element", {}).get("files", []):
     print("F\t%s\t%s\t%s" % (e["policy"], e["from"], e["to"]))
-for e in m.get("bootstrap", {}).get("files", []):
+for e in m.get("seed", {}).get("files", []):
     print("F\t%s\t%s\t%s" % (e["policy"], e["from"], e["to"]))
 for d in m.get("scaffold", {}).get("directories", []):
     print("D\t%s" % d)
@@ -92,12 +92,12 @@ PYEOF
 
 FAILURES=0
 
-# ─── 1. Install files (kit.files + bootstrap.files) ────────────────────────
-echo "→ Installing files (per MANIFEST.json)"
+# ─── 1. Install files (element.files + seed.files) ─────────────────────────
+echo "→ Installing files (per rasa.json)"
 
 while IFS=$'\t' read -r rtype policy src_rel dst_rel; do
   [ "$rtype" = "F" ] || continue
-  src="$KIT_DIR/$src_rel"
+  src="$ELEMENT_DIR/$src_rel"
   dst="$TARGET/$dst_rel"
 
   case "$policy" in
@@ -144,11 +144,11 @@ while IFS=$'\t' read -r rtype policy src_rel dst_rel; do
         FAILURES=$((FAILURES + 1))
       else
         mkdir -p "$(dirname "$dst")"
-        sed -e "s|{{KIT_SHA}}|$KIT_SHA|g" \
-            -e "s|{{KIT_BRANCH}}|$KIT_BRANCH|g" \
+        sed -e "s|{{ELEMENT_SHA}}|$ELEMENT_SHA|g" \
+            -e "s|{{ELEMENT_BRANCH}}|$ELEMENT_BRANCH|g" \
             -e "s|{{TODAY}}|$TODAY|g" \
             "$src" > "$dst"
-        echo "    create:  $dst_rel  (pinned to ${KIT_SHA:0:12})"
+        echo "    create:  $dst_rel  (pinned to ${ELEMENT_SHA:0:12})"
       fi
       ;;
     *)
@@ -171,7 +171,7 @@ fi
 
 # ─── 3. Scaffold directories ───────────────────────────────────────────────
 echo
-echo "→ Scaffolding directories (per MANIFEST.json)"
+echo "→ Scaffolding directories (per rasa.json)"
 
 while IFS=$'\t' read -r rtype dir; do
   [ "$rtype" = "D" ] || continue
@@ -188,14 +188,14 @@ done < <(manifest_records)
 # ─── Done ──────────────────────────────────────────────────────────────────
 echo
 if [ "$FAILURES" -gt 0 ]; then
-  echo "⚠  claude-kit installed with $FAILURES problem(s) — see ERROR/WARNING lines above."
-  echo "   This usually means MANIFEST.json references a path that doesn't exist."
-  echo "   Run bin/check-manifest in the kit repo to diagnose."
+  echo "⚠  rasa.domain.code installed with $FAILURES problem(s) — see ERROR/WARNING lines above."
+  echo "   This usually means rasa.json references a path that doesn't exist."
+  echo "   Run bin/check-manifest in the Element repo to diagnose."
   echo
 fi
 
 cat <<EOF
-✅ claude-kit installed.
+✅ rasa.domain.code installed.
 
 Next steps:
   1. Open CLAUDE.md and fill in the {{PLACEHOLDERS}} for this project
@@ -213,12 +213,12 @@ About the platform-prefixed files (ios-*, web-*, python-*, etc.):
   - Agents read the prefix files relevant to the work at hand. The
     "## Platform" declaration in CLAUDE.md tells them which.
 
-When the kit gets new versions later:
+When the Element gets new versions later:
   - Run /sync inside Claude Code to pull updates.
   - Project files (CLAUDE.md, PHASES.md, AUDIT.md, etc.) are never
     touched by /sync. Skills and rule files are.
 
-Source: $KIT_REPO_URL
+Source: $ELEMENT_REPO_URL
 EOF
 
 if [ "$FAILURES" -gt 0 ]; then

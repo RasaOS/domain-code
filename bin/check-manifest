@@ -1,37 +1,37 @@
 #!/usr/bin/env bash
 #
-# bin/check-manifest — verify MANIFEST.json is a complete inventory of the kit.
+# bin/check-manifest — verify rasa.json is a complete inventory of the Element.
 #
-# bin/init and /sync are MANIFEST-driven: they install exactly what
-# MANIFEST.json declares. If a file is committed to kit/ or bootstrap/
-# but never registered in MANIFEST.json, it silently never ships — and
-# nothing else catches it. This script does.
+# bin/init and /sync are manifest-driven: they install exactly what
+# rasa.json declares. If a file is committed to content/ or seed/ but
+# never registered in rasa.json, it silently never ships — and nothing
+# else catches it. This script does.
 #
 # Two checks, both directions:
-#   1. Coverage — every git-tracked file under kit/ and bootstrap/ is
-#      registered in MANIFEST.json (matched by an exact kit.files /
-#      bootstrap.files 'from', or by an ancestor directory entry).
-#   2. Dangling — every MANIFEST 'from' points at a path that exists.
+#   1. Coverage — every git-tracked file under content/ and seed/ is
+#      registered in rasa.json (matched by an exact element.files /
+#      seed.files 'from', or by an ancestor directory entry).
+#   2. Dangling — every rasa.json 'from' points at a path that exists.
 #
-# Run it before tagging a kit release, or wire it into CI.
+# Run it before tagging an Element release, or wire it into CI.
 #
 # Exit: 0 if the manifest is a complete, accurate inventory; 1 otherwise.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-MANIFEST="$REPO_ROOT/MANIFEST.json"
+MANIFEST="$REPO_ROOT/rasa.json"
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "ERROR: bin/check-manifest requires python3." >&2
   exit 1
 fi
 if [ ! -f "$MANIFEST" ]; then
-  echo "ERROR: MANIFEST.json not found at $MANIFEST" >&2
+  echo "ERROR: rasa.json not found at $MANIFEST" >&2
   exit 1
 fi
 if ! git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  echo "ERROR: bin/check-manifest must run inside the claude-kit git repo." >&2
+  echo "ERROR: bin/check-manifest must run inside the Element's git repo." >&2
   exit 1
 fi
 
@@ -43,19 +43,19 @@ repo, manifest_path = sys.argv[1], sys.argv[2]
 try:
     manifest = json.load(open(manifest_path))
 except (OSError, ValueError) as exc:
-    print("ERROR: could not parse MANIFEST.json: %s" % exc)
+    print("ERROR: could not parse rasa.json: %s" % exc)
     sys.exit(1)
 
-# Every 'from' the manifest declares (kit-managed + bootstrap), slash-stripped.
+# Every 'from' the manifest declares (element-managed + seed), slash-stripped.
 froms = []
-for section in ("kit", "bootstrap"):
+for section in ("element", "seed"):
     for entry in manifest.get(section, {}).get("files", []):
         froms.append(entry["from"].rstrip("/"))
 from_set = set(froms)
 
-# The real inventory: git-tracked files under kit/ and bootstrap/.
+# The real inventory: git-tracked files under content/ and seed/.
 tracked = subprocess.check_output(
-    ["git", "-C", repo, "ls-files", "kit", "bootstrap"], text=True
+    ["git", "-C", repo, "ls-files", "content", "seed"], text=True
 ).splitlines()
 tracked = [t for t in tracked if t]
 
@@ -72,26 +72,26 @@ uncovered = sorted(p for p in tracked if not covered(p))
 dangling = sorted(f for f in froms if not os.path.exists(os.path.join(repo, f)))
 problems = len(uncovered) + len(dangling)
 
-print("bin/check-manifest — MANIFEST.json coverage")
+print("bin/check-manifest — rasa.json coverage")
 print()
 
 if uncovered:
-    print("UNREGISTERED — committed under kit/ or bootstrap/, absent from MANIFEST.json:")
+    print("UNREGISTERED — committed under content/ or seed/, absent from rasa.json:")
     for p in uncovered:
         print("  x  %s" % p)
     print()
 
 if dangling:
-    print("DANGLING — a MANIFEST.json 'from' points at a path that does not exist:")
+    print("DANGLING — a rasa.json 'from' points at a path that does not exist:")
     for f in dangling:
         print("  x  %s" % f)
     print()
 
 if problems == 0:
-    print("OK   MANIFEST.json is a complete inventory.")
-    print("     %d tracked files under kit/ + bootstrap/, all registered." % len(tracked))
+    print("OK   rasa.json is a complete inventory.")
+    print("     %d tracked files under content/ + seed/, all registered." % len(tracked))
     sys.exit(0)
 
-print("FAIL %d problem(s) — MANIFEST.json and the kit tree have drifted." % problems)
+print("FAIL %d problem(s) — rasa.json and the Element tree have drifted." % problems)
 sys.exit(1)
 PYEOF

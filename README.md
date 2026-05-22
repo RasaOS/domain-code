@@ -1,4 +1,26 @@
-# claude-kit
+# rasa.domain.code (formerly claude-kit)
+
+The RasaOS **Domain · Code** Element. A portable foundation for
+engineering work — skills, rules, and templates that work across any
+repo, any language, any platform. Loaded by the rasa-kernel at install
+time per the Connection Contract (canon Spec §6).
+
+**Aliases:** `claude-kit` (legacy), `rasa-domain-code` (transition).
+**Canonical name:** `rasa.domain.code`.
+**Repo:** `github.com/rasa-os/domain-code` (planned — currently
+`github.com/ChazzCoin/claude-kit`).
+**Source of truth for behaviour:** `~/rAI/rasaos-canon/` v1.0.0.
+
+The README below is the original `claude-kit` README, preserved for
+the content surface (skills, modes, agents, rules, build pipeline)
+this Element ships. Only the structural shape (file/folder names per
+the Element primitive) was locked to canon vocabulary in the
+2026-05-22 drift-fix pass. See `~/rAI/rasa-os/DRIFT_REPORT.md` for
+the audit trail.
+
+---
+
+## Original claude-kit README
 
 A portable foundation for Claude Code projects — skills, rules, and
 templates that work across any repo, any language, any platform.

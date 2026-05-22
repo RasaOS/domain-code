@@ -1,14 +1,44 @@
 {
-  "$schema": "https://ChazzCoin.github.io/claude-kit/manifest.schema.json",
-  "name": "claude-kit",
-  "version": "0.38.0",
-  "description": "Portable Claude Code foundation — skills, rules, and templates that work across any repo, any language, any platform.",
+  "$schema": "https://rasa-os.github.io/schema/rasa.schema.v1.json",
+  "name": "rasa.domain.code",
+  "version": "0.41.0",
+  "kind": "domain",
+  "aliases": [
+    "claude-kit",
+    "rasa-domain-code"
+  ],
+  "description": "RasaOS Domain · Code. Portable engineering foundation — skills, rules, and templates that work across any repo, any language, any platform. Loaded as an Element by the rasa-kernel at install time per the Connection Contract (canon Spec §6).",
   "source": {
-    "repo": "https://github.com/ChazzCoin/claude-kit",
+    "repo": "https://github.com/rasa-os/domain-code",
     "branch": "main"
   },
-  "kit": {
-    "description": "Files that get synced into target .claude/. Updates here propagate via /sync.",
+  "tier": "Pro",
+  "capabilities": [
+    "engineering.task-orchestration",
+    "engineering.code-quality",
+    "engineering.deploy-pipeline",
+    "engineering.session-continuity",
+    "engineering.git-discipline",
+    "engineering.secrets-management",
+    "engineering.testing-discipline",
+    "engineering.contracts",
+    "engineering.autonomy"
+  ],
+  "permissions": [
+    "shell:exec",
+    "fs:write",
+    "git:write",
+    "network:fetch",
+    "hooks:install"
+  ],
+  "requires": {},
+  "rasa": {
+    "namespace": "rasa-domain",
+    "domain": "code",
+    "note": "Rasa-specific metadata. Registry-visible alternate names live in top-level `aliases`. Kind, version, source, and requires are part of the universal manifest contract."
+  },
+  "element": {
+    "description": "Files mirrored into the install target via /sync. Was 'kit' in the legacy claude-kit shape; renamed to 'element' per RasaOS canon v1.0.0 vocabulary lock.",
     "naming_convention": {
       "description": "File and skill names use platform prefixes as a discovery hint, NOT a gate. Every project pulls everything; each work session reads the files relevant to the work at hand.",
       "examples": {
@@ -24,381 +54,237 @@
     },
     "files": [
       {
-        "from": "kit/skills/",
+        "from": "content/skills/",
         "to": ".claude/skills/",
         "policy": "directory-mirror",
         "note": "All subdirectories under kit/skills/ are individual skills. Each is mirrored to .claude/skills/. Skill names follow the platform-prefix convention (e.g. 'ios-release/' is iOS-specific)."
       },
       {
-        "from": "kit/modes/",
+        "from": "content/modes/",
         "to": ".claude/modes/",
         "policy": "directory-mirror",
         "note": "Mode definitions (drive prose). Each *.md is a mode. Activated by /mode <name>, which writes .claude/mode.md (the active-mode record, project-owned, never synced)."
       },
       {
-        "from": "kit/agents/",
+        "from": "content/agents/",
         "to": ".claude/agents/",
         "policy": "directory-mirror",
         "note": "Subagent definitions. Each *.md declares a named agent with frontmatter (name, description, tools, model) plus the agent's system prompt. Kit ships three canonical agents: code-reviewer (Read/Glob/Grep/Bash, opus), doc-scanner (Read/Glob/Grep, sonnet), spec-expander (Read/Glob/Grep/Bash, opus). Skills invoke via the Agent tool with subagent_type set to the agent name. Added in v0.13.0."
       },
       {
-        "from": "kit/task-rules.md",
+        "from": "content/task-rules.md",
         "to": ".claude/task-rules.md",
         "policy": "file-replace",
         "note": "Universal execution rules. Project-specific commands come from CLAUDE.md."
       },
       {
-        "from": "kit/craft-rules.md",
+        "from": "content/craft-rules.md",
         "to": ".claude/craft-rules.md",
         "policy": "file-replace",
         "note": "Universal code-quality discipline — build it right the first time, follow the pattern, modular by default, naming, type strictness (declare types in any language; JSDoc on JS/JSX), comments, error handling. Read alongside task-rules.md. Added in v0.10.0."
       },
       {
-        "from": "kit/script-craft.md",
+        "from": "content/script-craft.md",
         "to": ".claude/script-craft.md",
         "policy": "file-replace",
         "note": "How we create, update, and run scripts. Doctrine for script-driven skills (skill folder ships <name>.sh that owns the deterministic mechanics; SKILL.md routes content + choices to the script). Canonical example is kit/skills/save/save.sh. Read before writing any script."
       },
       {
-        "from": "kit/git-flow-rules.md",
+        "from": "content/git-flow-rules.md",
         "to": ".claude/git-flow-rules.md",
         "policy": "file-replace",
         "note": "Five non-negotiable rules for branching, merging to main, deploy tagging, and where deploy commands run. Split out of task-rules.md in v0.8.0."
       },
       {
-        "from": "kit/release-rules.md",
+        "from": "content/release-rules.md",
         "to": ".claude/release-rules.md",
         "policy": "file-replace",
         "note": "Production deploy tagging format, version-bump heuristic, hotfix path, dependency hygiene. Split out of task-rules.md in v0.8.0."
       },
       {
-        "from": "kit/batch-handoff.md",
+        "from": "content/batch-handoff.md",
         "to": ".claude/batch-handoff.md",
         "policy": "file-replace",
         "note": "Multi-task integration flow, post-handoff standby state, merge-to-main confirmation gate. Split out of task-rules.md in v0.8.0."
       },
       {
-        "from": "kit/vocabulary.md",
+        "from": "content/vocabulary.md",
         "to": ".claude/vocabulary.md",
         "policy": "file-replace",
         "note": "Canonical kit term definitions (versioning, batch, tag and bag, lifecycle states, etc.). Project-specific overrides live at .claude/vocabulary-overrides.md (bootstrap-only). Skills resolve overrides first, fall back to defaults."
       },
       {
-        "from": "kit/stamps.md",
+        "from": "content/stamps.md",
         "to": ".claude/stamps.md",
         "policy": "file-replace",
         "note": "Canonical models for every kit reference stamp. Documents the YAML frontmatter shape for each stamp model (cloud, runtime, test, save, skill, agent, mode, and proposed models for decisions, postmortems, tasks, handoffs, audits). Skill authors and stamp-aware tooling consult this file as the schema source-of-truth. Added in v0.19.0."
       },
       {
-        "from": "kit/output-rules.md",
+        "from": "content/output-rules.md",
         "to": ".claude/output-rules.md",
         "policy": "file-replace",
         "note": "Selection and composition rules for structured outputs. Maps kit scenarios (status, release, audit, backlog, etc.) to specific templates in output-styles.md. Read alongside task-rules.md."
       },
       {
-        "from": "kit/output-styles.md",
+        "from": "content/output-styles.md",
         "to": ".claude/output-styles.md",
         "policy": "file-replace",
         "note": "Catalogue of 34 structured-output templates (hero card, dashboard, roadmap, deployment report, severity audit, etc.) with consistent glyph vocabulary. Skills reference this file by §-number."
       },
       {
-        "from": "kit/ios-task-rules.md",
+        "from": "content/ios-task-rules.md",
         "to": ".claude/ios-task-rules.md",
         "policy": "file-replace",
         "note": "iOS platform extensions. Read when working on iOS code."
       },
       {
-        "from": "kit/web-task-rules.md",
+        "from": "content/web-task-rules.md",
         "to": ".claude/web-task-rules.md",
         "policy": "file-replace",
         "note": "Web platform extensions. Read when working on web code."
       },
       {
-        "from": "kit/ios-conventions.md",
+        "from": "content/ios-conventions.md",
         "to": ".claude/ios-conventions.md",
         "policy": "file-replace",
         "note": "iOS architectural conventions and gotchas reference. Includes Default stack, Navigation (NavigationStack with typed path), and Architecture — ViewModels sections (added in v0.10.0)."
       },
       {
-        "from": "kit/web-conventions.md",
+        "from": "content/web-conventions.md",
         "to": ".claude/web-conventions.md",
         "policy": "file-replace",
         "note": "Web platform conventions reference. Default stack is JSX + JSDoc + Vite + React 18 + Tailwind + Firebase + Playwright. Includes architecture (separation of concerns), routing (React Router from day one), Firebase patterns, hosting cache headers, common gotchas. Added in v0.10.0."
       },
       {
-        "from": "kit/task-template.md",
+        "from": "content/task-template.md",
         "to": ".claude/task-template.md",
         "policy": "file-replace"
       },
       {
-        "from": "kit/migration-rules.md",
+        "from": "content/migration-rules.md",
         "to": ".claude/migration-rules.md",
         "policy": "file-replace",
         "note": "Database migration conventions. Project-specific gates come from CLAUDE.md."
       },
       {
-        "from": "kit/pipeline-rules.md",
+        "from": "content/pipeline-rules.md",
         "to": ".claude/pipeline-rules.md",
         "policy": "file-replace",
         "note": "Platform-agnostic pipeline conventions (stages, gates, args, environments)."
       },
       {
-        "from": "kit/test-rules.md",
+        "from": "content/test-rules.md",
         "to": ".claude/test-rules.md",
         "policy": "file-replace",
         "note": "Test stamp model and suite-as-gate conventions. See also: stamps.md."
       },
       {
-        "from": "kit/env-rules.md",
+        "from": "content/env-rules.md",
         "to": ".claude/env-rules.md",
         "policy": "file-replace",
         "note": "Env-var stamp model, profile naming convention, secret discipline. Paired with stamps.md."
       },
       {
-        "from": "kit/secrets-rules.md",
+        "from": "content/secrets-rules.md",
         "to": ".claude/secrets-rules.md",
         "policy": "file-replace",
         "note": "Secret-value handling — central store outside the repo, the .env symlink, how values get entered without entering the AI's context, the two guard hooks. Companion to env-rules.md; implemented by the /secrets skill."
       },
       {
-        "from": "kit/contract-rules.md",
+        "from": "content/contract-rules.md",
         "to": ".claude/contract-rules.md",
         "policy": "file-replace",
         "note": "System-contract model — the contracts/ folder, the contract stamp (schema/endpoint/doc), the lock flag that blocks tasks until the user unlocks, the append-only ledger, and the PreToolUse guard hook. Read when a task touches contracts/. Implemented by the /contract skill; stamp model in stamps.md."
       },
       {
-        "from": "kit/autonomy-rules.md",
+        "from": "content/autonomy-rules.md",
         "to": ".claude/autonomy-rules.md",
         "policy": "file-replace",
         "note": "Shared contract for the kit's autonomous skills — the auto-* family (/auto-task, /auto-phase, /auto-develop, /auto-test) and /mission, the goal orchestrator — decide don't ask, flag every assumption, run to completion, the hard-gate stop list (locked contracts, gated files, merge-to-main, destructive ops), the autonomy report, and the /mission commit/PR exception. Read before authoring or running any autonomous skill."
       },
       {
-        "from": "kit/environment-rules.md",
+        "from": "content/environment-rules.md",
         "to": ".claude/environment-rules.md",
         "policy": "file-replace",
         "note": "The environment model — the .claude/environments.json registry, the machine-local current-env pointer, and the v<semver>-<sha>-<env> version string. Single source of truth for environment names; runtime/cloud/env-var stamps and the deploy pipeline all reference registry keys."
       },
       {
-        "from": "kit/build/deploy",
+        "from": "content/build/deploy",
         "to": "build/deploy",
         "policy": "file-replace",
         "note": "Universal pipeline entry point. --env required, no defaults."
       },
       {
-        "from": "kit/build/stages/",
+        "from": "content/build/stages/",
         "to": "build/stages/",
         "policy": "directory-mirror",
         "note": "Numbered stage scripts (10-preflight, 20-build, 30-test, 40-publish, 50-deploy)."
       },
       {
-        "from": "kit/build/gates/",
+        "from": "content/build/gates/",
         "to": "build/gates/",
         "policy": "directory-mirror",
         "note": "Reusable check scripts (git-clean, tag-matches, approval)."
       },
       {
-        "from": "kit/build/environments/",
+        "from": "content/build/environments/",
         "to": "build/environments/",
         "policy": "directory-mirror",
         "note": "Per-environment env.sh + deploy.sh. Kit ships the 'example' folder as a template — projects copy per env."
       },
       {
-        "from": "kit/tests/suites/",
+        "from": "content/tests/suites/",
         "to": "tests/suites/",
         "policy": "directory-mirror",
         "note": "Named test suites that gate pipeline stages."
       },
       {
-        "from": "kit/tests/container/",
+        "from": "content/tests/container/",
         "to": "tests/container/",
         "policy": "directory-mirror",
         "note": "Container greenlight: validate-image, run-local, check-logs."
       },
       {
-        "from": "kit/tests/stamps/",
+        "from": "content/tests/stamps/",
         "to": "tests/stamps/",
         "policy": "directory-mirror",
         "note": "Kit-shipped test stamps (e.g. container-greenlight). Project-authored stamps live alongside."
       },
       {
-        "from": "kit/tests/scripts/",
+        "from": "content/tests/scripts/",
         "to": "tests/scripts/",
         "policy": "directory-mirror",
         "note": "Fallback test scripts for projects without a native test framework."
       },
       {
-        "from": "kit/dashboard/",
+        "from": "content/dashboard/",
         "to": ".claude/dashboard/",
         "policy": "opt-in",
         "note": "Opt-in status dashboard (self-contained Python + HTML, stdlib only). Registered so MANIFEST.json is a complete inventory of kit/, but intentionally NOT auto-installed: bin/init skips opt-in entries, and /sync skips any non-mirror/replace policy. Add it per project via the /dashboard skill or `cp -r kit/dashboard .claude/`. See kit/dashboard/README.md."
-      }
-    ]
-  },
-  "bootstrap": {
-    "description": "One-time files copied at init only. Never overwritten by /sync.",
-    "files": [
-      {
-        "from": "bootstrap/CLAUDE.md.template",
-        "to": "CLAUDE.md",
-        "policy": "skip-if-exists"
       },
       {
-        "from": "bootstrap/PHASES.md.template",
-        "to": "tasks/PHASES.md",
-        "policy": "skip-if-exists"
+        "from": "content/intake-template.md",
+        "to": ".claude/intake-template.md",
+        "policy": "file-replace",
+        "note": "Task-intake template. Source for triage skills."
       },
       {
-        "from": "bootstrap/ROADMAP.md.template",
-        "to": "tasks/ROADMAP.md",
-        "policy": "skip-if-exists"
+        "from": "content/task-template-bug.md",
+        "to": ".claude/task-template-bug.md",
+        "policy": "file-replace",
+        "note": "Bug-shape task template."
       },
       {
-        "from": "bootstrap/AUDIT.md.template",
-        "to": "tasks/AUDIT.md",
-        "policy": "skip-if-exists"
+        "from": "content/task-template-hotfix.md",
+        "to": ".claude/task-template-hotfix.md",
+        "policy": "file-replace",
+        "note": "Hotfix-shape task template."
       },
       {
-        "from": "bootstrap/RELEASES.md.template",
-        "to": "tasks/RELEASES.md",
-        "policy": "skip-if-exists",
-        "note": "Forward-looking release plan — per release: version, status, and the phases/tasks slated for it. Read by /release (cross-checks plan vs. what merged) and /roadmap (shipped-version lookup). The plan; tasks/AUDIT.md is the log."
-      },
-      {
-        "from": "bootstrap/foundation.json",
-        "to": ".claude/foundation.json",
-        "policy": "init-only-with-sha",
-        "note": "Stamped with the kit's HEAD commit SHA at init time."
-      },
-      {
-        "from": "bootstrap/pact.md.template",
-        "to": ".claude/pact.md",
-        "policy": "skip-if-exists",
-        "note": "Personal working-relationship contract with Claude. Distinct from CLAUDE.md (project facts). Portable across repos."
-      },
-      {
-        "from": "bootstrap/settings.json.template",
-        "to": ".claude/settings.json",
-        "policy": "skip-if-exists",
-        "note": "Claude Code settings scaffold — permissions, env vars, hooks, statusline. Empty structure so projects extend without inventing the shape. Project owns it after bootstrap; /sync never overwrites. Use /fewer-permission-prompts to auto-populate sensible read-only allows. Added in v0.13.0."
-      },
-      {
-        "from": "bootstrap/cloud.md.template",
-        "to": ".claude/clouds/_template.md",
-        "policy": "skip-if-exists",
-        "note": "Per-cloud setup template. Each cloud / deployment surface gets its own file at .claude/clouds/<name>.md following this shape — frontmatter (name, provider, kind, environments, pulls_from) + body (auth, commands, config files, gotchas). Filename starts with _ so it's a clear template, not a real cloud entry. Distinct from .claude/settings.json which configures the Claude Code harness — clouds files describe surfaces; settings.json describes how the harness behaves. Added in v0.16.0."
-      },
-      {
-        "from": "bootstrap/runtime-dev-server.md.template",
-        "to": ".claude/runtimes/_template-dev-server.md",
-        "policy": "skip-if-exists",
-        "note": "Runtime template for long-running dev servers with a port — web frontends, REST/GraphQL APIs, etc. Reference stamp (YAML frontmatter) declares commands, ports, env requirements, depends_on, health_check. Body is qualitative context. Added in v0.18.0."
-      },
-      {
-        "from": "bootstrap/runtime-mobile-app.md.template",
-        "to": ".claude/runtimes/_template-mobile-app.md",
-        "policy": "skip-if-exists",
-        "note": "Runtime template for mobile apps (iOS, Android, Flutter, React Native). Build-and-run model rather than long-running server. Stamp captures simulator/device defaults, build_artifacts path. Body covers simulator management and how to connect to local backends. Added in v0.18.0."
-      },
-      {
-        "from": "bootstrap/runtime-script.md.template",
-        "to": ".claude/runtimes/_template-script.md",
-        "policy": "skip-if-exists",
-        "note": "Runtime template for one-shot CLI scripts and batch tools. Stamp captures install + run commands, common arg patterns, env requirements. process.type = one-shot. Added in v0.18.0."
-      },
-      {
-        "from": "bootstrap/runtime-worker.md.template",
-        "to": ".claude/runtimes/_template-worker.md",
-        "policy": "skip-if-exists",
-        "note": "Runtime template for background workers (queue consumers, cron jobs, file watchers). Long-running but no port. Stamp captures queue/broker config, concurrency. Added in v0.18.0."
-      },
-      {
-        "from": "bootstrap/test-endpoint.md.template",
-        "to": ".claude/tests/_template-endpoint-test.md",
-        "policy": "skip-if-exists",
-        "note": "Test template for single API endpoint verification. Stamp declares runtimes_required, verification script path, expected outcome. References field marks the script as a reference implementation for client code. Added in v0.18.0."
-      },
-      {
-        "from": "bootstrap/test-flow.md.template",
-        "to": ".claude/tests/_template-flow.md",
-        "policy": "skip-if-exists",
-        "note": "Test template for multi-step user flows (signup, checkout, etc.). Same shape as endpoint-test but with multi-step body and longer timeout. Added in v0.18.0."
-      },
-      {
-        "from": "bootstrap/test-e2e.md.template",
-        "to": ".claude/tests/_template-e2e.md",
-        "policy": "skip-if-exists",
-        "note": "Test template for end-to-end across multiple runtimes (web + api + worker). Coordinates parallel runtime starts. Test framework field declares Playwright/Cypress/etc. Added in v0.18.0."
-      },
-      {
-        "from": "bootstrap/test-smoke.md.template",
-        "to": ".claude/tests/_template-smoke.md",
-        "policy": "skip-if-exists",
-        "note": "Test template for minimal 'does it boot?' smoke checks. Fast by design — typical use is pre-deploy / per-push CI. Added in v0.18.0."
-      },
-      {
-        "from": "bootstrap/welcome.md.template",
-        "to": ".claude/welcome.md",
-        "policy": "skip-if-exists",
-        "note": "First-thing-on-session-start file. Auto-updated by /handoff."
-      },
-      {
-        "from": "bootstrap/wont-do.md.template",
-        "to": ".claude/wont-do.md",
-        "policy": "skip-if-exists",
-        "note": "Anti-feature list — closed conversations the project has decided against."
-      },
-      {
-        "from": "bootstrap/playlists.md.template",
-        "to": ".claude/playlists.md",
-        "policy": "skip-if-exists",
-        "note": "Curated skill chains for routine moments (morning ritual, end-of-day, weekly, etc.)."
-      },
-      {
-        "from": "bootstrap/bookmarks.md.template",
-        "to": ".claude/bookmarks.md",
-        "policy": "skip-if-exists",
-        "note": "Curated path:line pointers for fast orientation."
-      },
-      {
-        "from": "bootstrap/vocabulary.md.template",
-        "to": ".claude/vocabulary-overrides.md",
-        "policy": "skip-if-exists",
-        "note": "Project-specific vocabulary overrides. Skills resolve term meanings here first, falling back to kit defaults at .claude/vocabulary.md. Empty seed; project fills in only the terms it overrides (e.g. iOS projects override 'patch' due to the Apple build-number constraint)."
-      },
-      {
-        "from": "bootstrap/MIGRATIONS.md.template",
-        "to": "migrations/MIGRATIONS.md",
-        "policy": "skip-if-exists"
-      },
-      {
-        "from": "bootstrap/TESTS.md.template",
-        "to": "tests/TESTS.md",
-        "policy": "skip-if-exists",
-        "note": "Test stamp registry — appended over time."
-      },
-      {
-        "from": "bootstrap/pipeline-config.toml.template",
-        "to": "build/pipeline-config.toml",
-        "policy": "skip-if-exists",
-        "note": "Project pipeline config (env list, project type, hooks). Filled by /setup-deploy."
-      },
-      {
-        "from": "bootstrap/deploy-log.md.template",
-        "to": "build/deploy-log.md",
-        "policy": "skip-if-exists",
-        "note": "Append-only deploy log — every ./build/deploy run records a row."
-      },
-      {
-        "from": "bootstrap/ENV.md.template",
-        "to": "env/ENV.md",
-        "policy": "skip-if-exists",
-        "note": "Human-readable rollup of env vars by group. Authoritative list lives in env/stamps/."
-      },
-      {
-        "from": "bootstrap/environments.json.template",
-        "to": ".claude/environments.json",
-        "policy": "skip-if-exists",
-        "note": "Environment registry — single source of truth for the project's environments (env_file, version_env, publish_to/deploy_to cloud targets, requires_approval). Seeded with local/staging/prod; the project owns it after bootstrap. Read by the /environment skill (environment.sh). See environment-rules.md."
+        "from": "content/task-template-stub.md",
+        "to": ".claude/task-template-stub.md",
+        "policy": "file-replace",
+        "note": "Stub-shape task template — minimal seed entries."
       }
     ]
   },
@@ -435,6 +321,174 @@
       "tests/scripts",
       "env",
       "env/stamps"
+    ]
+  },
+  "seed": {
+    "description": "One-time files copied at install only. Never overwritten by /sync. Was \"bootstrap\" in the legacy claude-kit shape; renamed to \"seed\" per RasaOS canon v1.0.0 vocabulary lock.",
+    "files": [
+      {
+        "from": "seed/CLAUDE.md.template",
+        "to": "CLAUDE.md",
+        "policy": "skip-if-exists"
+      },
+      {
+        "from": "seed/PHASES.md.template",
+        "to": "tasks/PHASES.md",
+        "policy": "skip-if-exists"
+      },
+      {
+        "from": "seed/ROADMAP.md.template",
+        "to": "tasks/ROADMAP.md",
+        "policy": "skip-if-exists"
+      },
+      {
+        "from": "seed/AUDIT.md.template",
+        "to": "tasks/AUDIT.md",
+        "policy": "skip-if-exists"
+      },
+      {
+        "from": "seed/RELEASES.md.template",
+        "to": "tasks/RELEASES.md",
+        "policy": "skip-if-exists",
+        "note": "Forward-looking release plan — per release: version, status, and the phases/tasks slated for it. Read by /release (cross-checks plan vs. what merged) and /roadmap (shipped-version lookup). The plan; tasks/AUDIT.md is the log."
+      },
+      {
+        "from": "seed/rasa.lock.json.template",
+        "to": ".claude/rasa.lock.json",
+        "policy": "init-only-with-sha",
+        "note": "Stamped with the Element HEAD commit SHA at init time. Lockfile shape per RasaOS canon §6 (Connection Contract)."
+      },
+      {
+        "from": "seed/pact.md.template",
+        "to": ".claude/pact.md",
+        "policy": "skip-if-exists",
+        "note": "Personal working-relationship contract with Claude. Distinct from CLAUDE.md (project facts). Portable across repos."
+      },
+      {
+        "from": "seed/settings.json.template",
+        "to": ".claude/settings.json",
+        "policy": "skip-if-exists",
+        "note": "Claude Code settings scaffold — permissions, env vars, hooks, statusline. Empty structure so projects extend without inventing the shape. Project owns it after bootstrap; /sync never overwrites. Use /fewer-permission-prompts to auto-populate sensible read-only allows. Added in v0.13.0."
+      },
+      {
+        "from": "seed/cloud.md.template",
+        "to": ".claude/clouds/_template.md",
+        "policy": "skip-if-exists",
+        "note": "Per-cloud setup template. Each cloud / deployment surface gets its own file at .claude/clouds/<name>.md following this shape — frontmatter (name, provider, kind, environments, pulls_from) + body (auth, commands, config files, gotchas). Filename starts with _ so it's a clear template, not a real cloud entry. Distinct from .claude/settings.json which configures the Claude Code harness — clouds files describe surfaces; settings.json describes how the harness behaves. Added in v0.16.0."
+      },
+      {
+        "from": "seed/runtime-dev-server.md.template",
+        "to": ".claude/runtimes/_template-dev-server.md",
+        "policy": "skip-if-exists",
+        "note": "Runtime template for long-running dev servers with a port — web frontends, REST/GraphQL APIs, etc. Reference stamp (YAML frontmatter) declares commands, ports, env requirements, depends_on, health_check. Body is qualitative context. Added in v0.18.0."
+      },
+      {
+        "from": "seed/runtime-mobile-app.md.template",
+        "to": ".claude/runtimes/_template-mobile-app.md",
+        "policy": "skip-if-exists",
+        "note": "Runtime template for mobile apps (iOS, Android, Flutter, React Native). Build-and-run model rather than long-running server. Stamp captures simulator/device defaults, build_artifacts path. Body covers simulator management and how to connect to local backends. Added in v0.18.0."
+      },
+      {
+        "from": "seed/runtime-script.md.template",
+        "to": ".claude/runtimes/_template-script.md",
+        "policy": "skip-if-exists",
+        "note": "Runtime template for one-shot CLI scripts and batch tools. Stamp captures install + run commands, common arg patterns, env requirements. process.type = one-shot. Added in v0.18.0."
+      },
+      {
+        "from": "seed/runtime-worker.md.template",
+        "to": ".claude/runtimes/_template-worker.md",
+        "policy": "skip-if-exists",
+        "note": "Runtime template for background workers (queue consumers, cron jobs, file watchers). Long-running but no port. Stamp captures queue/broker config, concurrency. Added in v0.18.0."
+      },
+      {
+        "from": "seed/test-endpoint.md.template",
+        "to": ".claude/tests/_template-endpoint-test.md",
+        "policy": "skip-if-exists",
+        "note": "Test template for single API endpoint verification. Stamp declares runtimes_required, verification script path, expected outcome. References field marks the script as a reference implementation for client code. Added in v0.18.0."
+      },
+      {
+        "from": "seed/test-flow.md.template",
+        "to": ".claude/tests/_template-flow.md",
+        "policy": "skip-if-exists",
+        "note": "Test template for multi-step user flows (signup, checkout, etc.). Same shape as endpoint-test but with multi-step body and longer timeout. Added in v0.18.0."
+      },
+      {
+        "from": "seed/test-e2e.md.template",
+        "to": ".claude/tests/_template-e2e.md",
+        "policy": "skip-if-exists",
+        "note": "Test template for end-to-end across multiple runtimes (web + api + worker). Coordinates parallel runtime starts. Test framework field declares Playwright/Cypress/etc. Added in v0.18.0."
+      },
+      {
+        "from": "seed/test-smoke.md.template",
+        "to": ".claude/tests/_template-smoke.md",
+        "policy": "skip-if-exists",
+        "note": "Test template for minimal 'does it boot?' smoke checks. Fast by design — typical use is pre-deploy / per-push CI. Added in v0.18.0."
+      },
+      {
+        "from": "seed/welcome.md.template",
+        "to": ".claude/welcome.md",
+        "policy": "skip-if-exists",
+        "note": "First-thing-on-session-start file. Auto-updated by /handoff."
+      },
+      {
+        "from": "seed/wont-do.md.template",
+        "to": ".claude/wont-do.md",
+        "policy": "skip-if-exists",
+        "note": "Anti-feature list — closed conversations the project has decided against."
+      },
+      {
+        "from": "seed/playlists.md.template",
+        "to": ".claude/playlists.md",
+        "policy": "skip-if-exists",
+        "note": "Curated skill chains for routine moments (morning ritual, end-of-day, weekly, etc.)."
+      },
+      {
+        "from": "seed/bookmarks.md.template",
+        "to": ".claude/bookmarks.md",
+        "policy": "skip-if-exists",
+        "note": "Curated path:line pointers for fast orientation."
+      },
+      {
+        "from": "seed/vocabulary.md.template",
+        "to": ".claude/vocabulary-overrides.md",
+        "policy": "skip-if-exists",
+        "note": "Project-specific vocabulary overrides. Skills resolve term meanings here first, falling back to kit defaults at .claude/vocabulary.md. Empty seed; project fills in only the terms it overrides (e.g. iOS projects override 'patch' due to the Apple build-number constraint)."
+      },
+      {
+        "from": "seed/MIGRATIONS.md.template",
+        "to": "migrations/MIGRATIONS.md",
+        "policy": "skip-if-exists"
+      },
+      {
+        "from": "seed/TESTS.md.template",
+        "to": "tests/TESTS.md",
+        "policy": "skip-if-exists",
+        "note": "Test stamp registry — appended over time."
+      },
+      {
+        "from": "seed/pipeline-config.toml.template",
+        "to": "build/pipeline-config.toml",
+        "policy": "skip-if-exists",
+        "note": "Project pipeline config (env list, project type, hooks). Filled by /setup-deploy."
+      },
+      {
+        "from": "seed/deploy-log.md.template",
+        "to": "build/deploy-log.md",
+        "policy": "skip-if-exists",
+        "note": "Append-only deploy log — every ./build/deploy run records a row."
+      },
+      {
+        "from": "seed/ENV.md.template",
+        "to": "env/ENV.md",
+        "policy": "skip-if-exists",
+        "note": "Human-readable rollup of env vars by group. Authoritative list lives in env/stamps/."
+      },
+      {
+        "from": "seed/environments.json.template",
+        "to": ".claude/environments.json",
+        "policy": "skip-if-exists",
+        "note": "Environment registry — single source of truth for the project's environments (env_file, version_env, publish_to/deploy_to cloud targets, requires_approval). Seeded with local/staging/prod; the project owns it after bootstrap. Read by the /environment skill (environment.sh). See environment-rules.md."
+      }
     ]
   }
 }
