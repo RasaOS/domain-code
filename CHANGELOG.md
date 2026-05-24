@@ -20,6 +20,31 @@ human-readable rollback).
 
 ---
 
+## v0.41.1 — 2026-05-23
+
+### Declare conformance to Element Contract v1.2.0
+
+Added `contract_version: "1.2.0"` to `rasa.json` (placed after
+`$schema`, before `name`), per Element Contract §5a (two-version
+pattern: `version` = project semver, `contract_version` = which
+Element-format spec this Element conforms to).
+
+No structural change. `rasa.domain.code` already satisfied every
+v1.2.0 rasa.json requirement — this commit just declares the
+conformance explicitly so downstream loaders + auditors don't have
+to infer it.
+
+Source of contract: `https://raw.githubusercontent.com/RasaOS/element-contract/v1.2.0/ELEMENT_CONTRACT.md`
+(canon `~/rAI/rasa-os/canon/v1.2.0/elements/ELEMENT_CONTRACT.md`).
+
+Note: CHANGELOG entries for v0.39.0 / v0.40.0 / v0.41.0 are
+missing — the rasa.json `version` was bumped without per-version
+notes. Reconstructing those is out of scope for this commit
+(separate housekeeping). This entry covers only the v0.41.0 → v0.41.1
+contract-conformance bump.
+
+---
+
 ## v0.38.0 — 2026-05-20
 
 ### Live release tracking — `RELEASES.md` reworked + `/release-add`
