@@ -20,6 +20,82 @@ human-readable rollback).
 
 ---
 
+## v0.42.0 — 2026-05-24
+
+### Conform to `rasa.domain.core` v1.0.0 unified shape
+
+`rasa.domain.core v1.0.0` (canon v1.3.0 Phase 2) locked down the
+unified shape every domain Element follows. This bump brings
+`rasa.domain.code` into conformance with the universal canon-required
+files (§4) it was missing.
+
+### Added — canon §4 required files
+
+- **`CLAUDE.md`** at repo root (the missing required file that
+  surfaced as drift during the domain-core Phase 2 analysis). Per-repo
+  working contract for sessions opened in this Element's own folder
+  (distinct from `seed/CLAUDE.md.template` which seeds install
+  targets). Explains: the two-level distinction (kit vs install
+  target), source-of-truth chain, toolkit shape pattern declaration,
+  rasa.json discipline, verify gates (check-manifest + lint), the
+  v1.3 vocabulary lock + install-vs-pull terms, don'ts, version-bump
+  rules, what success looks like.
+- **`VERSION`** file (0.42.0). Workspace convention per
+  ELEMENT_CONTRACT §4. Mirrors `rasa.json#version`.
+- **`LICENSE`** — Apache-2.0 full text. Matches claude-kit historical
+  lineage (the pre-RasaOS upstream this Element was renamed from) +
+  `rasa.domain.legal` + `rasa.domain.core v1.0.0` decision.
+
+### Changed
+
+- **`rasa.json#contract_version`**: 1.2.0 → 1.3.0. Tracks canon
+  v1.3.0 SA-018 (tenant as 8th Element kind). Backwards-compatible —
+  domain Elements at contract_version 1.2.0 + 1.1.0 + 1.0.0 remain
+  valid; this Element bumps to declare current conformance.
+- **`rasa.json#version`**: 0.41.1 → 0.42.0 (minor — three new
+  canon-required files).
+- **`VERSION`**: was missing; now 0.42.0.
+
+### Not changed (deliberate)
+
+Per role-split + scope, this conformance bump touches ONLY the
+missing required-files + version bump. The actual toolkit content
+under `content/`, `seed/`, and `bin/` is untouched. That's the
+domain-code team's seat (and represents over a month of careful
+authoring).
+
+The existing `bin/check-manifest` is bash+python; canonical form
+per `rasa.domain.core v1.0.0` is pure-python (cross-platform). Not
+switched here — current implementation works; switching is a
+non-required upgrade for a future session if/when Windows support
+becomes relevant for engineering-toolkit users.
+
+### Smoke-tested
+
+- `bin/check-manifest` → OK (167 tracked files under content/+seed/,
+  all registered; CLAUDE.md/VERSION/LICENSE are root-level, not
+  tracked by check-manifest's content+seed scope).
+- `python3 -c "import json; json.load(open('rasa.json'))"` → valid.
+
+### Drift caught + fixed
+
+Domain-core v1.0.0's Phase 2 analysis flagged that `rasa.domain.code`
+was missing CLAUDE.md at root (canon ELEMENT_CONTRACT §4 violation).
+Logged in canon `AUDIT.md` 2026-05-24 entry as "for the domain-code
+team to fix next time the repo's touched." Workspace orchestrator
+was directed by user this session to do the conformance pass
+across all three domains — drift resolved here.
+
+### Backwards compatibility
+
+Existing consumers pinning to `rasa.domain.code v0.41.1` via
+`.claude/rasa.lock.json` are unaffected. v0.42.0 adds CLAUDE.md +
+VERSION + LICENSE at repo root; none of these install into consumer
+projects (root-level files aren't in `element.files[]`). `/sync`
+will not push them; this is a kit-repo-only change.
+
+---
+
 ## v0.41.1 — 2026-05-23
 
 ### Declare conformance to Element Contract v1.2.0
