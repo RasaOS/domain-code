@@ -14,6 +14,12 @@ human-readable rollback).
 
 ---
 
+## 0.42.1 — 2026-07-09
+
+### Added `/kit`-aware `bin/init` (canon SA-024)
+
+- `bin/init` now clones the Element source into `<project>/kit/<element>/` for `/sync` + `/promote`. (This Element keeps its own richer `/sync` + `/contribute`; a `/kit` adaptation of those is a follow-up.)
+
 ## Unreleased
 
 (no entries yet)

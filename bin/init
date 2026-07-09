@@ -1,226 +1,177 @@
 #!/usr/bin/env bash
 #
-# rasa.domain.code init — bootstrap a project with this Element.
+# rasa.domain.core init — minimal canonical installer for the
+# domain Element template.
 #
 # Usage:
 #   bin/init [target-dir]
 #
 # If [target-dir] is omitted, the current working directory is used.
 #
-# This script is the Element-primitive installer per RasaOS canon v1.0.0
-# (see ~/rAI/rasaos-canon/01_system_specification.html §5–§7). What gets
-# installed is declared entirely in rasa.json — this script holds NO
-# hardcoded file list. It reads the Connection Contract and applies each
-# entry by its policy:
+# This script is the Element-primitive installer per canon
+# ELEMENT_CONTRACT.md §7 (install policies). What gets installed
+# is declared entirely in rasa.json — this script holds NO
+# hardcoded file list. It reads the Connection Contract and applies
+# each entry in element.files[] and seed.files[] by its declared
+# policy.
 #
-#   element.files[]          files the Element owns (updated later via /sync)
-#     directory-mirror       overlay a directory's contents into the target
-#     file-replace           copy a single file (overwrites)
-#     opt-in                 registered but NOT installed — added manually
-#   seed.files[]             one-time files, never overwritten by /sync
-#     skip-if-exists         copy only if the target is absent
-#     init-only-with-sha     copy + stamp {{ELEMENT_SHA}} {{ELEMENT_BRANCH}} {{TODAY}}
-#   scaffold.directories[]   empty directories created with a .gitkeep
-#
-# Because the manifest is the single source of truth, adding a file to
-# the Element is a one-line rasa.json edit — bin/init and /sync both
-# pick it up with no change to this script. bin/check-manifest guards
-# the manifest against drifting from the tree.
-#
-# Requirements:
-#   - python3, to parse rasa.json.
-#   - The Element must already be on disk — clone it first. No network calls.
+# For domain-core specifically: element.files[] entries are all
+# policy 'opt-in' (the v1.1.0 starter layer ships but is NOT installed
+# until a fork flips a policy), so an init here installs nothing from
+# content/. seed.files[] has the two canonical templates
+# (CLAUDE.md.template + rasa.lock.json.template). So an init here
+# mainly writes the lockfile + the project CLAUDE.md.
 
 set -euo pipefail
 
-# ─── Resolve target + Element location ─────────────────────────────────────
-TARGET="${1:-$PWD}"
-mkdir -p "$TARGET"
+# ---------- Paths + args ----------
+
+ELEMENT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TARGET="${1:-$(pwd)}"
 TARGET="$(cd "$TARGET" && pwd)"
 
-ELEMENT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-ELEMENT_REPO_URL="https://github.com/rasa-os/domain-code"
+if [[ "$TARGET" == "$ELEMENT_DIR" ]]; then
+  echo "✗ Refusing to install into the Element's own folder." >&2
+  echo "  Per ELEMENT_CONTRACT — Elements don't install into themselves." >&2
+  exit 1
+fi
+
+# ---------- Read rasa.json ----------
+
 MANIFEST="$ELEMENT_DIR/rasa.json"
 
-# ─── Preflight ─────────────────────────────────────────────────────────────
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "ERROR: bin/init requires python3 to parse rasa.json — install it and re-run." >&2
-  exit 1
-fi
-if [ ! -f "$MANIFEST" ]; then
-  echo "ERROR: rasa.json not found at $MANIFEST" >&2
-  exit 1
-fi
-if ! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$MANIFEST" >/dev/null 2>&1; then
-  echo "ERROR: rasa.json is not valid JSON: $MANIFEST" >&2
+if [[ ! -f "$MANIFEST" ]]; then
+  echo "✗ rasa.json not found at $MANIFEST" >&2
   exit 1
 fi
 
-# ─── Resolve Element identity (for the rasa.lock.json pin) ─────────────────
-if git -C "$ELEMENT_DIR" rev-parse HEAD >/dev/null 2>&1; then
-  ELEMENT_SHA="$(git -C "$ELEMENT_DIR" rev-parse HEAD)"
-  ELEMENT_BRANCH="$(git -C "$ELEMENT_DIR" rev-parse --abbrev-ref HEAD)"
+# Resolve Element identity for lockfile stamping
+ELEMENT_NAME="$(python3 -c "import json; print(json.load(open('$MANIFEST'))['name'])")"
+ELEMENT_KIND="$(python3 -c "import json; print(json.load(open('$MANIFEST'))['kind'])")"
+ELEMENT_VERSION="$(python3 -c "import json; print(json.load(open('$MANIFEST'))['version'])")"
+ELEMENT_REPO="$(python3 -c "import json; print(json.load(open('$MANIFEST'))['source']['repo'])")"
+ELEMENT_BRANCH="$(python3 -c "import json; print(json.load(open('$MANIFEST'))['source']['branch'])")"
+
+# Resolve current Element SHA
+ELEMENT_SHA="$(git -C "$ELEMENT_DIR" rev-parse HEAD 2>/dev/null || echo "uncommitted")"
+TODAY="$(date -u +%Y-%m-%d)"
+
+echo "→ Installing $ELEMENT_NAME @ $ELEMENT_VERSION ($ELEMENT_SHA)"
+echo "  into: $TARGET"
+echo ""
+
+# ---------- Apply element.files[] ----------
+
+count_elem="$(python3 -c "import json; print(len(json.load(open('$MANIFEST')).get('element', {}).get('files', [])))")"
+
+if [[ "$count_elem" -eq 0 ]]; then
+  echo "  element.files[] empty — domain-core v0.x ships zero content."
 else
-  # Element downloaded as a tarball — /sync still works, treats files as drifted.
-  ELEMENT_SHA="unpinned"
-  ELEMENT_BRANCH="main"
-fi
-TODAY="$(date +%Y-%m-%d)"
+  echo "  Applying $count_elem element.files[] entries..."
+  python3 - "$MANIFEST" "$ELEMENT_DIR" "$TARGET" <<'PYEOF'
+import json, os, shutil, sys
 
-echo "rasa.domain.code init"
-echo "  source:   $ELEMENT_DIR (sha: ${ELEMENT_SHA:0:12}, branch: $ELEMENT_BRANCH)"
-echo "  target:   $TARGET"
-echo "  manifest: rasa.json"
-echo
+manifest_path, element_dir, target = sys.argv[1], sys.argv[2], sys.argv[3]
+manifest = json.load(open(manifest_path))
 
-# ─── Manifest reader ───────────────────────────────────────────────────────
-# Emits tab-separated records, one per line:
-#   F <TAB> <policy> <TAB> <from> <TAB> <to>   — a file/dir to install
-#   D <TAB> <dir>                              — a directory to scaffold
-manifest_records() {
-  python3 - "$MANIFEST" <<'PYEOF'
-import json, sys
-m = json.load(open(sys.argv[1]))
-for e in m.get("element", {}).get("files", []):
-    print("F\t%s\t%s\t%s" % (e["policy"], e["from"], e["to"]))
-for e in m.get("seed", {}).get("files", []):
-    print("F\t%s\t%s\t%s" % (e["policy"], e["from"], e["to"]))
-for d in m.get("scaffold", {}).get("directories", []):
-    print("D\t%s" % d)
+for entry in manifest.get('element', {}).get('files', []):
+    src = os.path.join(element_dir, entry['from'])
+    dst = os.path.join(target, entry['to'])
+    policy = entry['policy']
+    if policy == 'opt-in':
+        continue  # not installed automatically — create nothing in the target
+    # Only materialize the target directory for policies that write.
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    if policy == 'directory-mirror':
+        if os.path.isdir(src):
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+    elif policy == 'file-replace':
+        shutil.copy2(src, dst)
+    else:
+        print(f"  ⚠ unknown element.files[] policy: {policy} for {entry['from']}", file=sys.stderr)
 PYEOF
+fi
+
+# ---------- Apply seed.files[] ----------
+
+count_seed="$(python3 -c "import json; print(len(json.load(open('$MANIFEST')).get('seed', {}).get('files', [])))")"
+
+if [[ "$count_seed" -eq 0 ]]; then
+  echo "  seed.files[] empty — no one-time files to copy."
+else
+  echo "  Applying $count_seed seed.files[] entries..."
+  python3 - "$MANIFEST" "$ELEMENT_DIR" "$TARGET" \
+    "$ELEMENT_NAME" "$ELEMENT_KIND" "$ELEMENT_VERSION" \
+    "$ELEMENT_REPO" "$ELEMENT_BRANCH" "$ELEMENT_SHA" "$TODAY" <<'PYEOF'
+import json, os, shutil, sys
+
+(manifest_path, element_dir, target,
+ elem_name, elem_kind, elem_version,
+ elem_repo, elem_branch, elem_sha, today) = sys.argv[1:11]
+
+manifest = json.load(open(manifest_path))
+
+subs = {
+    '{{ELEMENT_NAME}}':    elem_name,
+    '{{ELEMENT_KIND}}':    elem_kind,
+    '{{ELEMENT_VERSION}}': elem_version,
+    '{{ELEMENT_REPO}}':    elem_repo,
+    '{{ELEMENT_BRANCH}}':  elem_branch,
+    '{{ELEMENT_SHA}}':     elem_sha,
+    '{{TODAY}}':           today,
 }
 
-FAILURES=0
+for entry in manifest.get('seed', {}).get('files', []):
+    src = os.path.join(element_dir, entry['from'])
+    dst = os.path.join(target, entry['to'])
+    policy = entry['policy']
 
-# ─── 1. Install files (element.files + seed.files) ─────────────────────────
-echo "→ Installing files (per rasa.json)"
-
-while IFS=$'\t' read -r rtype policy src_rel dst_rel; do
-  [ "$rtype" = "F" ] || continue
-  src="$ELEMENT_DIR/$src_rel"
-  dst="$TARGET/$dst_rel"
-
-  case "$policy" in
-    directory-mirror)
-      if [ ! -d "$src" ]; then
-        echo "    ERROR:   $src_rel — source directory missing"
-        FAILURES=$((FAILURES + 1))
+    if policy == 'skip-if-exists' and os.path.exists(dst):
+        print(f"    · skip (exists): {entry['to']}")
         continue
-      fi
-      mkdir -p "$dst"
-      cp -R "${src%/}/." "$dst"
-      echo "    mirror:  $dst_rel"
-      ;;
-    file-replace)
-      if [ ! -f "$src" ]; then
-        echo "    ERROR:   $src_rel — source file missing"
-        FAILURES=$((FAILURES + 1))
-        continue
-      fi
-      mkdir -p "$(dirname "$dst")"
-      cp "$src" "$dst"
-      echo "    file:    $dst_rel"
-      ;;
-    opt-in)
-      echo "    opt-in:  $dst_rel  (registered, not installed — see $src_rel)"
-      ;;
-    skip-if-exists)
-      if [ -e "$dst" ]; then
-        echo "    skip:    $dst_rel  (exists)"
-      elif [ ! -e "$src" ]; then
-        echo "    ERROR:   $src_rel — source missing"
-        FAILURES=$((FAILURES + 1))
-      else
-        mkdir -p "$(dirname "$dst")"
-        cp "$src" "$dst"
-        echo "    create:  $dst_rel"
-      fi
-      ;;
-    init-only-with-sha)
-      if [ -e "$dst" ]; then
-        echo "    skip:    $dst_rel  (exists — /sync updates the pin)"
-      elif [ ! -e "$src" ]; then
-        echo "    ERROR:   $src_rel — source missing"
-        FAILURES=$((FAILURES + 1))
-      else
-        mkdir -p "$(dirname "$dst")"
-        sed -e "s|{{ELEMENT_SHA}}|$ELEMENT_SHA|g" \
-            -e "s|{{ELEMENT_BRANCH}}|$ELEMENT_BRANCH|g" \
-            -e "s|{{TODAY}}|$TODAY|g" \
-            "$src" > "$dst"
-        echo "    create:  $dst_rel  (pinned to ${ELEMENT_SHA:0:12})"
-      fi
-      ;;
-    *)
-      echo "    WARNING: $dst_rel — unknown policy '$policy', skipped"
-      FAILURES=$((FAILURES + 1))
-      ;;
-  esac
-done < <(manifest_records)
 
-# ─── 2. Restore executable bit on scripts ──────────────────────────────────
-# cp usually preserves it; make it certain for what skills and deploy run.
-if [ -d "$TARGET/.claude/skills" ]; then
-  find "$TARGET/.claude/skills" -type f \( -name '*.sh' -o -name '*.py' \) \
-    -exec chmod +x {} + 2>/dev/null || true
-fi
-if [ -d "$TARGET/build" ]; then
-  find "$TARGET/build" -type f \( -name '*.sh' -o -name 'deploy' \) \
-    -exec chmod +x {} + 2>/dev/null || true
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+
+    if policy == 'init-only-with-sha':
+        with open(src) as f:
+            content = f.read()
+        for k, v in subs.items():
+            content = content.replace(k, v)
+        with open(dst, 'w') as f:
+            f.write(content)
+        print(f"    · stamp: {entry['to']}")
+    elif policy in ('skip-if-exists', 'file-replace'):
+        # skip-if-exists already handled the exists case above
+        shutil.copy2(src, dst)
+        print(f"    · copy: {entry['to']}")
+    else:
+        print(f"    ⚠ unknown seed.files[] policy: {policy} for {entry['from']}", file=sys.stderr)
+PYEOF
 fi
 
-# ─── 3. Scaffold directories ───────────────────────────────────────────────
-echo
-echo "→ Scaffolding directories (per rasa.json)"
-
-while IFS=$'\t' read -r rtype dir; do
-  [ "$rtype" = "D" ] || continue
-  full="$TARGET/$dir"
-  mkdir -p "$full"
-  if [ -z "$(ls -A "$full" 2>/dev/null)" ]; then
-    touch "$full/.gitkeep"
-    echo "    create:  $dir/.gitkeep"
+# ---------- Clone the Element source into <target>/kit/<folder>/ (the /kit stash) ----------
+# A persistent, pinned reference clone of the Element's source repo. It powers
+# /sync (smart-pull upstream changes) and /promote (smart-push local changes back
+# upstream). Cloned from the local Element dir (fast, no network); origin is
+# repointed at the real upstream so /sync + /promote fetch/push GitHub.
+ELEMENT_FOLDER="$(basename "$ELEMENT_DIR")"
+KIT_DIR="$TARGET/kit/$ELEMENT_FOLDER"
+if command -v git >/dev/null 2>&1 && [[ "$ELEMENT_SHA" != "uncommitted" ]]; then
+  if [[ -d "$KIT_DIR/.git" ]]; then
+    echo "  kit: kit/$ELEMENT_FOLDER already present (left as-is)"
   else
-    echo "    skip:    $dir  (not empty)"
+    mkdir -p "$TARGET/kit"
+    if git clone --quiet "$ELEMENT_DIR" "$KIT_DIR" 2>/dev/null; then
+      git -C "$KIT_DIR" remote set-url origin "$ELEMENT_REPO" 2>/dev/null || true
+      git -C "$KIT_DIR" checkout --quiet "$ELEMENT_SHA" 2>/dev/null || true
+      echo "  kit: cloned → kit/$ELEMENT_FOLDER (origin $ELEMENT_REPO, pinned ${ELEMENT_SHA:0:12})"
+    else
+      echo "  kit: ⚠ clone failed for $ELEMENT_FOLDER — /sync + /promote will clone on first use" >&2
+    fi
   fi
-done < <(manifest_records)
-
-# ─── Done ──────────────────────────────────────────────────────────────────
-echo
-if [ "$FAILURES" -gt 0 ]; then
-  echo "⚠  rasa.domain.code installed with $FAILURES problem(s) — see ERROR/WARNING lines above."
-  echo "   This usually means rasa.json references a path that doesn't exist."
-  echo "   Run bin/check-manifest in the Element repo to diagnose."
-  echo
 fi
 
-cat <<EOF
-✅ rasa.domain.code installed.
-
-Next steps:
-  1. Open CLAUDE.md and fill in the {{PLACEHOLDERS}} for this project
-     (tech stack, build/test/run/deploy commands, schema ownership,
-     and **declare the project's platform** in the "## Platform"
-     section so the right .claude/<platform>-*.md files apply).
-  2. Open tasks/PHASES.md and tasks/ROADMAP.md to draft your first
-     phase + tasks. (Or run /plan to think through it.)
-  3. Run /skills inside Claude Code to confirm the skill set.
-  4. Run /status anytime for a project snapshot.
-
-About the platform-prefixed files (ios-*, web-*, python-*, etc.):
-  - All of them get installed regardless of platform — the prefix
-    is a discovery hint, not a gate.
-  - Agents read the prefix files relevant to the work at hand. The
-    "## Platform" declaration in CLAUDE.md tells them which.
-
-When the Element gets new versions later:
-  - Run /sync inside Claude Code to pull updates.
-  - Project files (CLAUDE.md, PHASES.md, AUDIT.md, etc.) are never
-    touched by /sync. Skills and rule files are.
-
-Source: $ELEMENT_REPO_URL
-EOF
-
-if [ "$FAILURES" -gt 0 ]; then
-  exit 1
-fi
+echo ""
+echo "✓ $ELEMENT_NAME @ $ELEMENT_VERSION installed into $TARGET"
+echo "  Lockfile: $TARGET/.claude/rasa.lock.json"
+echo "  Kit stash: $TARGET/kit/$ELEMENT_FOLDER (for /sync + /promote)"
