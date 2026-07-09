@@ -1,5 +1,8 @@
 # CLAUDE.md — `rasa.domain.code`
 
+> **Who you are (SA-025).** `rasa.domain.code` — the RasaOS domain for software engineering. Substrate: **RasaOS**; role: **domain**. On install `bin/init` renders this into `.claude/rasa-identity.md`; `/whoami` composes the full identity with the project's deployment layer.
+
+
 Per-repo working contract for Claude sessions opened inside this
 folder (the **Element repo itself**, not a project that has the
 Element installed). Extends `~/.claude/CLAUDE.md` and the workspace

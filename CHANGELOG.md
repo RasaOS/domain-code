@@ -14,6 +14,12 @@ human-readable rollback).
 
 ---
 
+## 0.42.2 — 2026-07-09
+
+### Element identity layer (canon SA-025)
+
+- Added `rasa.identity` ("the RasaOS domain for software engineering"); `bin/init` generates `.claude/rasa-identity.md` from it every install + stamps project-owned `.claude/rasa-deployment.md`; ships `/whoami`; CLAUDE.md "Who you are" header.
+
 ## 0.42.1 — 2026-07-09
 
 ### Added `/kit`-aware `bin/init` (canon SA-024)
