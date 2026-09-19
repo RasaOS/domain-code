@@ -3,7 +3,7 @@
   "element": {
     "name": "rasa.domain.code",
     "kind": "domain",
-    "repo": "https://github.com/rasa-os/domain-code",
+    "repo": "https://github.com/RasaOS/domain-code",
     "branch": "{{ELEMENT_BRANCH}}"
   },
   "pinned_sha": "{{ELEMENT_SHA}}",
