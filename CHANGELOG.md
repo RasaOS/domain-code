@@ -14,6 +14,69 @@ human-readable rollback).
 
 ---
 
+## v0.43.0 — 2026-09-19
+
+_Authored 2026-06-25; held uncommitted and cut on 2026-09-19 against
+`v0.42.2`. The convergence scoping it records was done on the authoring
+date._
+
+### Declare the five canonical engineering modules as standards (`requires.elements[]`)
+
+**Additive / non-breaking.** Populates `requires.elements[]` (previously
+`{}`) with the five `module`-kind Elements distilled out of this toolkit:
+
+```json
+"requires": {
+  "elements": [
+    { "name": "rasa.module.tasks",     "version": ">=0.1.0" },
+    { "name": "rasa.module.releases",  "version": ">=0.1.0" },
+    { "name": "rasa.module.pipelines", "version": ">=0.1.0" },
+    { "name": "rasa.module.tests",     "version": ">=0.1.0" },
+    { "name": "rasa.module.jobs",      "version": ">=0.1.0" }
+  ]
+}
+```
+
+This is the **standards declaration**: `rasa.domain.code` now names these
+modules as its standard composition. It is intentionally additive — the
+inline content is **retained and unchanged** — so existing consumers that
+`/sync` or `bin/init` see no behavior change.
+
+### Why the inline content is NOT yet removed (deprecated-pending-resolver)
+
+The eventual end-state is single-source: the modules own
+task/release/pipeline/test, and this toolkit drops its inline copies. That
+strip is **deferred, with evidence**:
+
+- **No resolver exists yet.** `bin/init` installs only this Element's own
+  `element.files[]`; nothing pulls `requires.elements[]` in (the kernel
+  dependency-resolver is Phase 6/7; kernel is Phase 0). Deleting the inline
+  content today would leave consumers with *nothing* in its place.
+- **The inline content is connective tissue.** A convergence-mapping
+  workflow (2026-06-25, 5 mappers + 3 adversarial reference-verifiers)
+  found **80 dangling references across 57 kept files** if the inline
+  task/release/pipeline/test content were deleted now — `task-rules.md`
+  alone is referenced by 35+ skills.
+- **Three design issues block a clean strip**, flagged for the future
+  removal pass:
+  1. **`/build` semantic collision** — this toolkit's `/build` (compile /
+     type-check, don't run) vs `rasa.module.pipelines`' `/build` (run the
+     CI/CD pipeline for an env). Same install path, different concept.
+     Must be resolved (e.g. rename the compile skill to `/compile`) before
+     either can own `.claude/skills/build/`.
+  2. **Prod-approval gate** — `build/gates/approval.sh` is not re-supplied
+     by `module.pipelines`; the strip would regress prod-deploy approval.
+  3. **`tasks/PHASES.md` + `tasks/AUDIT.md`** — `module.tasks` does not
+     seed these targets; they must be reconciled (folded into ROADMAP /
+     added to the module) before `task-rules.md` is removed.
+
+The deprecated inline set + the gating conditions are recorded in
+`rasa.json#rasa.convergence`. The removal lands in a future
+**breaking** release once the resolver exists and the three issues are
+resolved.
+
+---
+
 ## 0.42.2 — 2026-07-09
 
 ### Element identity layer (canon SA-025)
