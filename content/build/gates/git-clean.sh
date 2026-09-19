@@ -22,10 +22,22 @@
 # The second time that bites, someone aliases FORCE_DIRTY=1 — and
 # FORCE_DIRTY is blanket, so the PRODUCTION clean-tree check goes with it.
 #
-# So for non-production classes those paths are excluded. For
-# ENV_CLASS=prod the check is unfiltered: nothing is waved through on the
-# way to production, and a release should be coming off a clean tree
-# anyway. Set BOOKKEEPING_STRICT=1 to get the unfiltered check everywhere.
+# TWO TIERS, because two different systems write here.
+#
+#   ALWAYS excluded: deploys/ and build/deploy-log.md. These are written
+#   BY THIS PIPELINE, during the very run being gated — build/deploy opens
+#   a ship-log record before stage 10 executes. Counting them is
+#   self-referential: a release off a PERFECTLY CLEAN tree failed its own
+#   preflight on the record it had just written, so 100% of pipeline
+#   releases failed. Excluding them for non-prod only (the first attempt
+#   at this fix) left production broken, which is the half that matters.
+#
+#   Excluded for NON-PROD only: tasks/. That is task enforcement's
+#   bookkeeping — a different system, representing work in progress, and
+#   a production release legitimately should not be carrying uncommitted
+#   task churn.
+#
+# BOOKKEEPING_STRICT=1 excludes nothing, anywhere.
 #
 # The audit system must never be the reason a deploy gate fires.
 # Operators disable the gate that costs them, not the one that protects
@@ -45,17 +57,30 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   exit 0
 fi
 
+# Anchor at the repo root. `git status` is cwd-scoped, so a gate invoked
+# from a subdirectory would report a clean tree while the rest of the repo
+# was dirty. (`:/` as a pathspec base does NOT combine with :(exclude) —
+# verified; cd is what actually works.)
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
 ENV_CLASS="${ENV_CLASS:-unclassified}"
 STRICT="${BOOKKEEPING_STRICT:-${TASK_CHURN_STRICT:-0}}"
 
+# `:(exclude)` is a pathspec magic word, supported by git 1.9+.
+# `:/` anchors to the repo root so the result does not depend on the cwd
+# the caller happened to be in.
+PIPELINE_OWN=(':(exclude)deploys/' ':(exclude)build/deploy-log.md')
+TASK_CHURN=(':(exclude)tasks/')
+
 DIRTY=""
 EXCLUDED=""
-if [[ "$ENV_CLASS" == "prod" || "$STRICT" == "1" ]]; then
+if [[ "$STRICT" == "1" ]]; then
   DIRTY="$(git status --porcelain)"
+elif [[ "$ENV_CLASS" == "prod" ]]; then
+  DIRTY="$(git status --porcelain -- . "${PIPELINE_OWN[@]}")"
+  EXCLUDED="$(git status --porcelain -- 'deploys/' 'build/deploy-log.md')"
 else
-  # `:(exclude)` is a pathspec magic word, supported by git 1.9+.
-  DIRTY="$(git status --porcelain -- . \
-            ':(exclude)tasks/' ':(exclude)deploys/' ':(exclude)build/deploy-log.md')"
+  DIRTY="$(git status --porcelain -- . "${PIPELINE_OWN[@]}" "${TASK_CHURN[@]}")"
   EXCLUDED="$(git status --porcelain -- 'tasks/' 'deploys/' 'build/deploy-log.md')"
 fi
 
@@ -69,8 +94,13 @@ fi
 
 if [[ -n "$EXCLUDED" ]]; then
   n="$(printf '%s\n' "$EXCLUDED" | grep -c . || true)"
-  echo "  (${n:-0} uncommitted bookkeeping file(s) ignored — tasks/, deploys/,"
-  echo "   build/deploy-log.md. ENV_CLASS=prod or BOOKKEEPING_STRICT=1 counts them.)"
+  if [[ "$ENV_CLASS" == "prod" ]]; then
+    echo "  (${n:-0} pipeline-owned bookkeeping file(s) ignored — deploys/,"
+    echo "   build/deploy-log.md. tasks/ IS counted for prod.)"
+  else
+    echo "  (${n:-0} bookkeeping file(s) ignored — tasks/, deploys/,"
+    echo "   build/deploy-log.md. BOOKKEEPING_STRICT=1 counts them.)"
+  fi
 fi
 
 echo "✓ Working tree clean"

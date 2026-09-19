@@ -84,22 +84,57 @@ digest() {
   fi
 }
 
-# Key names + whether each has a value. NEVER the value.
+# Key NAMES and whether each has a value. Never a value, and never a
+# fragment of one.
+#
+# The hard part is multi-line values. A PEM key in a .env is written as
+#
+#   PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----
+#   MIIEowIBAAKCAQEA...
+#   -----END RSA PRIVATE KEY-----"
+#
+# and a naive `-F=` parser treats every continuation line as its own
+# assignment, printing the key material as a "key name". This function
+# used to do exactly that, into the output SKILL.md tells the agent to
+# use INSTEAD of cat. So it tracks quote continuation and skips the body.
+#
+# A line-shape guard alone is NOT enough: base64 padding means a line like
+# `MIIEowIBAAKCAQEA==` matches `IDENT=` and would still print a prefix of
+# the key. The quote state machine is what actually closes it.
 key_map() {
   local f="$1"
   [ -e "$f" ] || return 0
-  awk -F= '
-    /^[ \t]*#/ { next }
-    /^[ \t]*$/ { next }
+  awk '
+    BEGIN { incont = 0; q = "" }
     {
-      k = $1
-      gsub(/^[ \t]+|[ \t]+$/, "", k)
+      line = $0
+      # Inside a multi-line value: emit nothing until the quote closes.
+      if (incont) {
+        if (index(line, q) > 0) { incont = 0; q = "" }
+        next
+      }
+      if (line ~ /^[ \t]*#/)  next
+      if (line ~ /^[ \t]*$/)  next
+      # Must look like a real assignment, anchored at the start.
+      if (line !~ /^[ \t]*(export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*=/) next
+
+      k = line
+      sub(/^[ \t]*/, "", k)
       sub(/^export[ \t]+/, "", k)
-      if (k == "") next
-      v = substr($0, index($0, "=") + 1)
-      gsub(/^[ \t]+|[ \t]+$/, "", v)
+      eq  = index(k, "=")
+      key = substr(k, 1, eq - 1);  sub(/[ \t]+$/, "", key)
+      v   = substr(k, eq + 1);     sub(/^[ \t]+/, "", v)
+
+      # An opening quote with no closing quote on the same line starts a
+      # continuation. Report the key, then swallow the body.
+      if (substr(v, 1, 1) == "\"" || substr(v, 1, 1) == "\x27") {
+        q    = substr(v, 1, 1)
+        rest = substr(v, 2)
+        if (index(rest, q) == 0) { incont = 1; printf "%s=set\n", key; next }
+      }
       gsub(/^["\x27]|["\x27]$/, "", v)
-      printf "%s=%s\n", k, (v == "" ? "empty" : "set")
+      sub(/[ \t]+$/, "", v)
+      printf "%s=%s\n", key, (v == "" ? "empty" : "set")
     }
   ' "$f"
 }

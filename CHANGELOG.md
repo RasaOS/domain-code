@@ -24,6 +24,88 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.47.1 — 2026-09-19
+
+### Two defects found by a pre-push audit, before any of this reached anyone
+
+Both were in code written earlier in this same sequence. Both were found
+by adversarial review and reproduced by hand, not by reading.
+
+#### `/env-sync fingerprint` printed private key material
+
+`env-sync.sh` claimed, in its own header, that it "NEVER prints file
+contents" and that its stdout is safe to put in a model's context.
+**That claim was false**, and the failure landed on the exact command
+`SKILL.md` tells the agent to use *instead of* `cat`.
+
+A multi-line value — a PEM key in a `.env`, which is entirely ordinary:
+
+```
+PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----
+MIIEowIBAAKCAQEA...
+-----END RSA PRIVATE KEY-----"
+```
+
+…was parsed with `awk -F=`, so every continuation line became its own
+"assignment" and the key body was printed as a key NAME.
+
+`key_map` now tracks quote continuation and skips the body. Note that a
+line-shape guard alone is **not** sufficient — base64 padding means a
+line like `MIIEowIBAAKCAQEA==` matches `IDENT=` and would still print a
+prefix of the key. The state machine is what actually closes it.
+
+The header claim is now scoped and honest: it emits key names and
+`set`/`empty`, and says plainly that it is a parser, not a substitute for
+not pointing an agent at a credential file.
+
+Verified against double-quoted and single-quoted multi-line values,
+base64 padding, `export `-prefixed keys, and empty values: no value
+material in output, all seven keys still reported correctly.
+
+#### Every pipeline release failed its own preflight
+
+`build/deploy` opens a ship-log record **before** the stages run
+(`content/build/deploy:185`). `git-clean.sh` then ran unfiltered for
+`ENV_CLASS=prod`. So a release from a **perfectly clean tree** failed
+stage 10 on the record it had just written — **100% of pipeline releases,
+including every `/release` rerouted through the pipeline in v0.45.0.**
+
+The v0.47.0 fix excluded bookkeeping for non-prod only, which left
+production — the half that matters — broken.
+
+Now two tiers:
+
+- **Always excluded:** `deploys/`, `build/deploy-log.md`. Written *by
+  this pipeline, during the run being gated*. Counting them is
+  self-referential.
+- **Excluded for non-prod only:** `tasks/`. A different system's
+  bookkeeping, representing work in progress; a production release
+  legitimately should not carry uncommitted task churn.
+- `BOOKKEEPING_STRICT=1` excludes nothing, anywhere.
+
+Also fixed while in there: the gate now anchors at the repo root, so it
+no longer reports a clean tree when invoked from a subdirectory while the
+rest of the repo is dirty. (`:/` as a pathspec base does **not** combine
+with `:(exclude)` — verified; `cd` to the toplevel is what works.)
+
+Verified: release on a clean tree passes; a second release with the first
+one's records present passes; prod still blocks task churn and any real
+code change; staging still passes with task churn; a dirty file outside
+the cwd is now detected from a subdirectory.
+
+#### Still open from the audit, deliberately not in this patch
+
+Ranked, for the next patch: ledger records can overwrite each other when
+two land in the same second (the `.lock` is released before the `.md` is
+written, so the `.md` itself should be the reservation); `for f in $(ls
+…)` breaks every ledger view in a repo path containing a space;
+`bin/init` re-run still overwrites `build/stages/*` because `overrides[]`
+is preserved but never *read*; `preprod`/`nonprod` classify as production
+via substring match with no escape; ~12 shipped call sites still invoke
+`./build/deploy` without the now-mandatory `--intent`.
+
+---
+
 ## v0.47.0 — 2026-09-19
 
 ### Task enforcement — no code change without a task, at CHANGE time
