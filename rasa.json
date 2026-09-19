@@ -2,7 +2,7 @@
   "$schema": "https://rasa-os.github.io/schema/rasa.schema.v1.json",
   "contract_version": "1.3.0",
   "name": "rasa.domain.code",
-  "version": "0.43.0",
+  "version": "0.43.1",
   "kind": "domain",
   "aliases": [
     "claude-kit",
@@ -44,7 +44,7 @@
   "rasa": {
     "namespace": "rasa-domain",
     "domain": "code",
-    "note": "Rasa-specific metadata. Registry-visible alternate names live in top-level `aliases`. Kind, version, source, and requires are part of the universal manifest contract.",
+    "note": "Rasa-specific metadata. Registry-visible alternate names live in top-level `aliases`. Kind, version, source, and requires are part of the universal Connection Contract.",
     "convergence": "v0.43.0 (2026-06-25) declares the five canonical engineering modules (rasa.module.{tasks,releases,pipelines,tests,jobs}) as standards via requires.elements[]. This is the STANDARDS DECLARATION; it is additive and non-breaking. The inline element.files[]/seed entries for the task / release / pipeline / test concepts (e.g. .claude/task-rules.md, .claude/release-rules.md, .claude/pipeline-rules.md, .claude/test-rules.md, content/build/*, content/tests/*, content/skills/{task,backlog,roadmap,release,release-add,build,setup-deploy}) are DEPRECATED-PENDING-REMOVAL: they remain the working source today because no kernel dependency-resolver yet pulls required Elements (kernel is Phase 0). They are retired only once the resolver mounts the required modules into a consumer. The physical strip was scoped (workflow 2026-06-25: 80 dangling refs across 57 kept files; the /build compile-vs-pipeline semantic collision; the build/gates/approval.sh prod-gate regression) and gated on (a) the resolver existing and (b) resolving those three design issues. See CHANGELOG 0.43.0.",
     "identity": {
       "one_liner": "the RasaOS domain for software engineering",
@@ -73,7 +73,7 @@
         "from": "content/skills/",
         "to": ".claude/skills/",
         "policy": "directory-mirror",
-        "note": "All subdirectories under kit/skills/ are individual skills. Each is mirrored to .claude/skills/. Skill names follow the platform-prefix convention (e.g. 'ios-release/' is iOS-specific)."
+        "note": "All subdirectories under content/skills/ are individual skills. Each is mirrored to .claude/skills/. Skill names follow the platform-prefix convention (e.g. 'ios-release/' is iOS-specific)."
       },
       {
         "from": "content/modes/",
@@ -85,7 +85,7 @@
         "from": "content/agents/",
         "to": ".claude/agents/",
         "policy": "directory-mirror",
-        "note": "Subagent definitions. Each *.md declares a named agent with frontmatter (name, description, tools, model) plus the agent's system prompt. Kit ships three canonical agents: code-reviewer (Read/Glob/Grep/Bash, opus), doc-scanner (Read/Glob/Grep, sonnet), spec-expander (Read/Glob/Grep/Bash, opus). Skills invoke via the Agent tool with subagent_type set to the agent name. Added in v0.13.0."
+        "note": "Subagent definitions. Each *.md declares a named agent with frontmatter (name, description, tools, model) plus the agent's system prompt. This Element ships three canonical agents: auditor (Read/Glob/Grep/Bash, opus), doc-scanner (Read/Glob/Grep, sonnet), spec-expander (Read/Glob/Grep/Bash, opus). Skills invoke via the Agent tool with subagent_type set to the agent name. Added in v0.13.0."
       },
       {
         "from": "content/task-rules.md",
@@ -103,7 +103,7 @@
         "from": "content/script-craft.md",
         "to": ".claude/script-craft.md",
         "policy": "file-replace",
-        "note": "How we create, update, and run scripts. Doctrine for script-driven skills (skill folder ships <name>.sh that owns the deterministic mechanics; SKILL.md routes content + choices to the script). Canonical example is kit/skills/save/save.sh. Read before writing any script."
+        "note": "How we create, update, and run scripts. Doctrine for script-driven skills (skill folder ships <name>.sh that owns the deterministic mechanics; SKILL.md routes content + choices to the script). Canonical example is content/skills/save/save.sh. Read before writing any script."
       },
       {
         "from": "content/git-flow-rules.md",
@@ -276,7 +276,7 @@
         "from": "content/dashboard/",
         "to": ".claude/dashboard/",
         "policy": "opt-in",
-        "note": "Opt-in status dashboard (self-contained Python + HTML, stdlib only). Registered so MANIFEST.json is a complete inventory of kit/, but intentionally NOT auto-installed: bin/init skips opt-in entries, and /sync skips any non-mirror/replace policy. Add it per project via the /dashboard skill or `cp -r kit/dashboard .claude/`. See kit/dashboard/README.md."
+        "note": "Opt-in status dashboard (self-contained Python + HTML, stdlib only). Registered so rasa.json is a complete inventory of content/, but intentionally NOT auto-installed: bin/init skips opt-in entries, and /sync skips any non-mirror/replace policy. Add it per project via the /dashboard skill or `cp -r content/dashboard .claude/`. See content/dashboard/README.md."
       },
       {
         "from": "content/intake-template.md",
@@ -302,41 +302,6 @@
         "policy": "file-replace",
         "note": "Stub-shape task template — minimal seed entries."
       }
-    ]
-  },
-  "scaffold": {
-    "description": "Empty directories created at init.",
-    "directories": [
-      "tasks/triage",
-      "tasks/backlog",
-      "tasks/active",
-      "tasks/done",
-      "docs/decisions",
-      "docs/postmortems",
-      "docs/notes",
-      "docs/audits",
-      "docs/handoff",
-      "docs/regrets",
-      "docs/retros",
-      "docs/blast-radius",
-      "docs/scope",
-      "docs/exports",
-      "docs/proto",
-      "docs/mvp",
-      "docs/refinement",
-      ".claude/tradeoffs",
-      ".claude/inbox",
-      ".claude/clouds",
-      ".claude/runtimes",
-      ".claude/tests",
-      "migrations",
-      "build",
-      "tests",
-      "tests/stamps",
-      "tests/suites",
-      "tests/scripts",
-      "env",
-      "env/stamps"
     ]
   },
   "seed": {

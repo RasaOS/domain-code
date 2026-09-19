@@ -60,9 +60,26 @@ echo "→ Installing $ELEMENT_NAME @ $ELEMENT_VERSION ($ELEMENT_SHA)"
 echo "  into: $TARGET"
 echo ""
 
+# A non-numeric count means the manifest read FAILED, not that the list is
+# empty. `[[ "$x" -eq 0 ]]` evaluates an unparseable value as 0, so without
+# this guard a broken manifest reports "empty — nothing to copy" and exits
+# 0 having installed nothing. Fail loudly instead. See CHANGELOG 0.43.1.
+require_count() {
+  local label="$1" value="$2"
+  case "$value" in
+    ''|*[!0-9]*)
+      echo "✗ init: could not read $label from $MANIFEST (got: '$value')." >&2
+      echo "  Refusing to continue — a partial install is worse than none." >&2
+      exit 1
+      ;;
+  esac
+}
+
 # ---------- Apply element.files[] ----------
 
 count_elem="$(python3 -c "import json; print(len(json.load(open('$MANIFEST')).get('element', {}).get('files', [])))")"
+
+require_count "element.files[]" "$count_elem"
 
 if [[ "$count_elem" -eq 0 ]]; then
   echo "  element.files[] empty — domain-core v0.x ships zero content."
@@ -96,6 +113,8 @@ fi
 
 count_seed="$(python3 -c "import json; print(len(json.load(open('$MANIFEST')).get('seed', {}).get('files', [])))")"
 
+require_count "seed.files[]" "$count_seed"
+
 if [[ "$count_seed" -eq 0 ]]; then
   echo "  seed.files[] empty — no one-time files to copy."
 else
@@ -121,6 +140,43 @@ subs = {
     '{{TODAY}}':           today,
 }
 
+# Consumer-owned keys survive a re-stamp; Element-owned keys are refreshed.
+# `overrides` is the consumer's deliberate list of files they have diverged
+# and do not want overwritten. `installed_at` is a historical fact about the
+# first install. Unknown keys are assumed consumer-added and kept.
+CONSUMER_OWNED = ('overrides',)
+
+
+def merge_stamp(dst, new_text, today):
+    """Merge a freshly-substituted stamp over an existing one.
+
+    Returns (text, None) on success or (None, reason) when the existing file
+    cannot be understood — in which case the caller must leave it alone.
+    Overwriting an unparseable lockfile would destroy the very overrides
+    this function exists to protect.
+    """
+    try:
+        with open(dst) as fh:
+            old = json.load(fh)
+        new = json.loads(new_text)
+    except (ValueError, OSError) as exc:
+        return None, type(exc).__name__
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return None, 'not a JSON object'
+
+    merged = dict(new)
+    for key in CONSUMER_OWNED:
+        if key in old:
+            merged[key] = old[key]
+    if 'installed_at' in old:
+        merged['installed_at'] = old['installed_at']
+    for key, value in old.items():
+        if key not in merged:
+            merged[key] = value
+    merged['last_synced'] = today
+    return json.dumps(merged, indent=2) + '\n', None
+
+
 for entry in manifest.get('seed', {}).get('files', []):
     src = os.path.join(element_dir, entry['from'])
     dst = os.path.join(target, entry['to'])
@@ -137,9 +193,26 @@ for entry in manifest.get('seed', {}).get('files', []):
             content = f.read()
         for k, v in subs.items():
             content = content.replace(k, v)
-        with open(dst, 'w') as f:
-            f.write(content)
-        print(f"    · stamp: {entry['to']}")
+
+        if os.path.exists(dst):
+            # A re-run is the update path (there is no working /sync), so it
+            # must refresh the pin WITHOUT destroying consumer state. Before
+            # 0.43.1 this branch did not exist: re-running bin/init silently
+            # reset `overrides[]` to [], and the next sync then overwrote
+            # every file the consumer had deliberately protected.
+            merged, why = merge_stamp(dst, content, today)
+            if merged is None:
+                print(f"    \u26a0 keep (unmergeable, {why}): {entry['to']}"
+                      f" \u2014 pin NOT refreshed; fix or delete the file",
+                      file=sys.stderr)
+            else:
+                with open(dst, 'w') as f:
+                    f.write(merged)
+                print(f"    \u00b7 restamp (overrides preserved): {entry['to']}")
+        else:
+            with open(dst, 'w') as f:
+                f.write(content)
+            print(f"    \u00b7 stamp: {entry['to']}")
     elif policy in ('skip-if-exists', 'file-replace'):
         # skip-if-exists already handled the exists case above
         shutil.copy2(src, dst)

@@ -1,4 +1,4 @@
-# claude-kit changelog
+# `rasa.domain.code` changelog
 
 Versioning is `MAJOR.MINOR.PATCH`. Bumps:
 
@@ -9,8 +9,145 @@ Versioning is `MAJOR.MINOR.PATCH`. Bumps:
 - **Patch** — bugfixes, doc edits, no behavior change.
 
 Tags: `vX.Y.Z`, annotated. Projects pin to a tag in their
-`.claude/foundation.json` (or to a SHA, but tags are preferred for
+`.claude/rasa.lock.json` (`pinned_sha`, or a tag — tags are preferred for
 human-readable rollback).
+
+Entry headings are `## v<semver> — YYYY-MM-DD`, newest first. The `v` is
+load-bearing: `/sync` parses these headings to render the upgrade delta for
+a consumer, and an entry without it is invisible in that report.
+
+---
+
+## Unreleased
+
+(no entries yet)
+
+---
+
+## v0.43.1 — 2026-09-19
+
+### Foundation patch — fix the gates that reported success while doing nothing
+
+Four things in this Element passed, printed a green result, and were not
+checking anything. None of it was visible from CI, because CI had the same
+blind spots.
+
+#### `content/build/gates/approval.sh` — the production approval gate could not be passed
+
+- It tested `[[ ! -t 0 ]]` and aborted, conflating "stdin is a pipe" with
+  "nobody is there". A pipeline stage runs with stdin redirected while the
+  operator is still at the terminal, so the gate failed closed on exactly
+  the caller it exists to protect. It now probes and prompts on the
+  controlling terminal (`/dev/tty`), and fails closed only when there is
+  genuinely no terminal.
+- `${REPLY,,}` is bash 4 syntax. `/bin/bash` on stock macOS is 3.2.57,
+  where it is a `bad substitution` — so even with a terminal, typing `yes`
+  exited 1. **The only route through this gate was `FORCE_APPROVAL=1`, its
+  own bypass.** Lowercasing now goes through `tr`.
+- New `APPROVAL_TIMEOUT` (default 120s, integer, `0` waits forever). A
+  detached process can inherit a terminal nobody is watching; without a
+  bound that hangs a deploy indefinitely. **Timing out aborts** — the gate
+  never approves by default.
+- Whitespace is stripped as well as lowercased, so a terminal's trailing
+  `\r` and a fat-fingered `" yes"` both still approve.
+
+#### `bin/lint` — enumerated zero files and exited 0 on every run since v0.42.0
+
+It globbed `kit/`, `kit/skills/` and `bootstrap/`; v0.42.0 renamed those to
+`content/`, `content/skills/` and `seed/` without updating the globs. The
+gate `CLAUDE.md` mandates before tagging had silently stopped reading, and
+CI's `continue-on-error: true` has been redundant ever since. Repointed.
+
+First honest run: 198 findings across 120 files, 9 HIGH. Six of the nine
+were linter false positives rather than content drift, three of them
+exposing a gap in its own classification — the `runtime-*.md.template`
+family and `pipeline-rules.md` are multi-platform *by subject*. Added to
+the existing `CROSS_CUTTING_BASENAMES` floor, which surfaces them at MEDIUM
+rather than silencing them. 9 HIGH -> 5.
+
+#### `bin/init` — a re-run destroyed consumer state, and a broken manifest installed nothing silently
+
+- `init-only-with-sha` had no exists-check despite the policy name, so
+  re-running `bin/init` reset `.claude/rasa.lock.json#overrides[]` to `[]`
+  — and the next sync then overwrote every file the consumer had
+  deliberately protected. A re-run now **merges**: Element-owned fields are
+  refreshed, `overrides[]` and `installed_at` and any consumer-added keys
+  are preserved, and a `last_synced` stamp is added. An unparseable
+  lockfile is left untouched with a warning rather than clobbered.
+- The `element.files[]` / `seed.files[]` counts came from a `python3`
+  one-liner whose failure produced a non-numeric value, which
+  `[[ "$x" -eq 0 ]]` evaluates as zero — so a manifest read error reported
+  "empty — nothing to copy" and exited 0 having installed nothing. Both
+  counts now hard-fail on a non-numeric value.
+
+This matters more than it looks: `/sync` is dead (it gates on
+`.claude/foundation.json`, which has not existed since the v1.0.0 canon
+lock), so **`bin/init` is the update path**. It had to become safe to
+re-run before it could be one.
+
+#### `bin/check-bash32` — new hard gate for the bash 3.2 floor
+
+`bash -n` is not a portability check: it parses with whatever bash is
+running, so on a bash-5 CI runner every bash-4-ism is clean. All 40 shipped
+scripts passed `bash -n` while the production approval gate aborted at
+runtime. Six patterns are now rejected — case-modifying expansions,
+`mapfile`/`readarray`, associative arrays, `&>>`, `case` fall-through, and
+`globstar`. Full-line comments are stripped before matching; a deliberate
+exception carries a trailing `# bash32-ok`. Verified against the pre-fix
+`approval.sh`: it catches it.
+
+#### CI
+
+`.github/workflows/kit-checks.yml` -> `.github/workflows/checks.yml`, four
+jobs. **New `macos-latest` job actually executes the gates** on the bash
+3.2.57 every macOS consumer has, rather than syntax-checking them on bash
+5: the approval gate must honour `FORCE_APPROVAL` and must fail closed with
+no terminal, and `bin/init` must survive a re-run with `overrides[]`
+intact. Every step was run locally on bash 3.2.57 before shipping.
+
+> **Note for repo settings:** the workflow's check name changed from
+> `kit checks` to `checks`. If branch protection requires the old name, it
+> needs updating.
+
+#### Vocabulary + manifest hygiene
+
+- `rasa.json`: `manifest contract` -> `Connection Contract`; three `kit/`
+  path references -> `content/`; `MANIFEST.json` -> `rasa.json`. The
+  agents note advertised a `code-reviewer` agent this Element does not ship
+  — corrected to `auditor`, which is what it ships and what `/audit` calls.
+- **Removed the dead `scaffold.directories` block** (30 entries). `bin/init`
+  has never read it, 20 of the 30 directories do not exist after an install,
+  and the list still named `tasks/done`, renamed to `tasks/completed` back
+  at v0.36.0. Deleted rather than extended: 30 lines of configuration that
+  lies are worse than an honest absence. Creating these directories for real
+  is tracked as separate work.
+- `CHANGELOG.md`: retitled from `claude-kit changelog`; the pin instruction
+  named `.claude/foundation.json`, which does not exist — now
+  `.claude/rasa.lock.json`; `## Unreleased` was stranded between 0.42.1 and
+  v0.42.0 and moved above the newest release; documented that the `v` in
+  `## v<semver> — DATE` is load-bearing, since `/sync` parses it.
+- `README.md`: the license section claimed **MIT** while `LICENSE` is
+  **Apache-2.0** — on a public repo. Also corrected the repo URL (no longer
+  "planned") and a `~/rAI/rasaos-canon/` source-of-truth path that does not
+  exist. The body remains the pre-canon `claude-kit` README; a full rewrite
+  is its own work.
+
+#### Checked and found NOT broken
+
+`audit.sh validate` was reported as passing by accident. It does not: it
+returns 0 on a complete report and 3 on both a placeholder-bearing and a
+truncated one. The zero-placeholder path did rely on a `"00"` string
+coincidence, so the expression was made explicit — but no behaviour
+changed and no bug was fixed.
+
+#### Not done here
+
+`bin/lint` is **still advisory**, not a hard gate. The 5 remaining HIGH
+findings are content judgement calls rather than bugs — two of them
+(`pip install pyyaml` in `runtime/SKILL.md`) are this Element's own tooling
+dependency, which the linter cannot distinguish from platform drift.
+Promoting it to a hard gate requires triaging those, and that is a content
+decision, not a patch.
 
 ---
 
@@ -89,11 +226,6 @@ resolved.
 
 - `bin/init` now clones the Element source into `<project>/kit/<element>/` for `/sync` + `/promote`. (This Element keeps its own richer `/sync` + `/contribute`; a `/kit` adaptation of those is a follow-up.)
 
-## Unreleased
-
-(no entries yet)
-
----
 
 ## v0.42.0 — 2026-05-24
 
