@@ -11,8 +11,7 @@
 # --intent declares DIRECTION and is enforced by gates/class-guard.sh:
 #   deploy   -> dev / staging. Can never reach production.
 #   release  -> production, tagged.
-# It becomes REQUIRED in v0.45.0. Until then, an absent --intent is derived
-# from the target's class and warns.
+# --intent is REQUIRED as of v0.45.0.
 #
 # --skip-gates skips the OPTIONAL gates (clean tree, tag match). It has
 # never been able to skip class-guard or the production approval, and
@@ -145,13 +144,17 @@ case "$ENV_CLASS" in
 esac
 export ENV_CLASS
 
+# --intent is REQUIRED as of v0.45.0. v0.44.0 derived it from the class with
+# a deprecation warning; that window is closed. Deriving direction silently
+# is how "I thought I was deploying to staging" happens.
 if [[ -z "$INTENT" ]]; then
-  # Deprecation window (removed in v0.45.0): derive rather than break every
-  # existing caller. Deriving can only reproduce the admissible pairing, so
-  # it never invents a direction the guard would refuse.
-  if [[ "$ENV_CLASS" == "prod" ]]; then INTENT="release"; else INTENT="deploy"; fi
-  echo "⚠ DEPRECATED: --intent is not set; derived '--intent=$INTENT' from class '$ENV_CLASS'." >&2
-  echo "  --intent=<deploy|release> becomes REQUIRED in v0.45.0. Pass it explicitly." >&2
+  echo "ERROR: --intent=<deploy|release> is required." >&2
+  echo "" >&2
+  echo "  deploy  → dev / staging. Cannot reach production." >&2
+  echo "  release → production, tagged." >&2
+  echo "" >&2
+  echo "  '$ENV' has class '$ENV_CLASS'." >&2
+  exit 2
 fi
 export INTENT
 
@@ -166,6 +169,28 @@ esac
 # Not skippable. --skip-gates does not reach this, and there is no bypass
 # variable: it is the one check the deploy/release split exists to make.
 "$BUILD_DIR/gates/class-guard.sh" "$ENV" "$INTENT"
+
+# ─── Ship log ──────────────────────────────────────────────────────────────
+# Opened AFTER the guard so a refused run leaves no record — a refusal is
+# not a deploy. Closed in every exit path below.
+#
+# APPROVAL records how the human consented, not whether a prompt appeared.
+# For a release driven by /release, invocation IS the consent (the skill
+# publishes that contract); recording an approver for a prompt that never
+# fired would be a lie in an audit trail. A human running this by hand on a
+# terminal still gets gates/approval.sh in 10-preflight.
+DEPLOYS_SH="$PROJECT_DIR/.claude/skills/deploys/deploys.sh"
+SHIP_ID=""
+if [[ -f "$DEPLOYS_SH" ]]; then
+  SHIP_ID="$(bash "$DEPLOYS_SH" open "$ENV" "$ENV_CLASS" "$INTENT" "$DEPLOY_TAG" \
+              "${DEPLOY_APPROVAL:-invocation}" 2>/dev/null || true)"
+fi
+export SHIP_ID
+
+ship_close() {
+  [[ -n "$SHIP_ID" && -f "$DEPLOYS_SH" ]] || return 0
+  bash "$DEPLOYS_SH" close "$SHIP_ID" "$1" "$2" "${3:-}" >/dev/null 2>&1 || true
+}
 
 # ─── Banner ────────────────────────────────────────────────────────────────
 echo "════════════════════════════════════════════════════════════"
@@ -224,6 +249,17 @@ END=$(date +%s)
 DURATION=$((END - START))
 
 # ─── Log result ────────────────────────────────────────────────────────────
+if [[ "$DRY_RUN" == "true" ]]; then
+  ship_close "success" "$DURATION" "dry-run"
+elif [[ "$RESULT" == "success" ]]; then
+  ship_close "success" "$DURATION"
+else
+  ship_close "failed" "$DURATION" "$ERROR_STAGE"
+fi
+
+# Legacy single-line log. Superseded by the deploys/ ledger — kept because
+# projects that already have build/deploy-log.md would otherwise see their
+# history stop without explanation. Delete the file to stop the append.
 LOG="$BUILD_DIR/deploy-log.md"
 if [[ -f "$LOG" ]]; then
   STATUS_MARK="✓"
@@ -241,9 +277,11 @@ fi
 # ─── Exit code ─────────────────────────────────────────────────────────────
 echo ""
 if [[ "$RESULT" == "success" ]]; then
-  echo "✓ Deploy complete: $ENV (${DURATION}s)"
+  echo "✓ ${INTENT} complete: $ENV (${DURATION}s)"
+  [[ -n "$SHIP_ID" ]] && echo "  recorded: $SHIP_ID"
   exit 0
 else
-  echo "✗ Deploy failed at stage: $ERROR_STAGE"
+  echo "✗ ${INTENT} failed at stage: $ERROR_STAGE"
+  [[ -n "$SHIP_ID" ]] && echo "  recorded: $SHIP_ID"
   exit 1
 fi

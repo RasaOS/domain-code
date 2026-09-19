@@ -24,6 +24,122 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.45.0 — 2026-09-19
+
+### The ship log — what went out, where, and whether it worked
+
+v0.44.0 made direction enforceable. This makes it **answerable**.
+
+Before now there were two half-ledgers that could not be joined:
+`build/deploy` appended a row to `build/deploy-log.md` but never tagged,
+and `/release` tagged but ran its own discovered deploy command and wrote
+nothing at all. So "what went to staging on the 14th, and who sent it"
+had no answer, and a production release left no trace in either.
+
+#### New — `deploys/`, a real ledger
+
+```
+deploys/records/<id>.md     one file per execution, YAML frontmatter
+deploys/DEPLOYS.md          regenerated view; never hand-edited
+```
+
+**Records are the truth; the index is derived.** One file per execution
+means two concurrent branches touch different files. A single append-only
+markdown table conflicts on every PR the moment there is a second
+long-lived branch, and a ledger that conflicts on every PR gets deleted.
+
+Each record carries `kind` (deploy or release), `environment`, `class`,
+`tag`, `sha`, `branch`, `user`, `host`, `started`/`finished`, `status`,
+`duration_s`, `error_stage`, `approval`, and `task_refs` — the last left
+empty until task enforcement lands in v0.47.0 and can populate it.
+
+IDs are `DEP-YYYYMMDD-HHMMSS-<env>` with a collision suffix, reserved
+with `noclobber` on the **id** rather than on a filename. A counter races:
+two worktrees both read `12`, both write `TASK-012-<different-slug>.md`,
+and both succeed because the slugs differ. Verified with five concurrent
+opens inside the same second — five distinct ids, no collision.
+
+**No secrets, ever.** Not values, not env-file contents, not command
+output that might carry either. A record holds what shipped, where, when,
+and by whom.
+
+#### New — `/deploys`
+
+Read-only reader over the ledger. `list`, `list --env staging`, `show
+<id>`, `check`. It never runs a deploy.
+
+`deploys.sh check` exits 3 when the index disagrees with the records, and
+warns about runs stuck `in-flight` — a process that died without closing.
+An empty ledger is reported as "nothing has shipped through the pipeline
+yet" rather than as an empty history, which are different facts.
+
+#### `/release` now routes through the pipeline
+
+Step 5 previously ran a deploy command discovered from CLAUDE.md, which
+meant a **production release bypassed the class guard, the approval gate
+and every log**. It now prefers `./build/deploy --env=<prod-env>
+--intent=release`, resolving the production environment from the registry
+via `environment.sh prod-env` rather than guessing — and stopping with an
+explanation when the project has declared no production class, instead of
+letting the guard produce the error later.
+
+The no-pipeline fallback remains, but now has to **say so** in the release
+report: that the deploy did not go through the pipeline, and therefore has
+no record, no class guard and no approval gate.
+
+#### Consent: invocation is the gate of record
+
+`/release` has published invocation-is-consent since v0.33.0. The pipeline
+now records that honestly as `approval: invocation`. It does **not** stack
+a confirmation prompt on top, which would contradict the contract the
+skill states five times over — and, more to the point, a prompt cannot be
+answered from a tool-driven shell, which has no controlling terminal.
+Recording an approver for a prompt that never fired would put a lie in an
+audit trail.
+
+`gates/approval.sh` is unchanged and still runs for a human driving
+`./build/deploy` from a terminal, where a prompt can actually be answered.
+That is the split: **invocation is consent through the skill; the prompt
+is for the CLI.**
+
+#### `--intent` is now REQUIRED
+
+The v0.44.0 deprecation window is closed. An absent `--intent` exits 2
+with the target's class in the message. Deriving direction silently is how
+"I thought I was deploying to staging" happens.
+
+#### Smaller
+
+- A run refused by `class-guard.sh` leaves **no record** — a refusal is
+  not a deploy. The ledger opens only after the guard passes.
+- `build/deploy` reports the record id on both success and failure.
+- `seed/deploy-log.md.template` marked **superseded**. The one-line append
+  still happens when the file exists, so existing history does not stop
+  mid-stream, but the header now says which ledger is authoritative.
+- Fixed three `set -o pipefail` bugs in `deploys.sh` found by testing: a
+  `grep`/`ls` that correctly finds nothing exits 1 and takes the script
+  with it. `check` on an empty ledger, `list` on an empty ledger, and the
+  in-flight scan all hit this.
+- `open` regenerates the index, not just `close` — otherwise every
+  in-flight deploy reported false drift for the duration of its own run.
+
+#### Verified
+
+`--intent` required (exit 2); deploy and release both recorded with the
+right `kind`/`class`/`approval`; a refused prod deploy adds no record;
+`check` returns 0 clean, 3 on a deleted index row, 0 after regenerate, and
+warns on in-flight; five concurrent opens produce five ids. 35/35 scripts
+clean under `bin/check-bash32`.
+
+#### Scope note
+
+The decision document bundled **transport** (`/env-sync`, config parity
+across machines) into this release. It is split out to v0.46.0. Transport
+moves **secrets between machines**; it deserves its own release and its
+own verification rather than being rushed at the tail of a large one.
+
+---
+
 ## v0.44.0 — 2026-09-19
 
 ### The direction spine — `/deploy` structurally cannot reach production

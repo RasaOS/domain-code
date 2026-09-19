@@ -284,11 +284,44 @@ only if deploy succeeds.
 
 ### Step 5 — Deploy
 
-Run the deploy command in the foreground. Capture full output.
+**Prefer the pipeline.** If `./build/deploy` exists, that is the deploy
+command — not something discovered from CLAUDE.md. Routing through it is
+what makes a release pass the class guard, run the production approval
+gate, and land in the ship log. A release that went around the pipeline
+is a release nobody can audit.
 
 ```sh
-<deploy-command>
+./build/deploy --env=<prod-env> --intent=release
 ```
+
+Resolve `<prod-env>` from the registry rather than guessing:
+
+```sh
+.claude/skills/environment/environment.sh prod-env
+```
+
+If it returns exactly one environment, use it. More than one (per-region
+production) — ask which. None — the project has declared no production
+class; say so and stop, because `--intent=release` will be refused and
+you should say why before spending the user's time.
+
+`--intent=release` is required and is what permits a production target.
+`/deploy` cannot reach production; this is the sanctioned route.
+
+**Consent.** Invocation is consent — this skill's whole contract. The
+pipeline records `approval: invocation` in the ship log, which is the
+truth: a human ran `/release`. Do not add a confirmation prompt on top;
+that contradicts the contract this skill states five times over. A human
+running `./build/deploy` by hand on a terminal still gets
+`gates/approval.sh`, because there a prompt can actually be answered.
+
+**Fallback — no pipeline.** If `./build/deploy` does not exist, use the
+deploy command discovered in Step 1 and run it in the foreground. Say
+explicitly in the release report that the deploy did **not** go through
+the pipeline, so it has no ship-log record, no class guard and no
+approval gate. Then suggest `/setup-deploy`.
+
+Capture full output either way.
 
 If it succeeds → continue to Step 6.
 
