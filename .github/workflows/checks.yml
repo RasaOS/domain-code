@@ -1,0 +1,133 @@
+name: checks
+
+on: [push, pull_request]
+
+jobs:
+  manifest:
+    name: manifest + schema
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Hard gate — rasa.json must be a complete inventory of content/ + seed/.
+      # A file committed but unregistered silently never ships.
+      - name: rasa.json is a complete inventory
+        run: bash bin/check-manifest
+
+      # Hard gate on the --intent check. A command in shipped docs is a
+      # command a consumer pastes; if it cannot run, the docs are wrong in
+      # the most expensive way. v0.45.0 made --intent mandatory and left 12
+      # shipped call sites exiting 2, including /setup-deploy's own
+      # verification step. The dangling-slash half is advisory (see the
+      # script) — built-ins are allowlisted, the rest is a content call.
+      - name: Shipped commands are invocable
+        run: bash bin/check-invocations
+
+  portability:
+    name: bash 3.2 floor
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Hard gate. This is NOT redundant with `bash -n` below: this runner
+      # has bash 5, where every bash-4-ism parses clean. Before v0.43.1 all
+      # 40 shipped scripts passed `bash -n` while the production approval
+      # gate aborted at runtime on stock macOS. Syntax-checking with the
+      # wrong bash is how that shipped.
+      - name: No bash 4+ syntax in shipped shell
+        run: bash bin/check-bash32
+
+      - name: Scripts parse
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r f; do
+            bash -n "$f" || { echo "parse error: $f"; fail=1; }
+          done < <(find content -name '*.sh' -type f; find bin -type f -perm -u+x)
+          exit "$fail"
+
+  macos:
+    name: runs on stock macOS bash
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The real backstop. `bash -n` proves nothing about runtime, so
+      # actually EXECUTE the gates here, where /bin/bash is 3.2.57 — the
+      # version every macOS consumer of this Element has.
+      - name: Confirm bash 3.2 is what we are testing against
+        run: /bin/bash --version | head -1
+
+      - name: Manifest gate runs
+        run: /bin/bash bin/check-manifest
+
+      - name: Portability gate runs
+        run: /bin/bash bin/check-bash32
+
+      # The approval gate must (a) auto-approve under FORCE_APPROVAL=1 and
+      # (b) fail CLOSED with no controlling terminal. A CI runner has no
+      # tty, so (b) is the real assertion: the gate must never let a
+      # production deploy through unattended.
+      - name: Approval gate honours FORCE_APPROVAL
+        run: FORCE_APPROVAL=1 /bin/bash content/build/gates/approval.sh "ci smoke"
+
+      - name: Approval gate fails closed without a terminal
+        run: |
+          set +e
+          /bin/bash content/build/gates/approval.sh "ci smoke" >/dev/null 2>&1
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo "✗ approval gate approved with no terminal and no FORCE_APPROVAL"
+            exit 1
+          fi
+          echo "✓ failed closed (exit $rc)"
+
+      - name: Approval gate rejects a bad timeout
+        run: |
+          set +e
+          APPROVAL_TIMEOUT=notanumber /bin/bash content/build/gates/approval.sh "x" >/dev/null 2>&1
+          rc=$?
+          set -e
+          [ "$rc" -ne 0 ] || { echo "✗ accepted a non-numeric APPROVAL_TIMEOUT"; exit 1; }
+          echo "✓ rejected (exit $rc)"
+
+      # bin/init is the delivery path — there is no working /sync — so a
+      # re-run must be safe. Asserts the v0.43.1 fix: a second init
+      # refreshes the pin without destroying the consumer's overrides[].
+      - name: bin/init is idempotent and preserves overrides
+        run: |
+          set -euo pipefail
+          t="$(mktemp -d)"
+          /bin/bash bin/init "$t" >/dev/null
+          python3 - "$t" <<'PY'
+          import json, sys
+          p = sys.argv[1] + '/.claude/rasa.lock.json'
+          d = json.load(open(p))
+          d['overrides'] = ['.claude/task-rules.md']
+          json.dump(d, open(p, 'w'), indent=2)
+          PY
+          /bin/bash bin/init "$t" >/dev/null
+          python3 - "$t" <<'PY'
+          import json, sys
+          d = json.load(open(sys.argv[1] + '/.claude/rasa.lock.json'))
+          assert d['overrides'] == ['.claude/task-rules.md'], \
+              're-init destroyed overrides[]: %r' % (d['overrides'],)
+          print('✓ overrides preserved across re-init')
+          PY
+
+  lint:
+    name: platform-drift lint (advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Advisory, deliberately. v0.43.1 repointed this linter at content/ +
+      # seed/ after it had enumerated zero files since v0.42.0. Its first
+      # honest run surfaced 198 findings / 5 HIGH. Those 5 are content
+      # judgement calls, not bugs — two are this Element's own tooling
+      # dependency (`pip install pyyaml`), which the linter cannot tell
+      # apart from platform drift. Promote to a hard gate once triaged.
+      - name: Platform-drift lint
+        run: bash bin/lint
+        continue-on-error: true

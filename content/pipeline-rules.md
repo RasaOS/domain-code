@@ -10,7 +10,7 @@ Borrowed from Azure DevOps but platform-agnostic:
 
 - **Stages** — ordered phases of the pipeline (preflight, build, test, publish, deploy). Each stage is a script. Stages run in order; any failure aborts.
 - **Gates** — reusable check scripts (clean tree, tag matches version, user approval). Stages and environment deploys invoke gates as needed.
-- **Args** — parameters passed at trigger time. `--env` is always required. Others: `--skip-tests`, `--skip-gates`, `--dry-run`, `--tag=<version>`, etc.
+- **Args** — parameters passed at trigger time. `--env` and `--intent` are always required (`--intent` is derived with a deprecation warning until v0.45.0). Others: `--skip-tests`, `--skip-gates`, `--dry-run`, `--tag=<version>`, etc.
 - **Environment** — named deploy target with its own config and deploy command. Lives in `environments/<name>/`. The name must be a key in `.claude/environments.json` (the environment registry — see `environment-rules.md`). **Always required** — there is no default environment.
 
 ## Folder structure
@@ -41,7 +41,7 @@ build/
 │   ├── tag-matches.sh
 │   └── approval.sh
 ├── deploy-log.md                 # appended every run (timestamp, env, who, result)
-└── deploy                        # entry point: ./build/deploy --env=staging
+└── deploy                        # entry point: ./build/deploy --env=staging --intent=deploy
 ```
 
 ## Entry point: `./build/deploy`
@@ -49,10 +49,33 @@ build/
 The canonical command. Always runs the same way:
 
 ```sh
-./build/deploy --env=staging
-./build/deploy --env=prod --tag=v1.2.0
-./build/deploy --env=dev --skip-tests --dry-run
+./build/deploy --env=staging --intent=deploy
+./build/deploy --env=prod --intent=release --tag=v1.2.0
+./build/deploy --env=dev --intent=deploy --skip-tests --dry-run
+
+# Refused — deploy may not target a production-class environment:
+./build/deploy --env=prod --intent=deploy
 ```
+
+### Direction — `--intent`
+
+`--intent=deploy` targets `dev` and `staging` and **can never reach a
+production-class environment**. `--intent=release` targets production and
+tags. `build/gates/class-guard.sh` enforces the pairing before any stage
+runs, keyed on the environment's declared `class`, never on its name.
+
+The guard has **no bypass**. `--skip-gates` does not reach it, and there
+is no `FORCE_*` variable. The sanctioned route to production is
+`/release`.
+
+An absent `--intent` is derived from the class and prints a deprecation
+warning; it becomes required in v0.45.0.
+
+`--skip-gates` skips the **optional** gates only — clean tree, tag match —
+and only on non-production classes. It never skips the class guard or the
+production approval. (Before v0.44.0 it skipped nothing at all: it was
+parsed, printed as `Gates: SKIPPED`, and never read, so an operator was
+told gates were skipped and then failed on the gate they asked to skip.)
 
 **`--env` is mandatory.** If omitted, the script lists available environments and exits non-zero. The `/deploy` Claude skill (if installed) prompts for env when missing; the bash script itself does not — it refuses.
 
@@ -232,7 +255,7 @@ The `/deploy` Claude skill is a thin orchestrator:
 
 1. If `--env=<name>` not provided, prompt the user (multiple choice from `pipeline-config.toml`'s env list)
 2. If env requires approval (per config), confirm with explicit "yes"
-3. Invoke `./build/deploy --env=<name> [args]`
+3. Invoke `./build/deploy --env=<name> --intent=<deploy|release> [args]`
 4. Stream output back to the user
 5. Report success/failure with relevant context
 
@@ -250,7 +273,7 @@ A new project runs `/setup-deploy` (skill, ships in kit) which:
 6. Generates `tests/suites/pre-deploy.md` (default empty suite)
 7. Stages everything for git review (never auto-commits — kit convention)
 
-After `/setup-deploy`, deploys are just `./build/deploy --env=<env>` from then on.
+After `/setup-deploy`, deploys are just `./build/deploy --env=<env> --intent=deploy` from then on.
 
 ---
 

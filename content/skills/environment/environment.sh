@@ -103,7 +103,7 @@ pointer_path() {
 # JSON operations on the registry.  _registry_py <registry-file> <op> [args...]
 _registry_py() {
   python3 - "$@" <<'PY'
-import json, sys
+import json, re, sys
 
 reg_path = sys.argv[1]
 op = sys.argv[2]
@@ -121,7 +121,82 @@ if not isinstance(envs, dict):
     sys.exit(1)
 default = reg.get("default", "")
 
-if op == "names":
+VALID_CLASSES = ("dev", "staging", "prod")
+
+# Names that make an environment PRODUCTION even when nobody declared it.
+#
+# This is a TOKEN test, not a substring test. Substring matching was the
+# first implementation and it was far too greedy: `preprod`, `pre-prod`,
+# `nonprod` and `non-prod` all escalated to production and hard-locked
+# /deploy with no config escape — and so did `reproduction-test` (repROD)
+# and `alive-service` (aLIVE), which are not even close.
+#
+# The rule: split on - _ . and escalate when any TOKEN starts with "prod"
+# or "live". `reproduction` starts with "repr", `alive` with "ali", so
+# neither fires. Explicit negatives are checked first, because `pre-prod`
+# tokenizes to a bare `prod` that would otherwise escalate.
+#
+# Escalation still only ever goes UP. A false positive blocks a deploy,
+# which is loud and safe; a false negative is what shipped `production-us`
+# past the pre-v0.44.0 gate with no gate at all.
+PROD_TOKEN_PREFIXES = ("prod", "live")
+NOT_PROD_MARKERS = (
+    "preprod", "pre-prod", "pre_prod",
+    "nonprod", "non-prod", "non_prod",
+    "notprod", "not-prod", "not_prod",
+)
+
+
+def _name_says_prod(name):
+    low = name.lower()
+    for marker in NOT_PROD_MARKERS:
+        if marker in low:
+            return False
+    for token in re.split(r"[-_.]+", low):
+        for prefix in PROD_TOKEN_PREFIXES:
+            if token.startswith(prefix):
+                return True
+    return False
+
+
+def classify(name, env):
+    """Return (class, source). class is dev|staging|prod|unclassified."""
+    declared = (env or {}).get("class")
+    if declared in VALID_CLASSES:
+        # An explicit non-prod class does NOT override a prod-looking name.
+        # Declaring `"class": "dev"` on an env called `prod-eu` is far more
+        # likely a mistake than an intention, and guessing wrong here puts
+        # a deploy into production.
+        if declared != "prod" and _name_says_prod(name):
+            return "prod", "name-escalated over declared '%s'" % declared
+        return declared, "declared"
+    if declared is not None:
+        return "unclassified", "invalid class %r" % (declared,)
+    if _name_says_prod(name):
+        return "prod", "name-escalated (no class declared)"
+    return "unclassified", "no class declared"
+
+
+if op == "class":
+    env = envs.get(args[0])
+    if env is None:
+        print("error: unknown environment '%s'" % args[0], file=sys.stderr)
+        sys.exit(2)
+    klass, source = classify(args[0], env)
+    print(klass)
+    if len(args) > 1 and args[1] == "--why":
+        print("  (%s)" % source, file=sys.stderr)
+    sys.exit(0 if klass in VALID_CLASSES else 3)
+elif op == "prod-env":
+    found = [k for k, e in envs.items() if classify(k, e)[0] == "prod"]
+    for k in found:
+        print(k)
+    sys.exit(0 if found else 3)
+elif op == "classes":
+    for k, e in envs.items():
+        klass, source = classify(k, e)
+        print("%s\t%s\t%s" % (k, klass, source))
+elif op == "names":
     for k in envs:
         print(k)
 elif op == "default":
@@ -429,6 +504,16 @@ main() {
       ;;
     version)
       cmd_version "$reg" "$@"
+      ;;
+    class)
+      [ $# -ge 1 ] || { echo "error: class needs <env>" >&2; return 2; }
+      _registry_py "$reg" class "$@"
+      ;;
+    prod-env)
+      _registry_py "$reg" prod-env
+      ;;
+    classes)
+      _registry_py "$reg" classes
       ;;
     validate)
       cmd_validate "$reg"

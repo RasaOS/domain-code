@@ -1,0 +1,38 @@
+# Env transport — where this project's config lives, by machine
+
+Project-owned. Names and paths only — **never a credential, never a
+value**. This file is committed; everything in it is safe to read.
+
+`/env-sync` uses this as a lookup so you can say "push staging to the
+build box" instead of retyping an scp target. It does **not** make a
+destination trusted: `/env-sync` still only sends where you explicitly
+name, and this file is a convenience, not an authorization.
+
+## Machines
+
+| Name | Host (ssh) | Project path | Which envs live there |
+|---|---|---|---|
+| _(example)_ `laptop` | — (this machine) | `~/code/myproject` | local, staging |
+| _(example)_ `buildbox` | `me@build.internal` | `/srv/myproject` | staging |
+
+Delete the examples. Add a row per machine you actually work from.
+
+## Rules
+
+- **No values here.** If you find yourself pasting a password into this
+  table, the answer is `/secrets`, not this file.
+- **No production credentials on laptops** unless you mean it. An
+  environment whose class is `prod` (see `.claude/environments.json`)
+  should usually exist only where it is deployed.
+- **`.env*` must be gitignored before any transfer.** Run
+  `.claude/skills/env-sync/env-sync.sh protect` — `/secrets` only adds
+  the literal `.env`, so `.env.staging` and `.env.production` are
+  commonly left exposed.
+- **Parity is a digest comparison**, not a merge. Two machines that
+  differ need a human decision about which is right; nothing here
+  resolves that for you.
+
+## Notes
+
+_(Anything future-you needs: which box needs a VPN, which key opens
+what, who else has access. Names and facts — no secrets.)_

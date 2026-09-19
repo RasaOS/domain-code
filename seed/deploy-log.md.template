@@ -1,5 +1,13 @@
 # Deploy Log
 
+> **Superseded by the `deploys/` ledger (v0.45.0).** `build/deploy` still
+> appends one line here when this file exists, so existing history does not
+> stop mid-stream — but the authoritative record is now
+> `deploys/records/<id>.md`, with `deploys/DEPLOYS.md` as its generated
+> view and `/deploys` as the reader. That record carries the environment
+> class, the intent (deploy vs release), how consent was given, the failing
+> stage, and the branch and sha. Delete this file to stop the append.
+
 Append-only record of every deploy run. Generated automatically by
 `build/deploy`. Use this for audit (who deployed what to where, when)
 and for forensics when something goes sideways.

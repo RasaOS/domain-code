@@ -76,6 +76,13 @@ starting work.
 > overrides first, falling back to defaults. Read both before
 > assuming what a term means.
 
+> **Enforcement.** This rule is mechanically enforced when
+> `.claude/task-enforcement.json` has `enabled: true`: a `PreToolUse`
+> guard denies an unlinked code edit, files a stub, and lets the retry
+> through. Classification, the ledger, and the honest limits (raw `Bash`
+> writes and `--no-verify` are not covered) are in
+> `task-enforcement-rules.md`. Enforcement ships OFF.
+
 ## Scope discipline
 
 - One task = one PR. Do not bundle unrelated changes.

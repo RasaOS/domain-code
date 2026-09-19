@@ -1,4 +1,4 @@
-# claude-kit changelog
+# `rasa.domain.code` changelog
 
 Versioning is `MAJOR.MINOR.PATCH`. Bumps:
 
@@ -9,8 +9,1035 @@ Versioning is `MAJOR.MINOR.PATCH`. Bumps:
 - **Patch** — bugfixes, doc edits, no behavior change.
 
 Tags: `vX.Y.Z`, annotated. Projects pin to a tag in their
-`.claude/foundation.json` (or to a SHA, but tags are preferred for
+`.claude/rasa.lock.json` (`pinned_sha`, or a tag — tags are preferred for
 human-readable rollback).
+
+Entry headings are `## v<semver> — YYYY-MM-DD`, newest first. The `v` is
+load-bearing: `/sync` parses these headings to render the upgrade delta for
+a consumer, and an entry without it is invisible in that report.
+
+---
+
+## Unreleased
+
+(no entries yet)
+
+---
+
+## v0.48.0 — 2026-09-19
+
+### Release planning and bundling — and the tracker was broken on install
+
+`tasks/RELEASES.md` has never worked in a fresh project. Two shipped
+files described it and they contradicted each other:
+
+- **`seed/RELEASES.md.template`** — the file that actually lands on disk —
+  described a forward-looking plan: *"Each entry declares a release's
+  scope … before it ships,"* with 📋 Planned / 🚧 In progress / ✅ Shipped.
+- **`content/release-rules.md`** — the file the skills read — said *"The
+  📋 Planned state from earlier kit versions is gone"* and specified a
+  single 🚧 Next accumulator that tasks append to **after** they land.
+
+The seed produced **zero** 🚧 entries. `/release-add` requires exactly one
+and stops otherwise, so it hard-stopped on its first invocation in every
+fresh install. `/release` had no manifest to read.
+
+Nobody saw an error, because **`/peer-review` shipped the workaround** —
+it caught that failure and downgraded it to "a non-blocking note." So
+every merged PR in every fresh project emitted that note and nothing was
+ever tracked.
+
+Two more, found while fixing it:
+
+- **`{{NEXT}}` was never substituted.** The seed is `skip-if-exists`,
+  which never reaches substitution, and `bin/init` defines seven keys
+  that do not include it. Every install has the literal string
+  `## v{{NEXT}} — 📋 Planned` sitting on disk.
+- **`/roadmap` was a third model.** It resolves a task's shipped version
+  from phases in the seed's `**Scope.**` block, which the rules model
+  never produces — so its "Shipped in" column has resolved to
+  `(pre-versioning)` for everything, always.
+
+The ask and the bug were the same work. The revoking sentence is deleted;
+the forward-looking model wins.
+
+#### Targeted vs Bundled — two layers, two sections
+
+| | |
+|---|---|
+| **`### Targeted`** | Fluid. Any task status. Moved freely between releases. **Never read by `/release`.** |
+| **`### Bundled`** | Committed. Requires `tasks/completed/<ID>-*.md`. This is the manifest. |
+
+Separate **sections**, not two labels on one list — that is what makes
+the ship-time logic structurally unable to touch the fluid layer. A plan
+can be wrong all week at no risk.
+
+Bundling is harder to undo than targeting by construction: targeting is
+ungated while bundling requires completed work; bundling writes an
+approval line; targeted work is not in the manifest and cannot ship by
+accident; and shipping is terminal, with the manifest simultaneously
+frozen inside the annotated tag's message body.
+
+#### New — `/release-plan` and `release.sh`
+
+`/release-plan` creates a release **before anything is in it** and aims
+work at it. `release.sh` owns the mechanics: `check` `manifest` `list`
+`state` `find` `create` `target` `untarget` `bundle` `ship`.
+
+Targeting is idempotent and exclusive — targeting an id that is targeted
+elsewhere *moves* it in one edit, so an id is never in two releases.
+🚧 is **derived, not declared**: it means "has bundled work," and the
+first successful bundle flips 📋 → 🚧. Multiple open releases are legal
+and expected; the old "exactly one 🚧" invariant is gone, because it was
+the thing that hard-stopped.
+
+#### Invocation is approval
+
+Running `/release-add` **is** the approval act. Recorded once per release
+as `**Approved.** <user> via invocation` — the same `invocation` token
+the deploy ledger writes, so `grep -r invocation` joins a release to the
+run that shipped it. No prompt: `/release` has published
+invocation-is-consent since v0.33.0, a prompt cannot be answered from a
+shell with no controlling terminal, and recording an approver for a
+prompt that never fired would put a lie in an audit trail.
+
+#### `/release-add` now moves the spec when git proves the merge
+
+Nothing in the mainline flow owned the `active/` → `completed/`
+transition — `/peer-review` merges without moving the spec — so
+spec-in-`active/` plus merged-in-git is the *normal* post-merge state,
+and it is exactly what the completion gate refuses. `/release-add` is the
+only skill that runs at the moment the transition becomes true, so it
+does the `git mv` on conclusive evidence (the id named in a commit
+subject since the last tag) and says what it did. Nothing weaker moves a
+spec, and `/peer-review` was deliberately left alone.
+
+#### Neither new surface commits
+
+`git-clean.sh` counts `tasks/` as dirty for production. So a release that
+auto-committed the tracker, or exempted it from the clean-tree check,
+would pass its own preflight and then **fail the prod pipeline on the
+file it just exempted** — the exact class v0.47.1 was cut to kill. This
+refuted the mechanism all three candidate designs shared. Planning edits
+are ordinary doc edits; both skills print the commit command and run
+nothing.
+
+`/release` Step 1 also stops writing. It previously *silently added*
+missed ids during preflight — a write during the step that just asserted
+the tree was clean. It is now two read-only reports, and the ship-time
+prune that **deleted** unmerged ids outright is gone.
+
+#### Corrected: the tag example was never real
+
+`release-rules.md` documented `tag v0.37.0`. The pipeline has never
+produced a bare-version tag — `environment.sh` emits
+`v<semver>-<sha>-<env>`, and `git rev-parse v0.37.0` does not resolve.
+Shipped entries now record the stamped tag, which is also the join key to
+`deploys/records/`.
+
+#### Existing installs
+
+`seed/RELEASES.md.template` is `skip-if-exists`, so **nobody's file is
+touched**. `check` detects a pre-v0.48.0 tracker and prints the remedy:
+rename to `tasks/RELEASES.legacy.md` and start fresh. **Nothing is
+rewritten automatically.** Of the nine sibling installs, eight are
+untouched placeholders with nothing to lose; one — `kernel` — holds 410
+lines of real hand-written history in a third shape that a migrator would
+mangle. That is why no `migrate` verb exists.
+
+#### Deliberately not built
+
+A per-release record store and generated index (~750 lines; the
+frontmatter parser silently returns empty on CRLF, a BOM, or a trailing
+space after `---`). A `migrate` verb. A `/releases` renderer —
+`/release-plan` with no args renders, and `cat tasks/RELEASES.md` is the
+whole archive. `ios-release` is untouched: it never tags, never advances
+the tracker, and hard-requires a typed confirmation that inverts
+`/release`'s stated contract — all of which predates this work and is a
+genuine product decision, filed as the first follow-up.
+
+---
+
+## v0.47.2 — 2026-09-19
+
+### The rest of the pre-push audit — four silent-success failures
+
+Every one of these reported success while doing the wrong thing. That is
+the class v0.43.1 exists to eliminate, and four more of them were living
+in code written this same week.
+
+#### The ship log silently discarded 75% of its entries
+
+`open` reserved a separate `.$id.lock`, and `close` deleted it. So a
+second `open` in the same second found no lock, reused the id, and
+**overwrote the completed record**. Measured: **8 back-to-back deploys
+left 2 record files** — only `v8` and `v4` survived — and `check` still
+reported `✓ ledger consistent`.
+
+An audit trail that discards entries while claiming health is worse than
+no audit trail, because you would trust it.
+
+The **record file itself** is now the reservation, claimed with
+noclobber. It is never removed, so the name can never be reused. Verified:
+8 rapid open/close cycles leave 8 records with all 8 tags, plus 6
+concurrent opens all distinct.
+
+#### Every ledger view was empty under a path containing a space
+
+`for f in $(ls …)` word-splits. In a repo at `~/code/my project/`, `list`
+printed nothing, the index had zero rows, and `check` exited 3 reporting
+drift it could not fix — while the records sat on disk. Now a
+`while IFS= read -r` fed by process substitution (**not** a pipe — the
+loop must stay in-shell so counters survive). Fixed in `deploys.sh` ×2
+and `task-enforce.sh` ×1.
+
+#### `bin/init` destroyed the files `overrides[]` exists to protect
+
+v0.43.1 made `bin/init` *preserve* `overrides[]` across a re-run. It never
+**read** it. So the copy loop overwrote every overridden file anyway —
+including `build/stages/20-build.sh`, which `/setup-deploy` writes the
+project's real build command into and which reverts to a `TODO: configure`
+stub that `exit 1`s.
+
+With `/sync` dead, re-running `bin/init` *is* the update path. So the
+update path was destroying the project it updated, in the release that
+told people the re-run was safe.
+
+`shutil.copytree` cannot skip per-file, so `directory-mirror` now walks
+and honours overrides, and `file-replace` checks too. A protected file
+prints `· keep (overridden): <path>`.
+
+#### `preprod` and `nonprod` were production
+
+The name heuristic was a substring test, and far too greedy. `preprod`,
+`pre-prod`, `nonprod`, `non-prod` all escalated to production and
+**hard-locked `/deploy` with no config escape** — and so did
+`reproduction-test` (re**prod**uction) and `alive-service` (a**live**),
+which are not even close.
+
+Now a TOKEN test: split on `- _ .`, escalate when a token *starts with*
+`prod` or `live`, with an explicit negative list checked first because
+`pre-prod` tokenizes to a bare `prod`. Escalation still only goes up.
+Verified across 16 names: `production-us`, `us-prod`, `us-live`, `PROD`
+and a `prod-eu` declaring `dev` all still escalate; the six false
+positives are free.
+
+#### Swept `--intent` into 13 shipped call sites, and added a gate
+
+v0.45.0 made `--intent` mandatory and left twelve shipped invocations
+exiting 2 — including `/setup-deploy`'s own verification step, so the
+skill that sets up the pipeline told you to run a command that fails.
+
+New **`bin/check-invocations`**, wired into CI as a hard gate: a command
+in shipped documentation is a command a consumer will paste. Hand
+enumeration missed half of these on the first pass, which is the argument
+for a gate rather than a sweep. It also reports dangling `/slash`
+references — advisory, with Claude Code built-ins allowlisted, because a
+gate that fails CI on `/help` is a gate someone disables. 14 remain; that
+is a content decision.
+
+#### One note on process
+
+The first version of `bin/check-invocations` was written with a heredoc
+that contained its own `EOF` markers, so it was silently truncated at 44
+lines mid-loop — and then printed `clean` because it never ran the checks.
+The invocation checker's first act was to be a silent-success failure.
+Caught by reading the file rather than trusting its output.
+
+---
+
+## v0.47.1 — 2026-09-19
+
+### Two defects found by a pre-push audit, before any of this reached anyone
+
+Both were in code written earlier in this same sequence. Both were found
+by adversarial review and reproduced by hand, not by reading.
+
+#### `/env-sync fingerprint` printed private key material
+
+`env-sync.sh` claimed, in its own header, that it "NEVER prints file
+contents" and that its stdout is safe to put in a model's context.
+**That claim was false**, and the failure landed on the exact command
+`SKILL.md` tells the agent to use *instead of* `cat`.
+
+A multi-line value — a PEM key in a `.env`, which is entirely ordinary:
+
+```
+PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----
+MIIEowIBAAKCAQEA...
+-----END RSA PRIVATE KEY-----"
+```
+
+…was parsed with `awk -F=`, so every continuation line became its own
+"assignment" and the key body was printed as a key NAME.
+
+`key_map` now tracks quote continuation and skips the body. Note that a
+line-shape guard alone is **not** sufficient — base64 padding means a
+line like `MIIEowIBAAKCAQEA==` matches `IDENT=` and would still print a
+prefix of the key. The state machine is what actually closes it.
+
+The header claim is now scoped and honest: it emits key names and
+`set`/`empty`, and says plainly that it is a parser, not a substitute for
+not pointing an agent at a credential file.
+
+Verified against double-quoted and single-quoted multi-line values,
+base64 padding, `export `-prefixed keys, and empty values: no value
+material in output, all seven keys still reported correctly.
+
+#### Every pipeline release failed its own preflight
+
+`build/deploy` opens a ship-log record **before** the stages run
+(`content/build/deploy:185`). `git-clean.sh` then ran unfiltered for
+`ENV_CLASS=prod`. So a release from a **perfectly clean tree** failed
+stage 10 on the record it had just written — **100% of pipeline releases,
+including every `/release` rerouted through the pipeline in v0.45.0.**
+
+The v0.47.0 fix excluded bookkeeping for non-prod only, which left
+production — the half that matters — broken.
+
+Now two tiers:
+
+- **Always excluded:** `deploys/`, `build/deploy-log.md`. Written *by
+  this pipeline, during the run being gated*. Counting them is
+  self-referential.
+- **Excluded for non-prod only:** `tasks/`. A different system's
+  bookkeeping, representing work in progress; a production release
+  legitimately should not carry uncommitted task churn.
+- `BOOKKEEPING_STRICT=1` excludes nothing, anywhere.
+
+Also fixed while in there: the gate now anchors at the repo root, so it
+no longer reports a clean tree when invoked from a subdirectory while the
+rest of the repo is dirty. (`:/` as a pathspec base does **not** combine
+with `:(exclude)` — verified; `cd` to the toplevel is what works.)
+
+Verified: release on a clean tree passes; a second release with the first
+one's records present passes; prod still blocks task churn and any real
+code change; staging still passes with task churn; a dirty file outside
+the cwd is now detected from a subdirectory.
+
+#### Still open from the audit, deliberately not in this patch
+
+Ranked, for the next patch: ledger records can overwrite each other when
+two land in the same second (the `.lock` is released before the `.md` is
+written, so the `.md` itself should be the reservation); `for f in $(ls
+…)` breaks every ledger view in a repo path containing a space;
+`bin/init` re-run still overwrites `build/stages/*` because `overrides[]`
+is preserved but never *read*; `preprod`/`nonprod` classify as production
+via substring match with no escape; ~12 shipped call sites still invoke
+`./build/deploy` without the now-mandatory `--intent`.
+
+---
+
+## v0.47.0 — 2026-09-19
+
+### Task enforcement — no code change without a task, at CHANGE time
+
+`task-rules.md` has said since early on that every code and running-config
+change is task-linked and that a stub is acceptable but nothing is not.
+Nothing enforced it. `/task-guard` looks like the enforcement and is not:
+it is a git `pre-commit` hook, so it fires after N edits have already
+landed, and its own SKILL.md sells **"never blocks a commit"**. That is a
+reconciler, not a gate.
+
+#### New — `/task-enforce`, a `PreToolUse` guard that denies
+
+On `Edit|Write|MultiEdit|NotebookEdit`, keyed on a **committed** config so
+the setting binds every contributor rather than living in one machine's
+`.git/hooks`:
+
+1. Classify the path — `code`, `docs`, or `meta`.
+2. `docs` and `meta` → **recorded, allowed**. Touching a README is not a
+   task.
+3. `code` with a linked task → recorded, allowed.
+4. `code` with nothing linked → **DENIED**. A stub is filed, linked, and
+   the retry proceeds.
+
+**One deny per task, not per edit.** The deny sets the current-task
+pointer, so the immediate retry succeeds and everything after it is
+linked. The cost of the audit trail is a single interrupted tool call.
+
+The deny reason names the filed task and says to retry — and says the
+title came from a filename, not from intent, so go fix it. `status` counts
+stubs still carrying `origin: auto-fallback` so they cannot quietly
+accumulate.
+
+#### `audit_anyway` ships NON-EMPTY — this is the point of the release
+
+```
+.claude/environments.json
+.claude/env-transport.md
+build/environments/*/env.sh
+build/environments/*/deploy.sh
+```
+
+The `.claude/**` exemption exists so a README touch is not a task. It does
+**not** exist so the files that define what production *is* can be edited
+untracked.
+
+`.claude/environments.json` carries each environment's `class`, which
+v0.44.0 made the thing that decides whether `/deploy` may proceed. Without
+this override, an agent flipping `"class": "prod"` to `"staging"` would
+trigger no guard, mint no task, write no ledger row, and be invisible to
+the commit-time reconciler — and the next `/deploy` would reach production
+**legitimately, through a gate working exactly as designed**. Same hole
+covered `.claude/env-transport.md`, which names where production
+credentials get shipped.
+
+Removing these four is a decision to accept that hole.
+
+#### Ledger — per-day-per-task, regenerated
+
+Changes append to `tasks/changes/<date>-<TASK>.md`; `tasks/CHANGES.md` is
+regenerated from them. **Not one appended table**: a single append-only
+file conflicts on every PR the moment two long-lived branches exist, and a
+ledger that conflicts on every PR gets deleted. Same discipline as
+`deploys/`.
+
+#### IDs use a real mutex
+
+`mkdir` is atomic; `set -C` on a filename is not enough here. Two sessions
+both compute `TASK-012`, write `TASK-012-<different-slug>.md`, and **both
+succeed because the paths differ**. Verified: six concurrent mints produce
+six distinct ids.
+
+#### `git-clean.sh` — bookkeeping is not dirtiness, and the pipeline was deadlocking itself
+
+Found by running a staging deploy **twice**, which nothing had done
+before: `build/deploy` writes `deploys/records/<id>.md` and appends to
+`build/deploy-log.md`, so the first deploy succeeded, wrote its own
+record, and **the second failed this gate on the evidence of the first.**
+A deploy pipeline deadlocked by its own audit trail. It reads fine; it
+only shows up when you run it twice.
+
+`tasks/`, `deploys/` and `build/deploy-log.md` are now excluded for
+non-production classes. A real code change still blocks everywhere.
+
+Enforcement writes into `tasks/` as you work and does not stage it.
+Counting that as a dirty tree makes the inner loop *edit → deploy to
+staging → look* demand a commit on every iteration; the second time that
+bites, someone aliases `FORCE_DIRTY=1` — which is blanket, so the
+**production** clean-tree check goes with it.
+
+`ENV_CLASS=prod` stays unfiltered; `BOOKKEEPING_STRICT=1` is unfiltered
+everywhere (`TASK_CHURN_STRICT` still honoured). The audit system must
+never be the reason a deploy gate fires — operators disable the gate that
+costs them, not the one that protects them.
+
+#### Honest limits, stated in the shipped rules
+
+Not buried:
+
+- **Raw `Bash` writes bypass the guard entirely** — `cat >`, `sed -i`,
+  `git apply`, codemods are not `Edit`/`Write` tool calls, so no
+  `PreToolUse` hook sees them. `/contract` concedes the identical hole.
+  `/task-guard` catches those at commit time, which is exactly why it was
+  retargeted as the reconciler rather than replaced.
+- `--no-verify` bypasses the reconciler; merge commits never run
+  `pre-commit`.
+- The config is class `meta`, so enforcement can be switched **off**
+  without filing a task. Deliberate — the alternative is not being able to
+  turn it off without its own permission.
+
+The claim that holds, and the only one made: *no Claude Code `Edit`/`Write`
+to a code path happens without a linked task, and every classified change
+lands in the ledger.*
+
+#### Fails closed on a broken interpreter
+
+If `python3` is unavailable the guard **denies** with an explanation
+rather than allowing. The contract is "no code change without an audit
+trail"; allowing on a broken interpreter would quietly void it. `bin/init`
+already hard-requires `python3`.
+
+#### Smaller
+
+- `task-rules.md` gains an enforcement pointer at the top; `/task-guard`'s
+  SKILL.md now says where it sits relative to the gate, so the two read as
+  layers rather than rivals. `/task-guard`'s "never blocks" promise is
+  still true **of it**.
+- Auto-filed stubs carry real frontmatter (`id`, `category`, `phase`,
+  `status`, `filed`, `origin`) and the literal `STATUS: STUB` marker that
+  `/backlog` greps for. `/task-guard`'s stub had no frontmatter at all, so
+  auto-stubs rendered as `Spec` and were invisible to any frontmatter
+  query.
+- Ships `enabled: false`. This Element installs into existing projects and
+  a gate that switches itself on mid-stream is a gate people delete.
+
+#### A bug worth naming, found by testing rather than reading
+
+The classifier expanded its glob lists unquoted so the shell would
+word-split them — and without `set -f` the shell **pathname-expanded them
+against the cwd first**. `*.md` became whatever `.md` files happened to be
+sitting there and `tasks/**` became the real subdirectories, so `README.md`
+classified as `code` and every documentation edit would have filed a task.
+It read correctly and behaved wrongly.
+
+#### Verified
+
+Deny-then-allow lifecycle; `docs`/`meta` never gated; classification
+correct across 13 paths including all four `audit_anyway` overrides; the
+unlinked `.claude/environments.json` edit now denies; ledger written and
+index regenerated; stub frontmatter correct; six concurrent mints give six
+ids; `git-clean` passes on task churn for non-prod and blocks it for prod
+and under `TASK_CHURN_STRICT=1`, while a real code change still blocks
+everywhere; deny payload is valid JSON with `permissionDecision: deny`.
+37/37 scripts clean under `bin/check-bash32`.
+
+---
+
+## v0.46.0 — 2026-09-19
+
+### Config transport — getting env files onto your other machine, safely
+
+Credentials live in gitignored per-env dotfiles. Simple, and it works
+right up to the second machine, where the file does not exist and nothing
+in the repo can tell you what was in it. `/import-env` and `/export-env`
+move variable **names** and stamps; they never move values, by
+construction. This moves the values.
+
+#### New — `/env-sync`
+
+`protect` · `status` · `fingerprint` · `command` · `push` · `pull` · `parity`
+
+Transport is over **ssh/scp to a host the user names**. Nothing else.
+
+#### The safety properties are structural, not promises
+
+1. **The script never prints file contents.** Not on status, not on
+   parity, not on error. Its stdout is safe to put in a model's context —
+   the AI orchestrates a byte-mover it cannot see through. Verified by a
+   leak audit that greps every output, every ledger record, the generated
+   index and `.gitignore` for the actual secret values.
+2. **The destination is an argument.** Never inferred from a git remote,
+   ssh config, `known_hosts`, shell history, or a `deploy_to` in the
+   registry. No argument, no transfer.
+3. **It refuses a path `git check-ignore` does not claim.** You cannot
+   transport a committable secret — that is the check that stops one
+   becoming a commit.
+4. **No per-key value digest, deliberately.** Secrets are low-entropy
+   enough that a per-key hash is brute-forceable, so a "helpful" per-key
+   fingerprint would be a value oracle. Fingerprints are a whole-file
+   digest plus a key-name/`set`-or-`empty` map. Key names are already in
+   the committed `.env-template`; values never leave the file. The cost,
+   stated rather than hidden: parity can tell you **that** two files
+   differ, not **where**.
+
+#### Two things found by reading the existing code, not assumed
+
+- **`/secrets` makes `.env` a symlink** to an out-of-repo store
+  (`secrets.sh:209-223`). A digest or an `rsync` that does not follow
+  symlinks silently reports on the link instead of the credentials. Every
+  read here follows the link; `scp` follows by default. Verified: pushing
+  a symlinked `.env` sends the store's contents, not the link.
+- **`secrets.sh:225-229` adds only the literal `.env` to `.gitignore`.**
+  So `.env.staging` and `.env.production` are unignored by default — their
+  bytes sitting in the repo tree waiting to be committed. `protect`
+  idempotently adds `.env`, `.env.*` and `!.env-template`, and runs before
+  any verb that touches a file.
+
+#### Refusals that give the right advice
+
+A **tracked** env file and a merely **unignored** one are different
+problems, and `protect` only fixes the second. Transporting a tracked file
+is refused with: the credentials are already in history on every clone and
+fork, moving the file does not undo that, adding it to `.gitignore` does
+not either — rotate them, `git rm --cached`, then protect, then transport
+the new values.
+
+A `pull` **refuses to overwrite a symlink**, which would orphan the
+`/secrets` store, and backs up an existing real file before writing.
+
+#### `command` is a first-class outcome
+
+`env-sync.sh command push staging user@host:/path` **prints the command
+and runs nothing**. When the destination needs a passphrase, a hardware
+key, a jump host or a VPN this session cannot reach, handing the operator
+the exact line is the answer — not a consolation prize. You asked for
+"helping the user send those configs"; this is that path.
+
+#### One ledger, not two
+
+A transfer writes `deploys/records/ENV-<ts>-<env>.md` alongside the deploy
+and release records, so `/deploys` reads everything that went out. The
+record holds **that** it happened, to which **named host**, when, and the
+digest — never contents, never the remote path (a path leaks deployment
+structure and buys nothing for parity).
+
+The ledger glob widened from `DEP-*` to `???-*`; `deploys.sh check` counts
+any `[A-Z]{3}-` row. "What went out and where" is one question, not two.
+
+#### New — `seed/env-transport.md.template` → `.claude/env-transport.md`
+
+Project-owned map of which machines hold which env profiles. **Names and
+paths only.** It is a convenience lookup, explicitly *not* an
+authorization: `/env-sync` still only sends where the user names.
+
+#### Deliberately not done
+
+- **No per-environment secret stores.** `/secrets` keeps one store behind
+  a symlinked `.env`; a per-env store plus a transport leg collide on
+  every receiving machine, because `scp` deposits a real file and the
+  store expects a link. The `dev`-vs-higher asymmetry stands, and
+  `env-rules.md` should say so.
+- **No third-party routes.** If ssh cannot reach the host, the answer is
+  the printed command, not a bucket.
+
+#### Verified
+
+Leak audit clean across all outputs, records, index and `.gitignore`.
+Tracked-file refusal (rc 3) and unignored refusal (rc 3) give distinct
+advice; destination without a host rejected (rc 2); symlink digest matches
+the store byte-for-byte; push through a symlink sends contents; pull over a
+symlink refused (rc 1); `command` runs nothing. Deploy + release + transfer
+all land in one ledger, `check` consistent. 36/36 scripts clean under
+`bin/check-bash32`.
+
+---
+
+## v0.45.0 — 2026-09-19
+
+### The ship log — what went out, where, and whether it worked
+
+v0.44.0 made direction enforceable. This makes it **answerable**.
+
+Before now there were two half-ledgers that could not be joined:
+`build/deploy` appended a row to `build/deploy-log.md` but never tagged,
+and `/release` tagged but ran its own discovered deploy command and wrote
+nothing at all. So "what went to staging on the 14th, and who sent it"
+had no answer, and a production release left no trace in either.
+
+#### New — `deploys/`, a real ledger
+
+```
+deploys/records/<id>.md     one file per execution, YAML frontmatter
+deploys/DEPLOYS.md          regenerated view; never hand-edited
+```
+
+**Records are the truth; the index is derived.** One file per execution
+means two concurrent branches touch different files. A single append-only
+markdown table conflicts on every PR the moment there is a second
+long-lived branch, and a ledger that conflicts on every PR gets deleted.
+
+Each record carries `kind` (deploy or release), `environment`, `class`,
+`tag`, `sha`, `branch`, `user`, `host`, `started`/`finished`, `status`,
+`duration_s`, `error_stage`, `approval`, and `task_refs` — the last left
+empty until task enforcement lands in v0.47.0 and can populate it.
+
+IDs are `DEP-YYYYMMDD-HHMMSS-<env>` with a collision suffix, reserved
+with `noclobber` on the **id** rather than on a filename. A counter races:
+two worktrees both read `12`, both write `TASK-012-<different-slug>.md`,
+and both succeed because the slugs differ. Verified with five concurrent
+opens inside the same second — five distinct ids, no collision.
+
+**No secrets, ever.** Not values, not env-file contents, not command
+output that might carry either. A record holds what shipped, where, when,
+and by whom.
+
+#### New — `/deploys`
+
+Read-only reader over the ledger. `list`, `list --env staging`, `show
+<id>`, `check`. It never runs a deploy.
+
+`deploys.sh check` exits 3 when the index disagrees with the records, and
+warns about runs stuck `in-flight` — a process that died without closing.
+An empty ledger is reported as "nothing has shipped through the pipeline
+yet" rather than as an empty history, which are different facts.
+
+#### `/release` now routes through the pipeline
+
+Step 5 previously ran a deploy command discovered from CLAUDE.md, which
+meant a **production release bypassed the class guard, the approval gate
+and every log**. It now prefers `./build/deploy --env=<prod-env>
+--intent=release`, resolving the production environment from the registry
+via `environment.sh prod-env` rather than guessing — and stopping with an
+explanation when the project has declared no production class, instead of
+letting the guard produce the error later.
+
+The no-pipeline fallback remains, but now has to **say so** in the release
+report: that the deploy did not go through the pipeline, and therefore has
+no record, no class guard and no approval gate.
+
+#### Consent: invocation is the gate of record
+
+`/release` has published invocation-is-consent since v0.33.0. The pipeline
+now records that honestly as `approval: invocation`. It does **not** stack
+a confirmation prompt on top, which would contradict the contract the
+skill states five times over — and, more to the point, a prompt cannot be
+answered from a tool-driven shell, which has no controlling terminal.
+Recording an approver for a prompt that never fired would put a lie in an
+audit trail.
+
+`gates/approval.sh` is unchanged and still runs for a human driving
+`./build/deploy` from a terminal, where a prompt can actually be answered.
+That is the split: **invocation is consent through the skill; the prompt
+is for the CLI.**
+
+#### `--intent` is now REQUIRED
+
+The v0.44.0 deprecation window is closed. An absent `--intent` exits 2
+with the target's class in the message. Deriving direction silently is how
+"I thought I was deploying to staging" happens.
+
+#### Smaller
+
+- A run refused by `class-guard.sh` leaves **no record** — a refusal is
+  not a deploy. The ledger opens only after the guard passes.
+- `build/deploy` reports the record id on both success and failure.
+- `seed/deploy-log.md.template` marked **superseded**. The one-line append
+  still happens when the file exists, so existing history does not stop
+  mid-stream, but the header now says which ledger is authoritative.
+- Fixed three `set -o pipefail` bugs in `deploys.sh` found by testing: a
+  `grep`/`ls` that correctly finds nothing exits 1 and takes the script
+  with it. `check` on an empty ledger, `list` on an empty ledger, and the
+  in-flight scan all hit this.
+- `open` regenerates the index, not just `close` — otherwise every
+  in-flight deploy reported false drift for the duration of its own run.
+
+#### Verified
+
+`--intent` required (exit 2); deploy and release both recorded with the
+right `kind`/`class`/`approval`; a refused prod deploy adds no record;
+`check` returns 0 clean, 3 on a deleted index row, 0 after regenerate, and
+warns on in-flight; five concurrent opens produce five ids. 35/35 scripts
+clean under `bin/check-bash32`.
+
+#### Scope note
+
+The decision document bundled **transport** (`/env-sync`, config parity
+across machines) into this release. It is split out to v0.46.0. Transport
+moves **secrets between machines**; it deserves its own release and its
+own verification rather than being rushed at the tail of a large one.
+
+---
+
+## v0.44.0 — 2026-09-19
+
+### The direction spine — `/deploy` structurally cannot reach production
+
+`deploy` and `release` are the same pipeline pointed in opposite
+directions. Until now nothing enforced that, and the thing that was
+supposed to — an exact-match `case "$ENV" in prod|production)` in
+`10-preflight.sh` with **no default arm** — let `production-us`,
+`prod-eu`, `live` and `PROD` through with no gate at all.
+
+Direction is now a property of the **environment**, declared once, not a
+property of how someone spelled it on the command line.
+
+#### `class` — the new registry field
+
+`.claude/environments.json` environments gain `"class": "dev" | "staging"
+| "prod"`. It decides what may ship where:
+
+| Class | `/deploy` | `/release` |
+|---|---|---|
+| `dev`, `staging` | yes | no |
+| `prod` | **never** | yes |
+| `unclassified` | yes, with a warning | no |
+
+Resolution is **escalate-only**, in order:
+
+1. A declared `class` wins — *except* that a name containing
+   `prod`/`production`/`live` is treated as production even when it
+   declares otherwise. `"class": "dev"` on an env called `prod-eu` is far
+   more likely a mistake than an intention, and guessing wrong in that
+   direction puts a deploy into production.
+2. No class + prod-looking name → `prod`.
+3. No class + ordinary name → `unclassified`.
+
+A false positive blocks a deploy — loud and safe. A false negative is
+what shipped before.
+
+`unclassified` is deliberately **not** fatal for a deploy: every project
+upgrading into this version starts with a registry that declares no
+classes, and failing every deploy closed on upgrade is how a gate gets
+deleted. It **is** fatal for a release — declaring `prod` is the only way
+to make a release target legal.
+
+Honest residual risk: a production environment whose name contains no
+prod-ish token and declares no class resolves to `unclassified`, and
+`/deploy` will ship to it. `environment.sh classes` makes that one command
+to check rather than an audit.
+
+#### New — `build/gates/class-guard.sh`
+
+Enforces the pairing before any stage runs. **No bypass.**
+`git-clean.sh` has `FORCE_DIRTY` and `approval.sh` has `FORCE_APPROVAL`;
+this gate has nothing, because an escape hatch on the one thing a gate
+exists to prevent is decoration. Verified: `FORCE_APPROVAL`, `FORCE_DIRTY`,
+`SKIP_GATES`, `FORCE_CLASS` and `CLASS_GUARD_ALLOW` all fail to move it.
+
+It works with no registry at all, falling back to the same escalate-only
+name heuristic, so a project that never set up the environment skill still
+cannot `/deploy` to something called `production-us`.
+
+#### New — `environment.sh class` / `prod-env` / `classes`
+
+```
+environment.sh classes      # every env, its resolved class, and WHY
+environment.sh class <env>  # one env; exit 0 classified, 3 unclassified, 2 unknown
+environment.sh prod-env     # which environments are production
+```
+
+`classes` prints the derivation (`declared`, `name-escalated (no class
+declared)`, `name-escalated over declared 'dev'`, `invalid class 'banana'`),
+so a surprising answer explains itself.
+
+#### New — the `/deploy` skill
+
+69 skills and none of them was `deploy`; `pipeline-rules.md` had specified
+one since the file was written. It resolves the target from the registry,
+refuses a production target *before* running anything rather than letting
+the gate produce the error, and passes `--intent=deploy` explicitly.
+
+It will not reach around the guard — no calling `environments/<env>/deploy.sh`
+directly, no editing a class, no renaming an environment. If the user says
+"deploy to production", the skill says that means `/release` rather than
+silently translating.
+
+#### `build/deploy` — `--intent`, and `--skip-gates` stops lying
+
+- `--intent=<deploy|release>` declares direction. Absent, it is derived
+  from the class with a loud `DEPRECATED` warning and **becomes required
+  in v0.45.0**. Deriving can only reproduce the admissible pairing, so it
+  never invents a direction the guard would refuse.
+- `ENV_CLASS` and `INTENT` are resolved **once** and exported. Stages route
+  on the class and must never re-match the name — two independent name
+  matches is exactly how a production environment got both no approval gate
+  and the wrong test suite.
+- `--skip-gates` was theatre: parsed, printed as `Gates: SKIPPED`, and read
+  by nothing. It now really skips the optional gates (clean tree, tag
+  match), and only on non-production classes. It never skips the class
+  guard or the production approval, and the banner says so.
+
+#### Stage fixes
+
+- `10-preflight.sh` — production approval now fires on `ENV_CLASS == prod`
+  instead of an exact name match. A production deploy never skips the
+  optional gates whatever was passed: "the tree was dirty" is not something
+  you wave through on the way to prod.
+- `30-test.sh` — the production test suite (`prod-gate.md`) is selected by
+  class. `production-us` previously got the ordinary `pre-deploy` suite.
+
+#### `REQUIRES_APPROVAL` is vestigial, and now says so
+
+`build/environments/example/env.sh` shipped
+`export REQUIRES_APPROVAL=false  # set true for prod (10-preflight checks)`.
+**Zero code has ever read it** — the comment was false the day it was
+written. Approval is decided by class. The variable is kept so existing
+`env.sh` files that set it do not look broken, with a comment that tells
+the truth.
+
+#### Verified
+
+Full matrix across `local`/`staging`/`prod`/`production-us`/`live-eu`/`qa`/
+`prod-eu`, with a registry and without one; end-to-end through
+`./build/deploy` in a real git project. `deploy → prod` refused,
+`deploy → production-us` refused (the old hole), `release → staging`
+refused, `deploy → staging` passes, `deploy → qa` passes with the
+unclassified warning. 34/34 scripts clean under `bin/check-bash32`.
+
+#### Not done here
+
+`/release` still discovers its own deploy command and does not route
+through `./build/deploy`, so a production release currently bypasses the
+class guard, the approval gate and the deploy log. Rerouting it is the
+largest behavioural change in this theme and lands in v0.45.0 against a
+spine that is by then proven. The deploy/release **ledger** — per-execution
+records of what went where — is also v0.45.0.
+
+`.claude/environments.json` is itself unaudited: nothing yet records a
+change to a `class` field. That is closed by the task-enforcement work in
+v0.47.0, and it is the single highest-value item in that release.
+
+---
+
+## v0.43.1 — 2026-09-19
+
+### Foundation patch — fix the gates that reported success while doing nothing
+
+Four things in this Element passed, printed a green result, and were not
+checking anything. None of it was visible from CI, because CI had the same
+blind spots.
+
+#### `content/build/gates/approval.sh` — the production approval gate could not be passed
+
+- It tested `[[ ! -t 0 ]]` and aborted, conflating "stdin is a pipe" with
+  "nobody is there". A pipeline stage runs with stdin redirected while the
+  operator is still at the terminal, so the gate failed closed on exactly
+  the caller it exists to protect. It now probes and prompts on the
+  controlling terminal (`/dev/tty`), and fails closed only when there is
+  genuinely no terminal.
+- `${REPLY,,}` is bash 4 syntax. `/bin/bash` on stock macOS is 3.2.57,
+  where it is a `bad substitution` — so even with a terminal, typing `yes`
+  exited 1. **The only route through this gate was `FORCE_APPROVAL=1`, its
+  own bypass.** Lowercasing now goes through `tr`.
+- New `APPROVAL_TIMEOUT` (default 120s, integer, `0` waits forever). A
+  detached process can inherit a terminal nobody is watching; without a
+  bound that hangs a deploy indefinitely. **Timing out aborts** — the gate
+  never approves by default.
+- Whitespace is stripped as well as lowercased, so a terminal's trailing
+  `\r` and a fat-fingered `" yes"` both still approve.
+
+#### `bin/lint` — enumerated zero files and exited 0 on every run since v0.42.0
+
+It globbed `kit/`, `kit/skills/` and `bootstrap/`; v0.42.0 renamed those to
+`content/`, `content/skills/` and `seed/` without updating the globs. The
+gate `CLAUDE.md` mandates before tagging had silently stopped reading, and
+CI's `continue-on-error: true` has been redundant ever since. Repointed.
+
+First honest run: 198 findings across 120 files, 9 HIGH. Six of the nine
+were linter false positives rather than content drift, three of them
+exposing a gap in its own classification — the `runtime-*.md.template`
+family and `pipeline-rules.md` are multi-platform *by subject*. Added to
+the existing `CROSS_CUTTING_BASENAMES` floor, which surfaces them at MEDIUM
+rather than silencing them. 9 HIGH -> 5.
+
+#### `bin/init` — a re-run destroyed consumer state, and a broken manifest installed nothing silently
+
+- `init-only-with-sha` had no exists-check despite the policy name, so
+  re-running `bin/init` reset `.claude/rasa.lock.json#overrides[]` to `[]`
+  — and the next sync then overwrote every file the consumer had
+  deliberately protected. A re-run now **merges**: Element-owned fields are
+  refreshed, `overrides[]` and `installed_at` and any consumer-added keys
+  are preserved, and a `last_synced` stamp is added. An unparseable
+  lockfile is left untouched with a warning rather than clobbered.
+- The `element.files[]` / `seed.files[]` counts came from a `python3`
+  one-liner whose failure produced a non-numeric value, which
+  `[[ "$x" -eq 0 ]]` evaluates as zero — so a manifest read error reported
+  "empty — nothing to copy" and exited 0 having installed nothing. Both
+  counts now hard-fail on a non-numeric value.
+
+This matters more than it looks: `/sync` is dead (it gates on
+`.claude/foundation.json`, which has not existed since the v1.0.0 canon
+lock), so **`bin/init` is the update path**. It had to become safe to
+re-run before it could be one.
+
+#### `bin/check-bash32` — new hard gate for the bash 3.2 floor
+
+`bash -n` is not a portability check: it parses with whatever bash is
+running, so on a bash-5 CI runner every bash-4-ism is clean. All 40 shipped
+scripts passed `bash -n` while the production approval gate aborted at
+runtime. Six patterns are now rejected — case-modifying expansions,
+`mapfile`/`readarray`, associative arrays, `&>>`, `case` fall-through, and
+`globstar`. Full-line comments are stripped before matching; a deliberate
+exception carries a trailing `# bash32-ok`. Verified against the pre-fix
+`approval.sh`: it catches it.
+
+#### CI
+
+`.github/workflows/kit-checks.yml` -> `.github/workflows/checks.yml`, four
+jobs. **New `macos-latest` job actually executes the gates** on the bash
+3.2.57 every macOS consumer has, rather than syntax-checking them on bash
+5: the approval gate must honour `FORCE_APPROVAL` and must fail closed with
+no terminal, and `bin/init` must survive a re-run with `overrides[]`
+intact. Every step was run locally on bash 3.2.57 before shipping.
+
+> **Note for repo settings:** the workflow's check name changed from
+> `kit checks` to `checks`. If branch protection requires the old name, it
+> needs updating.
+
+#### Vocabulary + manifest hygiene
+
+- `rasa.json`: `manifest contract` -> `Connection Contract`; three `kit/`
+  path references -> `content/`; `MANIFEST.json` -> `rasa.json`. The
+  agents note advertised a `code-reviewer` agent this Element does not ship
+  — corrected to `auditor`, which is what it ships and what `/audit` calls.
+- **Removed the dead `scaffold.directories` block** (30 entries). `bin/init`
+  has never read it, 20 of the 30 directories do not exist after an install,
+  and the list still named `tasks/done`, renamed to `tasks/completed` back
+  at v0.36.0. Deleted rather than extended: 30 lines of configuration that
+  lies are worse than an honest absence. Creating these directories for real
+  is tracked as separate work.
+- `CHANGELOG.md`: retitled from `claude-kit changelog`; the pin instruction
+  named `.claude/foundation.json`, which does not exist — now
+  `.claude/rasa.lock.json`; `## Unreleased` was stranded between 0.42.1 and
+  v0.42.0 and moved above the newest release; documented that the `v` in
+  `## v<semver> — DATE` is load-bearing, since `/sync` parses it.
+- `README.md`: the license section claimed **MIT** while `LICENSE` is
+  **Apache-2.0** — on a public repo. Also corrected the repo URL (no longer
+  "planned") and a `~/rAI/rasaos-canon/` source-of-truth path that does not
+  exist. The body remains the pre-canon `claude-kit` README; a full rewrite
+  is its own work.
+
+#### Checked and found NOT broken
+
+`audit.sh validate` was reported as passing by accident. It does not: it
+returns 0 on a complete report and 3 on both a placeholder-bearing and a
+truncated one. The zero-placeholder path did rely on a `"00"` string
+coincidence, so the expression was made explicit — but no behaviour
+changed and no bug was fixed.
+
+#### Not done here
+
+`bin/lint` is **still advisory**, not a hard gate. The 5 remaining HIGH
+findings are content judgement calls rather than bugs — two of them
+(`pip install pyyaml` in `runtime/SKILL.md`) are this Element's own tooling
+dependency, which the linter cannot distinguish from platform drift.
+Promoting it to a hard gate requires triaging those, and that is a content
+decision, not a patch.
+
+---
+
+## v0.43.0 — 2026-09-19
+
+_Authored 2026-06-25; held uncommitted and cut on 2026-09-19 against
+`v0.42.2`. The convergence scoping it records was done on the authoring
+date._
+
+### Declare the five canonical engineering modules as standards (`requires.elements[]`)
+
+**Additive / non-breaking.** Populates `requires.elements[]` (previously
+`{}`) with the five `module`-kind Elements distilled out of this toolkit:
+
+```json
+"requires": {
+  "elements": [
+    { "name": "rasa.module.tasks",     "version": ">=0.1.0" },
+    { "name": "rasa.module.releases",  "version": ">=0.1.0" },
+    { "name": "rasa.module.pipelines", "version": ">=0.1.0" },
+    { "name": "rasa.module.tests",     "version": ">=0.1.0" },
+    { "name": "rasa.module.jobs",      "version": ">=0.1.0" }
+  ]
+}
+```
+
+This is the **standards declaration**: `rasa.domain.code` now names these
+modules as its standard composition. It is intentionally additive — the
+inline content is **retained and unchanged** — so existing consumers that
+`/sync` or `bin/init` see no behavior change.
+
+### Why the inline content is NOT yet removed (deprecated-pending-resolver)
+
+The eventual end-state is single-source: the modules own
+task/release/pipeline/test, and this toolkit drops its inline copies. That
+strip is **deferred, with evidence**:
+
+- **No resolver exists yet.** `bin/init` installs only this Element's own
+  `element.files[]`; nothing pulls `requires.elements[]` in (the kernel
+  dependency-resolver is Phase 6/7; kernel is Phase 0). Deleting the inline
+  content today would leave consumers with *nothing* in its place.
+- **The inline content is connective tissue.** A convergence-mapping
+  workflow (2026-06-25, 5 mappers + 3 adversarial reference-verifiers)
+  found **80 dangling references across 57 kept files** if the inline
+  task/release/pipeline/test content were deleted now — `task-rules.md`
+  alone is referenced by 35+ skills.
+- **Three design issues block a clean strip**, flagged for the future
+  removal pass:
+  1. **`/build` semantic collision** — this toolkit's `/build` (compile /
+     type-check, don't run) vs `rasa.module.pipelines`' `/build` (run the
+     CI/CD pipeline for an env). Same install path, different concept.
+     Must be resolved (e.g. rename the compile skill to `/compile`) before
+     either can own `.claude/skills/build/`.
+  2. **Prod-approval gate** — `build/gates/approval.sh` is not re-supplied
+     by `module.pipelines`; the strip would regress prod-deploy approval.
+  3. **`tasks/PHASES.md` + `tasks/AUDIT.md`** — `module.tasks` does not
+     seed these targets; they must be reconciled (folded into ROADMAP /
+     added to the module) before `task-rules.md` is removed.
+
+The deprecated inline set + the gating conditions are recorded in
+`rasa.json#rasa.convergence`. The removal lands in a future
+**breaking** release once the resolver exists and the three issues are
+resolved.
 
 ---
 
@@ -26,11 +1053,6 @@ human-readable rollback).
 
 - `bin/init` now clones the Element source into `<project>/kit/<element>/` for `/sync` + `/promote`. (This Element keeps its own richer `/sync` + `/contribute`; a `/kit` adaptation of those is a follow-up.)
 
-## Unreleased
-
-(no entries yet)
-
----
 
 ## v0.42.0 — 2026-05-24
 

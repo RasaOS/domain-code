@@ -79,6 +79,7 @@ rule so it is reviewable; the per-skill SKILL.md cites this rule.
   auto-merge a PR to `main` *iff* every file in the PR matches
   the spec-file allowlist (`tasks/**/*.md`, `tasks/PHASES.md`,
   `tasks/ROADMAP.md`) and the working tree is otherwise clean.
+  `tasks/RELEASES.md`) and the working tree is otherwise clean.
   Push to a short-lived `spec/<id>` branch with a real PR
   record, merge via `gh pr merge --squash`. Any non-spec dirty
   file falls back to "leave uncommitted" — same as the
@@ -155,7 +156,7 @@ What the skill still does:
   end-to-end without intermediate prompts.
 
 **Non-production preview deploys** have one carve-out: `/mission`
-MAY run `./build/deploy --env=<env>` against a project-configured
+MAY run `./build/deploy --env=<env> --intent=deploy` against a project-configured
 non-prod environment, but only when the goal explicitly asks for
 a preview deploy. The carve-out is opt-in (the goal must request
 it), bounded (never `prod`/`production`, never via `/release`,

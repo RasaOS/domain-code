@@ -1,21 +1,25 @@
 {
   "description": "Environment registry — the single source of truth for this project's environments. Every environment name used by runtime stamps (env.environments), cloud stamps (environments), env-var stamps (environments), and the deploy pipeline must be a key under `environments` here. Read by .claude/skills/environment/environment.sh. See .claude/environment-rules.md.",
+  "class_doc": "`class` is one of dev | staging | prod and decides DIRECTION, not identity. /deploy may target dev and staging and can never reach prod; /release targets prod and always tags. Classification never trusts the name alone: an env whose name contains prod/live/production is treated as prod even if it declares otherwise, because guessing wrong in that direction puts a deploy into production. An env with no class and no prod-looking name is `unclassified` — /deploy warns and proceeds, /release refuses. Run `environment.sh classes` to see every environment's resolved class.",
   "default": "local",
   "environments": {
     "local": {
       "description": "Local development on your own machine.",
+      "class": "dev",
       "env_file": ".env",
       "publish_to": null,
       "deploy_to": null
     },
     "staging": {
       "description": "Shared pre-production environment.",
+      "class": "staging",
       "env_file": ".env.staging",
       "publish_to": null,
       "deploy_to": null
     },
     "prod": {
       "description": "Production.",
+      "class": "prod",
       "env_file": ".env.production",
       "publish_to": null,
       "deploy_to": null

@@ -21,23 +21,18 @@ glance.
    each phase's task IDs (preserving letter suffixes like
    `018a`).
 
-2. **Read every task file** in `tasks/active/`,
-   `tasks/backlog/`, `tasks/completed/`. For each:
-   - **ID** — from the filename (`TASK-014` from
-     `TASK-014-vehicle-crud.md`). Preserve letter suffixes.
-   - **Title** — first H1, with the `TASK-XXX:` prefix stripped.
-   - **State** — derived from directory:
-     - `🚧 Active` — `tasks/active/`
-     - `📋 Backlog` — `tasks/backlog/`
-     - `✅ Done` — `tasks/completed/`
-   - **Type** — only meaningful for non-Done states:
-     - `📝 Stub` if the file contains `STATUS: STUB`
-     - `📄 Spec` otherwise
-   - **Shipped in** — for Done items only, look up the version in
-     `tasks/RELEASES.md`: a ✅ Shipped release names the phases and
-     tasks it landed, so a Done task's version is the shipped release
-     naming its phase (or naming the task directly). If no shipped
-     release names it, mark `(pre-versioning)`.
+Resolve a completed task's shipped version from `tasks/RELEASES.md`:
+find the `## v<semver> — ✅ Shipped` section whose `### Bundled` list
+contains the task id, or contains a `- Phase N — ...` bullet naming the
+task's phase. Use `bash .claude/skills/release/release.sh manifest
+<version>` rather than parsing by hand.
+
+Only `### Bundled` counts. Targeted work has not shipped.
+
+Fall back to `(pre-versioning)` only when no shipped release names it.
+Before v0.48.0 that fallback caught *everything*, because the release
+tracker was broken on install and never had a parseable shipped entry to
+match against.
 
 3. **Skip non-task files:** `.gitkeep`, `README.md`,
    `ROADMAP.md`, anything not matching `TASK-` prefix.

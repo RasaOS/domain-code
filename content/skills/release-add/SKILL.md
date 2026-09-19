@@ -1,6 +1,6 @@
 ---
 name: release-add
-description: Append a task to the top "🚧 Next" entry of `tasks/RELEASES.md`. Triggered automatically by `/peer-review` and `/release` after a merge to `main`, or invoked by the user after a manual merge. Idempotent — re-running for the same task is a no-op. Supports a `--since-last-tag` bulk mode to catch up after manual merges. Triggered when a task lands on main and needs to be recorded for the next release — e.g. "/release-add TASK-042", "/release-add HOTFIX-007", "/release-add --since-last-tag", "track this for the next release".
+description: Bundle a COMPLETED task into a release — the official act that puts work into it. Invocation is approval. Only work in `tasks/completed/` can be bundled; targeting a release before the work is done is `/release-plan`. Triggered automatically by `/peer-review` and `/release` after a merge to `main`, or invoked by the user after a manual merge. Idempotent — re-running for the same task is a no-op. Supports a `--since-last-tag` bulk mode to catch up after manual merges. Triggered when a task lands on main and needs to be recorded for the next release — e.g. "/release-add TASK-042", "/release-add HOTFIX-007", "/release-add --since-last-tag", "track this for the next release".
 ---
 
 # /release-add — append a task to the next-release entry
@@ -16,14 +16,55 @@ does not bump versions, it does not ship.
 
 ## Behavior contract
 
+- **Route mechanics through the engine.** `.claude/skills/release/release.sh`
+  owns parsing and rewriting:
+
+  ```bash
+  bash .claude/skills/release/release.sh bundle TASK-042 v1.3.0
+  ```
+
+  Do not hand-edit `tasks/RELEASES.md` — the engine keeps the two layers
+  consistent and `check` validates the result.
+
 - **Operate on `tasks/RELEASES.md`.** If the file doesn't exist,
   create it from the template format described in
   `release-rules.md` "Format" (one "🚧 Next" entry, no shipped
   entries below).
-- **Find the active "🚧 Next" entry.** Exactly one should exist
-  at the top of the file. If zero or multiple are found,
-  **stop**: the file is in an unexpected shape, surface the
-  finding.
+- **Resolve the destination release**, in this order:
+  1. an explicit `--release vX.Y.Z`;
+  2. **the release whose `### Targeted` holds this id** — this is the
+     join that makes planning pay off: work aimed at v1.3.0 lands in
+     v1.3.0, not in whatever happens to be open;
+  3. the single open (📋 or 🚧) release, if there is exactly one;
+  4. none open → create one at last-tag + minor (+ patch for a
+     `HOTFIX-`) and **say that you assumed it**.
+
+  Multiple open releases with no other signal → ask. The old "exactly
+  one 🚧 Next entry, otherwise stop" rule is **gone**: it hard-stopped
+  on the first run in every fresh install, because the seed produced
+  zero 🚧 entries.
+
+- **Gate: only completed work is bundled.** `tasks/completed/<ID>-*.md`
+  must exist. The engine enforces it and prints the remedy.
+
+  **If git proves the merge and the spec is still in `tasks/active/`,
+  do the move**: the id named in a commit subject since the last tag is
+  conclusive. `git mv` the spec into `tasks/completed/`, set
+  `status: completed`, say what you did, then bundle.
+
+  Nothing else in the mainline flow owns that transition —
+  `/peer-review` merges without moving the spec — so spec-in-`active/`
+  plus merged-in-git is the *normal* post-merge state, and it is exactly
+  what the gate refuses. `/release-add` is the only skill that runs at
+  the moment the transition becomes true. Do **not** move a spec on
+  anything weaker than a commit naming the id.
+
+- **Invocation is approval.** Running this skill IS the approval act.
+  The engine records `**Approved.** <user> via invocation` once per
+  release. Do not ask for a separate confirmation.
+
+- **Bundling clears the id from every `### Targeted` list.** The engine
+  does this in the same edit, so an id is never in both layers.
 - **Idempotency by ID.** Parse the task IDs already listed under
   the "🚧 Next" entry. If the task to add is already there,
   exit cleanly without modifying the file. Report "already

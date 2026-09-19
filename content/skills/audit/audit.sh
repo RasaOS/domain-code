@@ -393,10 +393,18 @@ cmd_validate() {
   done
 
   # Check for remaining <to-fill> placeholders (agent didn't complete).
+  #
+  # `grep -c` prints 0 AND exits 1 when nothing matches, so the old
+  # `|| echo 0` appended a second zero and the newline-strip collapsed it
+  # to "00" — which bash arithmetic reads as 0, so this reached the right
+  # answer by coincidence rather than by design. Count with grep alone and
+  # normalise explicitly. (`grep -c` counts matching LINES, so two
+  # placeholders on one line count once; that is fine, the test is
+  # zero-vs-nonzero.)
   local unfilled
-  unfilled="$(grep -c '<to-fill' "$f" 2>/dev/null || echo 0)"
-  unfilled="${unfilled//$'\n'/}"
-  if [ "${unfilled:-0}" -gt 0 ]; then
+  unfilled="$(grep -c '<to-fill' "$f" 2>/dev/null)" || unfilled=0
+  case "$unfilled" in ''|*[!0-9]*) unfilled=0 ;; esac
+  if [ "$unfilled" -gt 0 ]; then
     echo "${unfilled} <to-fill> placeholder(s) remaining — agent did not complete" >&2
     missing=$(( missing + 1 ))
   fi

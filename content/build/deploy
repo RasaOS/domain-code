@@ -2,10 +2,21 @@
 # build/deploy — universal pipeline entry point
 #
 # Usage:
-#   ./build/deploy --env=<env> [--tag=<tag>] [--skip-tests] [--skip-gates] [--dry-run]
+#   ./build/deploy --env=<env> --intent=<deploy|release> \
+#                  [--tag=<tag>] [--skip-tests] [--skip-gates] [--dry-run]
 #
 # --env is REQUIRED. There is no default environment. Available environments
 # are folders under build/environments/.
+#
+# --intent declares DIRECTION and is enforced by gates/class-guard.sh:
+#   deploy   -> dev / staging. Can never reach production.
+#   release  -> production, tagged.
+# --intent is REQUIRED as of v0.45.0.
+#
+# --skip-gates skips the OPTIONAL gates (clean tree, tag match). It has
+# never been able to skip class-guard or the production approval, and
+# before v0.44.0 it did not skip anything at all — it was parsed, printed
+# as "Gates: SKIPPED", and never read.
 #
 # Synced from claude-kit; safe to customize if you need project-specific
 # argument handling. If you customize, /sync will surface the divergence.
@@ -19,6 +30,7 @@ cd "$PROJECT_DIR"
 
 # ─── Defaults ──────────────────────────────────────────────────────────────
 ENV=""
+INTENT=""
 TAG=""
 SKIP_TESTS=false
 SKIP_GATES=false
@@ -29,6 +41,8 @@ while [[ $# -gt 0 ]]; do
   case $1 in
     --env=*)        ENV="${1#*=}" ;;
     --env)          ENV="$2"; shift ;;
+    --intent=*)     INTENT="${1#*=}" ;;
+    --intent)       INTENT="$2"; shift ;;
     --tag=*)        TAG="${1#*=}" ;;
     --tag)          TAG="$2"; shift ;;
     --skip-tests)   SKIP_TESTS=true ;;
@@ -112,9 +126,75 @@ fi
 export DEPLOY_USER="$(whoami)"
 export DEPLOY_TIMESTAMP="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 
+# ─── Resolve direction, then enforce it ────────────────────────────────────
+# ENV_CLASS is exported so stages route on the class instead of re-matching
+# the environment NAME, which is how `production-us` used to take no gate.
+ENV_CLASS="unclassified"
+if [[ -f "$ENV_SH" ]]; then
+  ENV_CLASS="$(bash "$ENV_SH" class "$ENV" 2>/dev/null || true)"
+fi
+case "$ENV_CLASS" in
+  dev|staging|prod) ;;
+  *)
+    case "$(printf '%s' "$ENV" | tr '[:upper:]' '[:lower:]')" in
+      *prod*|*live*) ENV_CLASS="prod" ;;
+      *)             ENV_CLASS="unclassified" ;;
+    esac
+    ;;
+esac
+export ENV_CLASS
+
+# --intent is REQUIRED as of v0.45.0. v0.44.0 derived it from the class with
+# a deprecation warning; that window is closed. Deriving direction silently
+# is how "I thought I was deploying to staging" happens.
+if [[ -z "$INTENT" ]]; then
+  echo "ERROR: --intent=<deploy|release> is required." >&2
+  echo "" >&2
+  echo "  deploy  → dev / staging. Cannot reach production." >&2
+  echo "  release → production, tagged." >&2
+  echo "" >&2
+  echo "  '$ENV' has class '$ENV_CLASS'." >&2
+  exit 2
+fi
+export INTENT
+
+case "$INTENT" in
+  deploy|release) ;;
+  *)
+    echo "ERROR: --intent must be 'deploy' or 'release' (got '$INTENT')." >&2
+    exit 2
+    ;;
+esac
+
+# Not skippable. --skip-gates does not reach this, and there is no bypass
+# variable: it is the one check the deploy/release split exists to make.
+"$BUILD_DIR/gates/class-guard.sh" "$ENV" "$INTENT"
+
+# ─── Ship log ──────────────────────────────────────────────────────────────
+# Opened AFTER the guard so a refused run leaves no record — a refusal is
+# not a deploy. Closed in every exit path below.
+#
+# APPROVAL records how the human consented, not whether a prompt appeared.
+# For a release driven by /release, invocation IS the consent (the skill
+# publishes that contract); recording an approver for a prompt that never
+# fired would be a lie in an audit trail. A human running this by hand on a
+# terminal still gets gates/approval.sh in 10-preflight.
+DEPLOYS_SH="$PROJECT_DIR/.claude/skills/deploys/deploys.sh"
+SHIP_ID=""
+if [[ -f "$DEPLOYS_SH" ]]; then
+  SHIP_ID="$(bash "$DEPLOYS_SH" open "$ENV" "$ENV_CLASS" "$INTENT" "$DEPLOY_TAG" \
+              "${DEPLOY_APPROVAL:-invocation}" 2>/dev/null || true)"
+fi
+export SHIP_ID
+
+ship_close() {
+  [[ -n "$SHIP_ID" && -f "$DEPLOYS_SH" ]] || return 0
+  bash "$DEPLOYS_SH" close "$SHIP_ID" "$1" "$2" "${3:-}" >/dev/null 2>&1 || true
+}
+
 # ─── Banner ────────────────────────────────────────────────────────────────
 echo "════════════════════════════════════════════════════════════"
-echo "  Deploy → $ENV"
+echo "  ${INTENT} → $ENV  (class: $ENV_CLASS)"
 echo "  Tag:  $DEPLOY_TAG"
 [[ -n "$PUBLISH_TO" ]] && echo "  Publish → $PUBLISH_TO"
 [[ -n "$DEPLOY_TO" ]]  && echo "  Target  → $DEPLOY_TO"
@@ -122,7 +202,7 @@ echo "  User: $DEPLOY_USER"
 echo "  Time: $DEPLOY_TIMESTAMP"
 $DRY_RUN  && echo "  Mode: DRY RUN (no execution)"
 $SKIP_TESTS && echo "  Tests: SKIPPED"
-$SKIP_GATES && echo "  Gates: SKIPPED"
+$SKIP_GATES && echo "  Gates: SKIPPED (optional gates only — class-guard and prod approval still run)"
 echo "════════════════════════════════════════════════════════════"
 
 # ─── Run stages in numeric order ───────────────────────────────────────────
@@ -156,7 +236,7 @@ for stage in "${STAGES[@]}"; do
     continue
   fi
 
-  if ! bash "$stage" "$ENV"; then
+  if ! SKIP_GATES="$SKIP_GATES" bash "$stage" "$ENV"; then
     RESULT="failed"
     ERROR_STAGE="$STAGE_NAME"
     echo ""
@@ -169,6 +249,17 @@ END=$(date +%s)
 DURATION=$((END - START))
 
 # ─── Log result ────────────────────────────────────────────────────────────
+if [[ "$DRY_RUN" == "true" ]]; then
+  ship_close "success" "$DURATION" "dry-run"
+elif [[ "$RESULT" == "success" ]]; then
+  ship_close "success" "$DURATION"
+else
+  ship_close "failed" "$DURATION" "$ERROR_STAGE"
+fi
+
+# Legacy single-line log. Superseded by the deploys/ ledger — kept because
+# projects that already have build/deploy-log.md would otherwise see their
+# history stop without explanation. Delete the file to stop the append.
 LOG="$BUILD_DIR/deploy-log.md"
 if [[ -f "$LOG" ]]; then
   STATUS_MARK="✓"
@@ -186,9 +277,11 @@ fi
 # ─── Exit code ─────────────────────────────────────────────────────────────
 echo ""
 if [[ "$RESULT" == "success" ]]; then
-  echo "✓ Deploy complete: $ENV (${DURATION}s)"
+  echo "✓ ${INTENT} complete: $ENV (${DURATION}s)"
+  [[ -n "$SHIP_ID" ]] && echo "  recorded: $SHIP_ID"
   exit 0
 else
-  echo "✗ Deploy failed at stage: $ERROR_STAGE"
+  echo "✗ ${INTENT} failed at stage: $ERROR_STAGE"
+  [[ -n "$SHIP_ID" ]] && echo "  recorded: $SHIP_ID"
   exit 1
 fi

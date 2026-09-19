@@ -7,9 +7,9 @@ time per the Connection Contract (canon Spec §6).
 
 **Aliases:** `claude-kit` (legacy), `rasa-domain-code` (transition).
 **Canonical name:** `rasa.domain.code`.
-**Repo:** `github.com/rasa-os/domain-code` (planned — currently
-`github.com/ChazzCoin/claude-kit`).
-**Source of truth for behaviour:** `~/rAI/rasaos-canon/` v1.0.0.
+**Repo:** `github.com/RasaOS/domain-code`. (`ChazzCoin/claude-kit` was
+the pre-RasaOS upstream this Element was renamed from.)
+**Source of truth for behaviour:** `~/rAI/rasa-os/canon/` (LOCKED v1.3.0).
 
 The README below is the original `claude-kit` README, preserved for
 the content surface (skills, modes, agents, rules, build pipeline)
@@ -530,4 +530,5 @@ Or pin to an older commit by editing `.claude/foundation.json`'s
 
 ## License
 
-MIT. Copy, fork, hack on it. If you make it better, send a PR.
+Apache-2.0 — see `LICENSE`. Copy, fork, hack on it. If you make it
+better, send a PR.
