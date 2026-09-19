@@ -24,6 +24,163 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.47.0 — 2026-09-19
+
+### Task enforcement — no code change without a task, at CHANGE time
+
+`task-rules.md` has said since early on that every code and running-config
+change is task-linked and that a stub is acceptable but nothing is not.
+Nothing enforced it. `/task-guard` looks like the enforcement and is not:
+it is a git `pre-commit` hook, so it fires after N edits have already
+landed, and its own SKILL.md sells **"never blocks a commit"**. That is a
+reconciler, not a gate.
+
+#### New — `/task-enforce`, a `PreToolUse` guard that denies
+
+On `Edit|Write|MultiEdit|NotebookEdit`, keyed on a **committed** config so
+the setting binds every contributor rather than living in one machine's
+`.git/hooks`:
+
+1. Classify the path — `code`, `docs`, or `meta`.
+2. `docs` and `meta` → **recorded, allowed**. Touching a README is not a
+   task.
+3. `code` with a linked task → recorded, allowed.
+4. `code` with nothing linked → **DENIED**. A stub is filed, linked, and
+   the retry proceeds.
+
+**One deny per task, not per edit.** The deny sets the current-task
+pointer, so the immediate retry succeeds and everything after it is
+linked. The cost of the audit trail is a single interrupted tool call.
+
+The deny reason names the filed task and says to retry — and says the
+title came from a filename, not from intent, so go fix it. `status` counts
+stubs still carrying `origin: auto-fallback` so they cannot quietly
+accumulate.
+
+#### `audit_anyway` ships NON-EMPTY — this is the point of the release
+
+```
+.claude/environments.json
+.claude/env-transport.md
+build/environments/*/env.sh
+build/environments/*/deploy.sh
+```
+
+The `.claude/**` exemption exists so a README touch is not a task. It does
+**not** exist so the files that define what production *is* can be edited
+untracked.
+
+`.claude/environments.json` carries each environment's `class`, which
+v0.44.0 made the thing that decides whether `/deploy` may proceed. Without
+this override, an agent flipping `"class": "prod"` to `"staging"` would
+trigger no guard, mint no task, write no ledger row, and be invisible to
+the commit-time reconciler — and the next `/deploy` would reach production
+**legitimately, through a gate working exactly as designed**. Same hole
+covered `.claude/env-transport.md`, which names where production
+credentials get shipped.
+
+Removing these four is a decision to accept that hole.
+
+#### Ledger — per-day-per-task, regenerated
+
+Changes append to `tasks/changes/<date>-<TASK>.md`; `tasks/CHANGES.md` is
+regenerated from them. **Not one appended table**: a single append-only
+file conflicts on every PR the moment two long-lived branches exist, and a
+ledger that conflicts on every PR gets deleted. Same discipline as
+`deploys/`.
+
+#### IDs use a real mutex
+
+`mkdir` is atomic; `set -C` on a filename is not enough here. Two sessions
+both compute `TASK-012`, write `TASK-012-<different-slug>.md`, and **both
+succeed because the paths differ**. Verified: six concurrent mints produce
+six distinct ids.
+
+#### `git-clean.sh` — bookkeeping is not dirtiness, and the pipeline was deadlocking itself
+
+Found by running a staging deploy **twice**, which nothing had done
+before: `build/deploy` writes `deploys/records/<id>.md` and appends to
+`build/deploy-log.md`, so the first deploy succeeded, wrote its own
+record, and **the second failed this gate on the evidence of the first.**
+A deploy pipeline deadlocked by its own audit trail. It reads fine; it
+only shows up when you run it twice.
+
+`tasks/`, `deploys/` and `build/deploy-log.md` are now excluded for
+non-production classes. A real code change still blocks everywhere.
+
+Enforcement writes into `tasks/` as you work and does not stage it.
+Counting that as a dirty tree makes the inner loop *edit → deploy to
+staging → look* demand a commit on every iteration; the second time that
+bites, someone aliases `FORCE_DIRTY=1` — which is blanket, so the
+**production** clean-tree check goes with it.
+
+`ENV_CLASS=prod` stays unfiltered; `BOOKKEEPING_STRICT=1` is unfiltered
+everywhere (`TASK_CHURN_STRICT` still honoured). The audit system must
+never be the reason a deploy gate fires — operators disable the gate that
+costs them, not the one that protects them.
+
+#### Honest limits, stated in the shipped rules
+
+Not buried:
+
+- **Raw `Bash` writes bypass the guard entirely** — `cat >`, `sed -i`,
+  `git apply`, codemods are not `Edit`/`Write` tool calls, so no
+  `PreToolUse` hook sees them. `/contract` concedes the identical hole.
+  `/task-guard` catches those at commit time, which is exactly why it was
+  retargeted as the reconciler rather than replaced.
+- `--no-verify` bypasses the reconciler; merge commits never run
+  `pre-commit`.
+- The config is class `meta`, so enforcement can be switched **off**
+  without filing a task. Deliberate — the alternative is not being able to
+  turn it off without its own permission.
+
+The claim that holds, and the only one made: *no Claude Code `Edit`/`Write`
+to a code path happens without a linked task, and every classified change
+lands in the ledger.*
+
+#### Fails closed on a broken interpreter
+
+If `python3` is unavailable the guard **denies** with an explanation
+rather than allowing. The contract is "no code change without an audit
+trail"; allowing on a broken interpreter would quietly void it. `bin/init`
+already hard-requires `python3`.
+
+#### Smaller
+
+- `task-rules.md` gains an enforcement pointer at the top; `/task-guard`'s
+  SKILL.md now says where it sits relative to the gate, so the two read as
+  layers rather than rivals. `/task-guard`'s "never blocks" promise is
+  still true **of it**.
+- Auto-filed stubs carry real frontmatter (`id`, `category`, `phase`,
+  `status`, `filed`, `origin`) and the literal `STATUS: STUB` marker that
+  `/backlog` greps for. `/task-guard`'s stub had no frontmatter at all, so
+  auto-stubs rendered as `Spec` and were invisible to any frontmatter
+  query.
+- Ships `enabled: false`. This Element installs into existing projects and
+  a gate that switches itself on mid-stream is a gate people delete.
+
+#### A bug worth naming, found by testing rather than reading
+
+The classifier expanded its glob lists unquoted so the shell would
+word-split them — and without `set -f` the shell **pathname-expanded them
+against the cwd first**. `*.md` became whatever `.md` files happened to be
+sitting there and `tasks/**` became the real subdirectories, so `README.md`
+classified as `code` and every documentation edit would have filed a task.
+It read correctly and behaved wrongly.
+
+#### Verified
+
+Deny-then-allow lifecycle; `docs`/`meta` never gated; classification
+correct across 13 paths including all four `audit_anyway` overrides; the
+unlinked `.claude/environments.json` edit now denies; ledger written and
+index regenerated; stub frontmatter correct; six concurrent mints give six
+ids; `git-clean` passes on task churn for non-prod and blocks it for prod
+and under `TASK_CHURN_STRICT=1`, while a real code change still blocks
+everywhere; deny payload is valid JSON with `permissionDecision: deny`.
+37/37 scripts clean under `bin/check-bash32`.
+
+---
+
 ## v0.46.0 — 2026-09-19
 
 ### Config transport — getting env files onto your other machine, safely

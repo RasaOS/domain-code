@@ -5,6 +5,14 @@ description: Toggle enforcement of the change-audit rule — every code or confi
 
 # /task-guard — enforce the change-audit rule
 
+> **Where this sits.** `/task-guard` is the **commit-time reconciler**:
+> it never blocks, and it catches changes that never went through an
+> `Edit`/`Write` tool call — a raw `Bash` write, a codemod, a human in
+> vim. `/task-enforce` is the **change-time gate** that denies an
+> unlinked code edit before it lands. They are layers, not rivals: the
+> gate covers the common path, the reconciler covers what the gate
+> structurally cannot see. Neither supersedes the other.
+
 Every code change and every running-configuration change should be
 linked to a task — for audit and review, long term. Not just the
 planned work: the quick fixes and hotfixes too, the ones that
