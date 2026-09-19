@@ -24,6 +24,75 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.48.3 — 2026-09-19
+
+### A locked contract could be silently overwritten — in the one engine that is actually installed
+
+v0.48.2 hardened `deploys.sh` and `env-sync.sh` and named `contract.sh`
+as carrying the same fence bug, deferred. That deferral was wrong in one
+respect worth recording: `contract.sh` is the **only** engine present in
+any consumer project — *(measured)* `kernel`, `rasa-console` and
+`vsi-web` all ship `.claude/skills/contract/contract.sh`; none has
+`deploys/`, `release.sh` or `task-enforce/`. Everything else fixed this
+week lives where nobody can run it. This one does not.
+
+#### Reproduced: a BOM or CRLF unlocks a locked contract
+
+```
+/contract lock api-shape --why "frozen for v1"
+… file picks up a UTF-8 BOM or CRLF (an editor, a browser, a checkout) …
+/contract update api-shape --from new.md
+→ exit 0, body rewritten
+```
+
+| stamp state | `update` on a LOCKED contract | |
+|---|---|---|
+| clean | exit 3, refused | correct |
+| **UTF-8 BOM** | **exit 0, body rewritten** | lock bypassed |
+| **CRLF** | **exit 0, body rewritten** | lock bypassed |
+| trailing space on the closing fence | exit 3, refused | correct |
+
+`fm_get` gated on `NR==1 && $0=="---"`, so a BOM or CRLF made every field
+read empty; `is_locked` compared that empty string to `"true"`, got
+false, and the script-level refusal — the header's "belt and suspenders"
+— never fired.
+
+Worse than a bypass: the old `body_replace` **appended** rather than
+replaced, because its `exit` never fired either. The reproduction shows
+the original body *and* the new one both present.
+
+The `PreToolUse` guard was never affected — it denies any edit under
+`contracts/` regardless of lock state, and the lock only selects the
+reason string. So the hook held; the sanctioned CLI path did not.
+
+#### The direction of the failure was the real defect
+
+`is_locked` now **fails closed**. An unreadable `is_locked` is treated as
+LOCKED, with a warning naming the file.
+
+A lock exists to refuse. When its state cannot be determined, the answer
+is refuse. A false positive is one `/contract unlock` away; a false
+negative overwrites a frozen contract and exits 0.
+
+#### Also fixed
+
+- `fm_get`, `fm_set` and `body_replace` all strip a UTF-8 BOM and CR and
+  match `^---[ \t]*$` instead of an exact string.
+- `fm_set` sanitizes its value, so a newline cannot forge frontmatter
+  keys — the W3 class from v0.48.2, which applies here too and matters
+  more, because a contract stamp's body *is* the contract.
+
+#### Verified
+
+Locked contracts now refuse `update` through a clean file, a BOM, CRLF
+and a fence with trailing whitespace — with the body provably intact in
+each case, contrasted against the pre-fix code clobbering it. An
+**unlocked** contract still updates normally, including with CRLF, so the
+fail-closed rule introduces no false positive. `/contract unlock` still
+works on a damaged stamp, so the lock is recoverable rather than a trap.
+
+---
+
 ## v0.48.2 — 2026-09-19
 
 ### Frontmatter hardening — three reproduced ways the audit trail destroyed data

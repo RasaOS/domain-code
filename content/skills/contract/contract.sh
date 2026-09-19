@@ -136,8 +136,10 @@ valid_name() {
 fm_get() {
   local file="$1" key="$2"
   awk -v k="$key" '
-    NR==1 && $0=="---" { infm=1; next }
-    infm && $0=="---"  { exit }
+    NR==1     { sub(/^\xef\xbb\xbf/, "") }     # strip a UTF-8 BOM
+                { sub(/\r$/, "") }                # strip CR on every line
+    NR==1 && /^---[ \t]*$/ { infm=1; next }
+    infm && /^---[ \t]*$/  { exit }
     infm {
       if ($0 ~ "^"k":[[:space:]]*") {
         sub("^"k":[[:space:]]*", "")
@@ -152,10 +154,16 @@ fm_get() {
 # Only touches lines inside the frontmatter block.
 fm_set() {
   local file="$1" key="$2" val="$3" tmp
+  # A value containing a newline would forge frontmatter keys — see
+  # CHANGELOG 0.48.2, where that was reproduced minting a key absent from
+  # the model and making two readers disagree about one file.
+  val="$(printf '%s' "$val" | tr '\n\r\t' '   ' | tr -d '[:cntrl:]')"
   tmp="$(mktemp)"
   awk -v k="$key" -v v="$val" '
-    NR==1 && $0=="---" { infm=1; print; next }
-    infm && $0=="---"  { infm=0; print; next }
+    NR==1     { sub(/^\xef\xbb\xbf/, "") }
+                { sub(/\r$/, "") }
+    NR==1 && /^---[ \t]*$/ { infm=1; print; next }
+    infm && /^---[ \t]*$/  { infm=0; print; next }
     infm && $0 ~ "^"k":" { print k": "v; next }
     { print }
   ' "$file" > "$tmp" && mv "$tmp" "$file"
@@ -166,8 +174,10 @@ body_replace() {
   local file="$1" bodyfile="$2" tmp
   tmp="$(mktemp)"
   awk '
-    NR==1 && $0=="---" { fm=1; print; next }
-    fm==1 && $0=="---" { print; exit }
+    NR==1     { sub(/^\xef\xbb\xbf/, "") }
+                { sub(/\r$/, "") }
+    NR==1 && /^---[ \t]*$/ { fm=1; print; next }
+    fm==1 && /^---[ \t]*$/ { print; exit }
     { print }
   ' "$file" > "$tmp"
   printf '\n' >> "$tmp"
@@ -175,9 +185,31 @@ body_replace() {
   mv "$tmp" "$file"
 }
 
+# A lock that cannot be read is treated as LOCKED.
+#
+# This used to be `fm_get … = "true"`, which meant an UNREADABLE stamp was
+# an UNLOCKED stamp. Reproduced (CHANGELOG 0.48.2): a locked contract with
+# a UTF-8 BOM or CRLF line endings was silently updated by
+# `/contract update` — exit 0, body rewritten — because fm_get returned
+# empty for every field and is_locked therefore said false.
+#
+# The readers are fixed, but the DIRECTION of the failure is the real
+# defect: a lock exists to refuse, so when its state cannot be determined
+# the answer is refuse. A false positive is one `unlock` away; a false
+# negative overwrites a frozen contract and exits 0.
 is_locked() {
   local file; file="$(stamp_path "$1")"
-  [ -f "$file" ] && [ "$(fm_get "$file" is_locked)" = "true" ]
+  [ -f "$file" ] || return 1
+
+  local val; val="$(fm_get "$file" is_locked)"
+  case "$val" in
+    true)  return 0 ;;
+    false) return 1 ;;
+    *)
+      echo "⚠ contract '$1': is_locked is unreadable ('${val}') — treating as LOCKED." >&2
+      echo "  The stamp's frontmatter may be damaged. Inspect: $file" >&2
+      return 0 ;;
+  esac
 }
 
 contract_exists() { [ -f "$(stamp_path "$1")" ]; }
