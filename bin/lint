@@ -9,11 +9,15 @@
 # Nothing else enforces this; this script does.
 #
 # Scope:
-#   - kit/*.md whose basename does NOT start with a platform prefix
-#   - kit/skills/<name>/SKILL.md where <name> does NOT start with a
+#   - content/*.md whose basename does NOT start with a platform prefix
+#   - content/skills/<name>/SKILL.md where <name> does NOT start with a
 #     platform prefix
-#   - bootstrap/*.template (universal templates) with the same
-#     exclusion rule
+#   - seed/*.template (universal templates) with the same exclusion rule
+#
+# These were kit/, kit/skills/ and bootstrap/ before v0.42.0 renamed them
+# to the canon shape. The globs were not updated, so from v0.42.0 until
+# v0.43.1 this linter enumerated zero files and exited 0 — a green gate
+# that had stopped reading anything. See CHANGELOG 0.43.1.
 #
 # Output: §6 Severity audit — severity bars + finding rows.
 # Exit code: non-zero if any HIGH findings; zero otherwise.
@@ -75,8 +79,8 @@ is_universal_basename() {
 }
 
 enumerate_sources() {
-  if [ -d "$REPO_ROOT/kit" ]; then
-    for f in "$REPO_ROOT/kit"/*.md; do
+  if [ -d "$REPO_ROOT/content" ]; then
+    for f in "$REPO_ROOT/content"/*.md; do
       [ -e "$f" ] || continue
       base="$(basename "$f")"
       if is_universal_basename "$base"; then
@@ -85,8 +89,8 @@ enumerate_sources() {
     done
   fi
 
-  if [ -d "$REPO_ROOT/kit/skills" ]; then
-    for d in "$REPO_ROOT/kit/skills"/*/; do
+  if [ -d "$REPO_ROOT/content/skills" ]; then
+    for d in "$REPO_ROOT/content/skills"/*/; do
       [ -e "$d" ] || continue
       d="${d%/}"
       name="$(basename "$d")"
@@ -97,8 +101,8 @@ enumerate_sources() {
     done
   fi
 
-  if [ -d "$REPO_ROOT/bootstrap" ]; then
-    for f in "$REPO_ROOT/bootstrap"/*.template; do
+  if [ -d "$REPO_ROOT/seed" ]; then
+    for f in "$REPO_ROOT/seed"/*.template; do
       [ -e "$f" ] || continue
       base="$(basename "$f")"
       if is_universal_basename "$base"; then
@@ -149,7 +153,15 @@ RE_RUBY='Gemfile|[^A-Za-z0-9_]bundler[^A-Za-z0-9_]|[^A-Za-z0-9_]Rails[^A-Za-z0-9
 RE_RUST='Cargo\.toml|Cargo\.lock|[^A-Za-z0-9_]cargo[^A-Za-z0-9_]|[^A-Za-z0-9_]rustup[^A-Za-z0-9_]'
 
 # Inherently cross-cutting basename list — colon-separated for awk.
-CROSS_CUTTING_BASENAMES='CLAUDE.md.template:AUDIT.md.template:PHASES.md.template:ROADMAP.md.template:task-template.md:batch-handoff.md:release-rules.md:output-rules.md:output-styles.md'
+#
+# The four runtime-*.md.template files and pipeline-rules.md were added in
+# v0.43.1, when repointing the globs made this linter read files for the
+# first time since v0.42.0. A runtime template for a MOBILE APP containing
+# `xcrun simctl` is its subject matter, not drift; pipeline-rules.md:3
+# declares itself platform-agnostic and then enumerates platforms to prove
+# it. Both were reported HIGH on the first honest run. They are surfaced at
+# MEDIUM, not silenced.
+CROSS_CUTTING_BASENAMES='CLAUDE.md.template:AUDIT.md.template:PHASES.md.template:ROADMAP.md.template:task-template.md:batch-handoff.md:release-rules.md:output-rules.md:output-styles.md:runtime-mobile-app.md.template:runtime-dev-server.md.template:runtime-script.md.template:runtime-worker.md.template:pipeline-rules.md'
 
 scan_file_via_awk() {
   local file="$1"
@@ -457,7 +469,7 @@ main() {
       "$color" "$sev" "$C_RESET" "$rel" "$lineno"
     printf '    %s%s%s found · %s\n' \
       "$C_GRAY" "$matched" "$C_RESET" "$display_text"
-    printf '    └─ move to a %s%s*%s file (e.g. `%stask-rules.md`, `kit/skills/%s<name>/`)\n' \
+    printf '    └─ move to a %s%s*%s file (e.g. `%stask-rules.md`, `content/skills/%s<name>/`)\n' \
       "$C_GRAY" "$target" "$C_RESET" "$target" "$target"
     echo
   done < <(awk -F'\t' '$1 == "HIGH" || $1 == "MEDIUM"' "$findings_tmp" \
