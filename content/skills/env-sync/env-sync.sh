@@ -148,6 +148,14 @@ is_ignored() {
 # Record THAT a transfer happened, to which NAMED host, when, and the
 # non-reversible digest. Never the contents, never the remote path (a path
 # leaks deployment structure and buys nothing for parity).
+# Values are sanitized before they are written: a newline in a value
+# forges frontmatter keys, and a forged key made a shell reader and a
+# python reader return different answers for one file. See CHANGELOG
+# 0.48.1 and the reproductions in deploys.sh.
+fm_value() {
+  printf '%s' "$1" | tr '\n\r\t' '   ' | tr -d '[:cntrl:]' | sed 's/[ ]\{2,\}/ /g; s/^ //; s/ $//'
+}
+
 record_transfer() {
   local direction="$1" name="$2" host="$3" dig="$4" status="$5"
   local records="$ROOT/deploys/records"
@@ -166,11 +174,11 @@ record_transfer() {
     echo "---"
     echo "id: $id"
     echo "kind: env-transfer"
-    echo "environment: $name"
+    echo "environment: $(fm_value "$name")"
     echo "class: config"
-    echo "tag: $dig"
-    echo "direction: $direction"
-    echo "peer_host: $host"
+    echo "tag: $(fm_value "$dig")"
+    echo "direction: $(fm_value "$direction")"
+    echo "peer_host: $(fm_value "$host")"
     echo "sha: $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
     echo "branch: $(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
     echo "user: $(whoami)"
@@ -186,7 +194,7 @@ record_transfer() {
     echo ""
     echo "# $id"
     echo ""
-    echo "Config for **$name** ${direction}ed with \`$host\`. Digest \`$dig\`."
+    echo "Config for **$(fm_value "$name")** $(fm_value "$direction")ed with \`$(fm_value "$host")\`. Digest \`$(fm_value "$dig")\`."
     echo ""
     echo "No contents, no remote path, and no per-key digest are recorded."
   } > "$records/$id.md"
