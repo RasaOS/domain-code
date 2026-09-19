@@ -12,6 +12,10 @@
 # SHAPE — records are the truth, the index is a derived view.
 #
 #   deploys/records/<id>.md     one file per execution, YAML frontmatter
+#
+# Ids are <KIND>-<timestamp>-<env>: DEP- for a deploy or release,
+# ENV- for a config transfer written by env-sync.sh. One ledger, one
+# reader — "what went out and where" is one question, not two.
 #   deploys/DEPLOYS.md          regenerated from records; never hand-edited
 #
 # One file per execution means two concurrent branches touch different
@@ -192,7 +196,7 @@ cmd_index() {
     echo "| When (UTC) | Kind | Environment | Class | Tag | Who | Status | Took | ID |"
     echo "|---|---|---|---|---|---|---|---|---|"
     local f
-    for f in $(ls -1 "$RECORDS_DIR"/DEP-*.md 2>/dev/null | sort -r || true); do
+    for f in $(ls -1 "$RECORDS_DIR"/???-*.md 2>/dev/null | sort -r || true); do
       [ -f "$f" ] || continue
       local mark dur
       case "$(field "$f" status)" in
@@ -230,7 +234,7 @@ cmd_list() {
 
   local n=0 f
   printf '%-21s %-8s %-14s %-8s %s\n' "WHEN (UTC)" "KIND" "ENV" "STATUS" "TAG"
-  for f in $(ls -1 "$RECORDS_DIR"/DEP-*.md 2>/dev/null | sort -r || true); do
+  for f in $(ls -1 "$RECORDS_DIR"/???-*.md 2>/dev/null | sort -r || true); do
     [ -f "$f" ] || continue
     local e; e="$(field "$f" environment)"
     [ -z "$filter_env" ] || [ "$e" = "$filter_env" ] || continue
@@ -259,14 +263,14 @@ cmd_check() {
   local recorded indexed
   # `|| true` is load-bearing: with `set -o pipefail`, a grep/ls that
   # correctly finds nothing exits 1 and takes the whole script with it.
-  recorded="$(ls -1 "$RECORDS_DIR"/DEP-*.md 2>/dev/null | wc -l | tr -d ' ' || true)"
+  recorded="$(ls -1 "$RECORDS_DIR"/???-*.md 2>/dev/null | wc -l | tr -d ' ' || true)"
   recorded="${recorded:-0}"
   if [ ! -f "$INDEX" ]; then
     [ "$recorded" -eq 0 ] && { echo "no deploys yet"; return 0; }
     echo "✗ $recorded record(s) but no DEPLOYS.md — run: deploys.sh index" >&2
     return 3
   fi
-  indexed="$(grep -c '^| .* | `DEP-' "$INDEX" 2>/dev/null | tr -d ' ' || true)"
+  indexed="$(grep -cE '^\| .* \| `[A-Z]{3}-' "$INDEX" 2>/dev/null | tr -d ' ' || true)"
   indexed="${indexed:-0}"
   if [ "$recorded" -ne "$indexed" ]; then
     echo "✗ ledger drift: $recorded record(s), $indexed row(s) in DEPLOYS.md" >&2
@@ -274,7 +278,7 @@ cmd_check() {
     return 3
   fi
   local stuck
-  stuck="$(grep -l '^status: in-flight' "$RECORDS_DIR"/DEP-*.md 2>/dev/null | wc -l | tr -d ' ' || true)"
+  stuck="$(grep -l '^status: in-flight' "$RECORDS_DIR"/???-*.md 2>/dev/null | wc -l | tr -d ' ' || true)"
   if [ "${stuck:-0}" -gt 0 ]; then
     echo "⚠ $stuck deploy(s) still marked in-flight — a run died without closing." >&2
   fi

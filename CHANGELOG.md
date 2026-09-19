@@ -24,6 +24,115 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.46.0 — 2026-09-19
+
+### Config transport — getting env files onto your other machine, safely
+
+Credentials live in gitignored per-env dotfiles. Simple, and it works
+right up to the second machine, where the file does not exist and nothing
+in the repo can tell you what was in it. `/import-env` and `/export-env`
+move variable **names** and stamps; they never move values, by
+construction. This moves the values.
+
+#### New — `/env-sync`
+
+`protect` · `status` · `fingerprint` · `command` · `push` · `pull` · `parity`
+
+Transport is over **ssh/scp to a host the user names**. Nothing else.
+
+#### The safety properties are structural, not promises
+
+1. **The script never prints file contents.** Not on status, not on
+   parity, not on error. Its stdout is safe to put in a model's context —
+   the AI orchestrates a byte-mover it cannot see through. Verified by a
+   leak audit that greps every output, every ledger record, the generated
+   index and `.gitignore` for the actual secret values.
+2. **The destination is an argument.** Never inferred from a git remote,
+   ssh config, `known_hosts`, shell history, or a `deploy_to` in the
+   registry. No argument, no transfer.
+3. **It refuses a path `git check-ignore` does not claim.** You cannot
+   transport a committable secret — that is the check that stops one
+   becoming a commit.
+4. **No per-key value digest, deliberately.** Secrets are low-entropy
+   enough that a per-key hash is brute-forceable, so a "helpful" per-key
+   fingerprint would be a value oracle. Fingerprints are a whole-file
+   digest plus a key-name/`set`-or-`empty` map. Key names are already in
+   the committed `.env-template`; values never leave the file. The cost,
+   stated rather than hidden: parity can tell you **that** two files
+   differ, not **where**.
+
+#### Two things found by reading the existing code, not assumed
+
+- **`/secrets` makes `.env` a symlink** to an out-of-repo store
+  (`secrets.sh:209-223`). A digest or an `rsync` that does not follow
+  symlinks silently reports on the link instead of the credentials. Every
+  read here follows the link; `scp` follows by default. Verified: pushing
+  a symlinked `.env` sends the store's contents, not the link.
+- **`secrets.sh:225-229` adds only the literal `.env` to `.gitignore`.**
+  So `.env.staging` and `.env.production` are unignored by default — their
+  bytes sitting in the repo tree waiting to be committed. `protect`
+  idempotently adds `.env`, `.env.*` and `!.env-template`, and runs before
+  any verb that touches a file.
+
+#### Refusals that give the right advice
+
+A **tracked** env file and a merely **unignored** one are different
+problems, and `protect` only fixes the second. Transporting a tracked file
+is refused with: the credentials are already in history on every clone and
+fork, moving the file does not undo that, adding it to `.gitignore` does
+not either — rotate them, `git rm --cached`, then protect, then transport
+the new values.
+
+A `pull` **refuses to overwrite a symlink**, which would orphan the
+`/secrets` store, and backs up an existing real file before writing.
+
+#### `command` is a first-class outcome
+
+`env-sync.sh command push staging user@host:/path` **prints the command
+and runs nothing**. When the destination needs a passphrase, a hardware
+key, a jump host or a VPN this session cannot reach, handing the operator
+the exact line is the answer — not a consolation prize. You asked for
+"helping the user send those configs"; this is that path.
+
+#### One ledger, not two
+
+A transfer writes `deploys/records/ENV-<ts>-<env>.md` alongside the deploy
+and release records, so `/deploys` reads everything that went out. The
+record holds **that** it happened, to which **named host**, when, and the
+digest — never contents, never the remote path (a path leaks deployment
+structure and buys nothing for parity).
+
+The ledger glob widened from `DEP-*` to `???-*`; `deploys.sh check` counts
+any `[A-Z]{3}-` row. "What went out and where" is one question, not two.
+
+#### New — `seed/env-transport.md.template` → `.claude/env-transport.md`
+
+Project-owned map of which machines hold which env profiles. **Names and
+paths only.** It is a convenience lookup, explicitly *not* an
+authorization: `/env-sync` still only sends where the user names.
+
+#### Deliberately not done
+
+- **No per-environment secret stores.** `/secrets` keeps one store behind
+  a symlinked `.env`; a per-env store plus a transport leg collide on
+  every receiving machine, because `scp` deposits a real file and the
+  store expects a link. The `dev`-vs-higher asymmetry stands, and
+  `env-rules.md` should say so.
+- **No third-party routes.** If ssh cannot reach the host, the answer is
+  the printed command, not a bucket.
+
+#### Verified
+
+Leak audit clean across all outputs, records, index and `.gitignore`.
+Tracked-file refusal (rc 3) and unignored refusal (rc 3) give distinct
+advice; destination without a host rejected (rc 2); symlink digest matches
+the store byte-for-byte; push through a symlink sends contents; pull over a
+symlink refused (rc 1); `command` runs nothing. Deploy + release + transfer
+all land in one ledger, `check` consistent. 36/36 scripts clean under
+`bin/check-bash32`.
+
+---
+
 ## v0.45.0 — 2026-09-19
 
 ### The ship log — what went out, where, and whether it worked
