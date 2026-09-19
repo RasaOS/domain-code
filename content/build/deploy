@@ -2,10 +2,22 @@
 # build/deploy — universal pipeline entry point
 #
 # Usage:
-#   ./build/deploy --env=<env> [--tag=<tag>] [--skip-tests] [--skip-gates] [--dry-run]
+#   ./build/deploy --env=<env> --intent=<deploy|release> \
+#                  [--tag=<tag>] [--skip-tests] [--skip-gates] [--dry-run]
 #
 # --env is REQUIRED. There is no default environment. Available environments
 # are folders under build/environments/.
+#
+# --intent declares DIRECTION and is enforced by gates/class-guard.sh:
+#   deploy   -> dev / staging. Can never reach production.
+#   release  -> production, tagged.
+# It becomes REQUIRED in v0.45.0. Until then, an absent --intent is derived
+# from the target's class and warns.
+#
+# --skip-gates skips the OPTIONAL gates (clean tree, tag match). It has
+# never been able to skip class-guard or the production approval, and
+# before v0.44.0 it did not skip anything at all — it was parsed, printed
+# as "Gates: SKIPPED", and never read.
 #
 # Synced from claude-kit; safe to customize if you need project-specific
 # argument handling. If you customize, /sync will surface the divergence.
@@ -19,6 +31,7 @@ cd "$PROJECT_DIR"
 
 # ─── Defaults ──────────────────────────────────────────────────────────────
 ENV=""
+INTENT=""
 TAG=""
 SKIP_TESTS=false
 SKIP_GATES=false
@@ -29,6 +42,8 @@ while [[ $# -gt 0 ]]; do
   case $1 in
     --env=*)        ENV="${1#*=}" ;;
     --env)          ENV="$2"; shift ;;
+    --intent=*)     INTENT="${1#*=}" ;;
+    --intent)       INTENT="$2"; shift ;;
     --tag=*)        TAG="${1#*=}" ;;
     --tag)          TAG="$2"; shift ;;
     --skip-tests)   SKIP_TESTS=true ;;
@@ -112,9 +127,49 @@ fi
 export DEPLOY_USER="$(whoami)"
 export DEPLOY_TIMESTAMP="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 
+# ─── Resolve direction, then enforce it ────────────────────────────────────
+# ENV_CLASS is exported so stages route on the class instead of re-matching
+# the environment NAME, which is how `production-us` used to take no gate.
+ENV_CLASS="unclassified"
+if [[ -f "$ENV_SH" ]]; then
+  ENV_CLASS="$(bash "$ENV_SH" class "$ENV" 2>/dev/null || true)"
+fi
+case "$ENV_CLASS" in
+  dev|staging|prod) ;;
+  *)
+    case "$(printf '%s' "$ENV" | tr '[:upper:]' '[:lower:]')" in
+      *prod*|*live*) ENV_CLASS="prod" ;;
+      *)             ENV_CLASS="unclassified" ;;
+    esac
+    ;;
+esac
+export ENV_CLASS
+
+if [[ -z "$INTENT" ]]; then
+  # Deprecation window (removed in v0.45.0): derive rather than break every
+  # existing caller. Deriving can only reproduce the admissible pairing, so
+  # it never invents a direction the guard would refuse.
+  if [[ "$ENV_CLASS" == "prod" ]]; then INTENT="release"; else INTENT="deploy"; fi
+  echo "⚠ DEPRECATED: --intent is not set; derived '--intent=$INTENT' from class '$ENV_CLASS'." >&2
+  echo "  --intent=<deploy|release> becomes REQUIRED in v0.45.0. Pass it explicitly." >&2
+fi
+export INTENT
+
+case "$INTENT" in
+  deploy|release) ;;
+  *)
+    echo "ERROR: --intent must be 'deploy' or 'release' (got '$INTENT')." >&2
+    exit 2
+    ;;
+esac
+
+# Not skippable. --skip-gates does not reach this, and there is no bypass
+# variable: it is the one check the deploy/release split exists to make.
+"$BUILD_DIR/gates/class-guard.sh" "$ENV" "$INTENT"
+
 # ─── Banner ────────────────────────────────────────────────────────────────
 echo "════════════════════════════════════════════════════════════"
-echo "  Deploy → $ENV"
+echo "  ${INTENT} → $ENV  (class: $ENV_CLASS)"
 echo "  Tag:  $DEPLOY_TAG"
 [[ -n "$PUBLISH_TO" ]] && echo "  Publish → $PUBLISH_TO"
 [[ -n "$DEPLOY_TO" ]]  && echo "  Target  → $DEPLOY_TO"
@@ -122,7 +177,7 @@ echo "  User: $DEPLOY_USER"
 echo "  Time: $DEPLOY_TIMESTAMP"
 $DRY_RUN  && echo "  Mode: DRY RUN (no execution)"
 $SKIP_TESTS && echo "  Tests: SKIPPED"
-$SKIP_GATES && echo "  Gates: SKIPPED"
+$SKIP_GATES && echo "  Gates: SKIPPED (optional gates only — class-guard and prod approval still run)"
 echo "════════════════════════════════════════════════════════════"
 
 # ─── Run stages in numeric order ───────────────────────────────────────────
@@ -156,7 +211,7 @@ for stage in "${STAGES[@]}"; do
     continue
   fi
 
-  if ! bash "$stage" "$ENV"; then
+  if ! SKIP_GATES="$SKIP_GATES" bash "$stage" "$ENV"; then
     RESULT="failed"
     ERROR_STAGE="$STAGE_NAME"
     echo ""

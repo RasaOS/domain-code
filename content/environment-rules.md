@@ -55,6 +55,7 @@ Each environment:
 | Field | Type | Description |
 |---|---|---|
 | `description` | string | One line — what this environment is. |
+| `class` | `"dev"` \| `"staging"` \| `"prod"` | **Direction.** Decides what may ship here. See below. |
 | `env_file` | string | The dotenv profile this environment loads (`.env`, `.env.staging`, `.env.production`). Matches the runtime stamp `env.environments` convention. |
 | `publish_to` | string \| null | Name of the cloud stamp build artifacts are published to (a registry — e.g. `azure-acr`), or `null`. |
 | `deploy_to` | string \| null | Name of the cloud stamp the deploy targets (e.g. `azure-aks`, `firebase-hosting`), or `null`. |
@@ -66,6 +67,70 @@ that living only as freeform shell in `build/environments/<env>/`.
 `build/deploy` reads them via `environment.sh get` and exports
 `PUBLISH_TO` / `DEPLOY_TO`, so stage scripts route on the registry's
 declared target instead of hard-coding it.
+
+## Class — the deploy/release direction
+
+`class` is the one field that changes what is *allowed*, not just what is
+*described*. It answers a single question: is this production?
+
+| Class | `/deploy` | `/release` |
+|---|---|---|
+| `dev` | yes | no |
+| `staging` | yes | no |
+| `prod` | **never** | yes |
+| `unclassified` | yes, with a warning | no |
+
+`/deploy` goes down the stack; `/release` goes to production and tags.
+Same pipeline underneath — direction is the difference, and it is
+enforced by `build/gates/class-guard.sh`, which has **no bypass
+variable**. `git-clean.sh` has `FORCE_DIRTY` and `approval.sh` has
+`FORCE_APPROVAL`; the class guard has nothing, because an escape hatch on
+the one thing a gate exists to prevent is decoration.
+
+### How a class is resolved
+
+In order:
+
+1. **A declared `class`** wins — *except* that a name containing `prod`,
+   `production` or `live` (case-insensitive, substring) is treated as
+   production even when it declares otherwise. Declaring
+   `"class": "dev"` on an environment called `prod-eu` is far more likely
+   a mistake than an intention, and guessing wrong in that direction puts
+   a deploy into production.
+2. **No class, prod-looking name** → `prod`. The heuristic only ever
+   ESCALATES. A false positive blocks a deploy, which is loud and safe; a
+   false negative is what let `production-us` past the pre-v0.44.0 gate,
+   which matched `prod|production` exactly and had no default arm.
+3. **No class, ordinary name** → `unclassified`.
+
+Check what a project actually resolves to:
+
+```bash
+.claude/skills/environment/environment.sh classes     # every env, class, and why
+.claude/skills/environment/environment.sh class prod  # one env
+.claude/skills/environment/environment.sh prod-env    # which envs are production
+```
+
+### Why `unclassified` is not fatal
+
+Every project that upgrades into this model starts with a registry that
+declares no classes. Failing every deploy closed on upgrade is how a gate
+gets deleted. So an unclassified environment may be deployed to, with a
+warning, and may **never** be released to — declaring `prod` is the only
+way to make a release target legal.
+
+The honest residual risk: a production environment whose name contains no
+prod-ish token and which declares no class resolves to `unclassified`,
+and `/deploy` will ship to it. The fix is to declare it. `environment.sh
+classes` exists so this is one command to check rather than an audit.
+
+### Class is resolved once
+
+`build/deploy` resolves the class and exports `ENV_CLASS` and `INTENT`
+for the stages. Stage scripts route on `ENV_CLASS` and must **never**
+re-match the environment name — two independent name matches, in
+`10-preflight.sh` and `30-test.sh`, are exactly how a production
+environment got both no approval gate and the non-production test suite.
 
 ## The current working environment
 

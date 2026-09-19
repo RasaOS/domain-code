@@ -121,7 +121,56 @@ if not isinstance(envs, dict):
     sys.exit(1)
 default = reg.get("default", "")
 
-if op == "names":
+VALID_CLASSES = ("dev", "staging", "prod")
+
+# Names that make an environment PRODUCTION even when nobody declared it.
+# Substring, case-insensitive, and deliberately generous: this heuristic
+# only ever ESCALATES. A false positive blocks a deploy (safe and loud);
+# a false negative is what shipped `production-us` past the old
+# `case $ENV in prod|production)` exact match with no gate at all.
+PROD_NAME_HINTS = ("prod", "live", "production")
+
+
+def classify(name, env):
+    """Return (class, source). class is dev|staging|prod|unclassified."""
+    declared = (env or {}).get("class")
+    if declared in VALID_CLASSES:
+        # An explicit non-prod class does NOT override a prod-looking name.
+        # Declaring `"class": "dev"` on an env called `prod-eu` is far more
+        # likely a mistake than an intention, and guessing wrong here puts
+        # a deploy into production.
+        low = name.lower()
+        if declared != "prod" and any(h in low for h in PROD_NAME_HINTS):
+            return "prod", "name-escalated over declared '%s'" % declared
+        return declared, "declared"
+    if declared is not None:
+        return "unclassified", "invalid class %r" % (declared,)
+    low = name.lower()
+    if any(h in low for h in PROD_NAME_HINTS):
+        return "prod", "name-escalated (no class declared)"
+    return "unclassified", "no class declared"
+
+
+if op == "class":
+    env = envs.get(args[0])
+    if env is None:
+        print("error: unknown environment '%s'" % args[0], file=sys.stderr)
+        sys.exit(2)
+    klass, source = classify(args[0], env)
+    print(klass)
+    if len(args) > 1 and args[1] == "--why":
+        print("  (%s)" % source, file=sys.stderr)
+    sys.exit(0 if klass in VALID_CLASSES else 3)
+elif op == "prod-env":
+    found = [k for k, e in envs.items() if classify(k, e)[0] == "prod"]
+    for k in found:
+        print(k)
+    sys.exit(0 if found else 3)
+elif op == "classes":
+    for k, e in envs.items():
+        klass, source = classify(k, e)
+        print("%s\t%s\t%s" % (k, klass, source))
+elif op == "names":
     for k in envs:
         print(k)
 elif op == "default":
@@ -429,6 +478,16 @@ main() {
       ;;
     version)
       cmd_version "$reg" "$@"
+      ;;
+    class)
+      [ $# -ge 1 ] || { echo "error: class needs <env>" >&2; return 2; }
+      _registry_py "$reg" class "$@"
+      ;;
+    prod-env)
+      _registry_py "$reg" prod-env
+      ;;
+    classes)
+      _registry_py "$reg" classes
       ;;
     validate)
       cmd_validate "$reg"

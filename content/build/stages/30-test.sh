@@ -16,17 +16,18 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SUITES_DIR="$PROJECT_DIR/tests/suites"
 
 # ─── Pick the suite for this env ───────────────────────────────────────────
+# Keyed on CLASS (exported by build/deploy), not on the environment NAME.
+# The old `case "$ENV" in prod|production)` gave `production-us` the
+# ordinary pre-deploy suite instead of the production gate.
+ENV_CLASS="${ENV_CLASS:-unclassified}"
 SUITE=""
-case "$ENV" in
-  prod|production)
-    if   [[ -f "$SUITES_DIR/prod-gate.md"  ]]; then SUITE="prod-gate"
-    elif [[ -f "$SUITES_DIR/pre-deploy.md" ]]; then SUITE="pre-deploy"
-    fi
-    ;;
-  *)
-    if [[ -f "$SUITES_DIR/pre-deploy.md" ]]; then SUITE="pre-deploy"; fi
-    ;;
-esac
+if [[ "$ENV_CLASS" == "prod" ]]; then
+  if   [[ -f "$SUITES_DIR/prod-gate.md"  ]]; then SUITE="prod-gate"
+  elif [[ -f "$SUITES_DIR/pre-deploy.md" ]]; then SUITE="pre-deploy"
+  fi
+else
+  if [[ -f "$SUITES_DIR/pre-deploy.md" ]]; then SUITE="pre-deploy"; fi
+fi
 
 if [[ -z "$SUITE" ]]; then
   echo "No test suite for env=$ENV. Skipping."

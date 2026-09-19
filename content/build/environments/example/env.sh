@@ -33,4 +33,9 @@ export REGISTRY=""                    # e.g. myacr.azurecr.io
 # export ASC_KEY_ID="$ASC_KEY_ID"    # from CI / 1Password, not committed
 
 # ─── Behavior flags ────────────────────────────────────────────────────────
-export REQUIRES_APPROVAL=false        # set true for prod (10-preflight checks)
+# Production approval is NOT decided here. It is decided by the environment's
+# `class` in .claude/environments.json — 10-preflight.sh runs the approval
+# gate when ENV_CLASS is prod. This flag was read by zero code from the day
+# it was written; the comment claiming 10-preflight checked it was false.
+# Kept only so existing env.sh files that set it do not look broken.
+export REQUIRES_APPROVAL=false        # vestigial — see .claude/environment-rules.md

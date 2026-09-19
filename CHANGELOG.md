@@ -24,6 +24,147 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.44.0 — 2026-09-19
+
+### The direction spine — `/deploy` structurally cannot reach production
+
+`deploy` and `release` are the same pipeline pointed in opposite
+directions. Until now nothing enforced that, and the thing that was
+supposed to — an exact-match `case "$ENV" in prod|production)` in
+`10-preflight.sh` with **no default arm** — let `production-us`,
+`prod-eu`, `live` and `PROD` through with no gate at all.
+
+Direction is now a property of the **environment**, declared once, not a
+property of how someone spelled it on the command line.
+
+#### `class` — the new registry field
+
+`.claude/environments.json` environments gain `"class": "dev" | "staging"
+| "prod"`. It decides what may ship where:
+
+| Class | `/deploy` | `/release` |
+|---|---|---|
+| `dev`, `staging` | yes | no |
+| `prod` | **never** | yes |
+| `unclassified` | yes, with a warning | no |
+
+Resolution is **escalate-only**, in order:
+
+1. A declared `class` wins — *except* that a name containing
+   `prod`/`production`/`live` is treated as production even when it
+   declares otherwise. `"class": "dev"` on an env called `prod-eu` is far
+   more likely a mistake than an intention, and guessing wrong in that
+   direction puts a deploy into production.
+2. No class + prod-looking name → `prod`.
+3. No class + ordinary name → `unclassified`.
+
+A false positive blocks a deploy — loud and safe. A false negative is
+what shipped before.
+
+`unclassified` is deliberately **not** fatal for a deploy: every project
+upgrading into this version starts with a registry that declares no
+classes, and failing every deploy closed on upgrade is how a gate gets
+deleted. It **is** fatal for a release — declaring `prod` is the only way
+to make a release target legal.
+
+Honest residual risk: a production environment whose name contains no
+prod-ish token and declares no class resolves to `unclassified`, and
+`/deploy` will ship to it. `environment.sh classes` makes that one command
+to check rather than an audit.
+
+#### New — `build/gates/class-guard.sh`
+
+Enforces the pairing before any stage runs. **No bypass.**
+`git-clean.sh` has `FORCE_DIRTY` and `approval.sh` has `FORCE_APPROVAL`;
+this gate has nothing, because an escape hatch on the one thing a gate
+exists to prevent is decoration. Verified: `FORCE_APPROVAL`, `FORCE_DIRTY`,
+`SKIP_GATES`, `FORCE_CLASS` and `CLASS_GUARD_ALLOW` all fail to move it.
+
+It works with no registry at all, falling back to the same escalate-only
+name heuristic, so a project that never set up the environment skill still
+cannot `/deploy` to something called `production-us`.
+
+#### New — `environment.sh class` / `prod-env` / `classes`
+
+```
+environment.sh classes      # every env, its resolved class, and WHY
+environment.sh class <env>  # one env; exit 0 classified, 3 unclassified, 2 unknown
+environment.sh prod-env     # which environments are production
+```
+
+`classes` prints the derivation (`declared`, `name-escalated (no class
+declared)`, `name-escalated over declared 'dev'`, `invalid class 'banana'`),
+so a surprising answer explains itself.
+
+#### New — the `/deploy` skill
+
+69 skills and none of them was `deploy`; `pipeline-rules.md` had specified
+one since the file was written. It resolves the target from the registry,
+refuses a production target *before* running anything rather than letting
+the gate produce the error, and passes `--intent=deploy` explicitly.
+
+It will not reach around the guard — no calling `environments/<env>/deploy.sh`
+directly, no editing a class, no renaming an environment. If the user says
+"deploy to production", the skill says that means `/release` rather than
+silently translating.
+
+#### `build/deploy` — `--intent`, and `--skip-gates` stops lying
+
+- `--intent=<deploy|release>` declares direction. Absent, it is derived
+  from the class with a loud `DEPRECATED` warning and **becomes required
+  in v0.45.0**. Deriving can only reproduce the admissible pairing, so it
+  never invents a direction the guard would refuse.
+- `ENV_CLASS` and `INTENT` are resolved **once** and exported. Stages route
+  on the class and must never re-match the name — two independent name
+  matches is exactly how a production environment got both no approval gate
+  and the wrong test suite.
+- `--skip-gates` was theatre: parsed, printed as `Gates: SKIPPED`, and read
+  by nothing. It now really skips the optional gates (clean tree, tag
+  match), and only on non-production classes. It never skips the class
+  guard or the production approval, and the banner says so.
+
+#### Stage fixes
+
+- `10-preflight.sh` — production approval now fires on `ENV_CLASS == prod`
+  instead of an exact name match. A production deploy never skips the
+  optional gates whatever was passed: "the tree was dirty" is not something
+  you wave through on the way to prod.
+- `30-test.sh` — the production test suite (`prod-gate.md`) is selected by
+  class. `production-us` previously got the ordinary `pre-deploy` suite.
+
+#### `REQUIRES_APPROVAL` is vestigial, and now says so
+
+`build/environments/example/env.sh` shipped
+`export REQUIRES_APPROVAL=false  # set true for prod (10-preflight checks)`.
+**Zero code has ever read it** — the comment was false the day it was
+written. Approval is decided by class. The variable is kept so existing
+`env.sh` files that set it do not look broken, with a comment that tells
+the truth.
+
+#### Verified
+
+Full matrix across `local`/`staging`/`prod`/`production-us`/`live-eu`/`qa`/
+`prod-eu`, with a registry and without one; end-to-end through
+`./build/deploy` in a real git project. `deploy → prod` refused,
+`deploy → production-us` refused (the old hole), `release → staging`
+refused, `deploy → staging` passes, `deploy → qa` passes with the
+unclassified warning. 34/34 scripts clean under `bin/check-bash32`.
+
+#### Not done here
+
+`/release` still discovers its own deploy command and does not route
+through `./build/deploy`, so a production release currently bypasses the
+class guard, the approval gate and the deploy log. Rerouting it is the
+largest behavioural change in this theme and lands in v0.45.0 against a
+spine that is by then proven. The deploy/release **ledger** — per-execution
+records of what went where — is also v0.45.0.
+
+`.claude/environments.json` is itself unaudited: nothing yet records a
+change to a `class` field. That is closed by the task-enforcement work in
+v0.47.0, and it is the single highest-value item in that release.
+
+---
+
 ## v0.43.1 — 2026-09-19
 
 ### Foundation patch — fix the gates that reported success while doing nothing
