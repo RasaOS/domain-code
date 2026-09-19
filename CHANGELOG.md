@@ -24,6 +24,66 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.48.1 — 2026-09-19
+
+### The Element's own source URL was dead, and `bin/init` handed it to every consumer
+
+`source.repo` in `rasa.json` read `https://github.com/rasa-os/domain-code`.
+The org is **`RasaOS`** — no hyphen. That URL returns **404**.
+
+This was not cosmetic. `bin/init` reads `source.repo` and writes it into two
+places in every install:
+
+- the consumer's `.claude/rasa.lock.json` (`element.repo`), and
+- the `kit/<element>/` stash's `origin` remote, via
+  `git -C "$KIT_DIR" remote set-url origin "$ELEMENT_REPO"`.
+
+The kit stash exists *specifically* to power `/sync` and `/promote`, both of
+which fetch and push against that remote. So every consumer installed since the
+`/kit`-aware `bin/init` landed in v0.42.1 got a stash wired to a non-existent
+repo, and neither skill could ever have worked. Reproduced by hand:
+`git ls-remote origin` in a freshly-installed stash fails; after the fix it
+succeeds.
+
+`seed/rasa.lock.json.template` carried the same dead URL independently, so a
+lockfile written from the template — rather than stamped by `bin/init` — was
+wrong too. Both are fixed.
+
+The Element's own `README.md:10` has said `github.com/RasaOS/domain-code`
+throughout; the manifest simply disagreed with it. Across the sibling Element
+library, 45 manifests use `RasaOS` and 3 use `rasa-os` — this is a typo, not a
+convention.
+
+#### Existing installs are NOT repaired by upgrading
+
+`element` is not in `CONSUMER_OWNED` (which is `('overrides',)`), so
+`merge_stamp` takes the **new** manifest's value on every re-init. Re-running
+`bin/init` against this version therefore *does* repair the lockfile — but note
+the inverse was also true: any consumer that hand-fixed its lockfile had the
+broken value restamped on the next re-init.
+
+The `kit/` stash is **not** repaired automatically: `bin/init` skips a stash
+that already exists (`kit: … already present (left as-is)`). Existing consumers
+must fix that remote by hand:
+
+```sh
+git -C kit/domain-code remote set-url origin https://github.com/RasaOS/domain-code
+```
+
+Known affected: `vsi-ios` (fixed at install time), `vsi-web` (pinned v0.42.1,
+still carries the dead URL).
+
+#### Not fixed here
+
+`$schema` points at `https://rasa-os.github.io/schema/rasa.schema.v1.json`,
+which also 404s — as does the `rasaos.github.io` spelling, so the schema is
+simply not published anywhere. Nothing fetches it at install time (it is an
+identifier, not a dependency), and the same string appears across the whole
+Element library, so correcting it is an ecosystem-wide change and not this
+patch's business. `rasa.domain.legal` and `rasa.orchestrator.workspace` carry
+the same `rasa-os` repo typo in their own manifests and need the same fix in
+their own repos.
+
 ## v0.48.0 — 2026-09-19
 
 ### Release planning and bundling — and the tracker was broken on install
