@@ -69,21 +69,49 @@ INDEX="$LEDGER_DIR/DEPLOYS.md"
 ensure_dirs() { mkdir -p "$RECORDS_DIR"; }
 
 # Read one frontmatter field from a record. Line-oriented on purpose.
+#
+# DEFENDED, because the naive version silently returned EMPTY FOR EVERY
+# FIELD on three ordinary inputs, and `close` then became a no-op that
+# still exited 0:
+#   * a UTF-8 BOM  — `NR==1 && $0=="---"` is false, so nothing is frontmatter
+#   * CRLF         — same, `$0` is "---\r"
+#   * a trailing space on either fence — same
+# A browser textarea, a Windows agent and a JSON round-trip are the three
+# most likely sources of exactly those bytes. See CHANGELOG 0.48.1.
+#
+# FIRST-WINS is deliberate and is now part of the format: a duplicate key
+# resolves to the first occurrence. A dict-building reader is last-wins,
+# and two readers disagreeing about one byte stream is how a forged key
+# goes unnoticed. Writers sanitize so duplicates cannot be injected.
 field() {
   local file="$1" key="$2"
   awk -v k="$key" '
-    NR==1 && $0=="---" { infm=1; next }
-    infm && $0=="---"   { exit }
+    NR==1     { sub(/^\xef\xbb\xbf/, "") }      # strip a UTF-8 BOM
+                { sub(/\r$/, "") }                 # strip CR on every line
+    NR==1 && /^---[ \t]*$/ { infm=1; next }
+    infm && /^---[ \t]*$/  { exit }
     infm {
       i = index($0, ":")
       if (i > 0 && substr($0, 1, i-1) == k) {
         v = substr($0, i+1)
         sub(/^[ \t]+/, "", v)
+        sub(/[ \t]+$/, "", v)
         print v
         exit
       }
     }
   ' "$file"
+}
+
+# --- W3: sanitize every value before it is written -----------------------
+# Writers were `echo "key: $value"` with no escaping, so a value containing
+# a newline FORGED frontmatter keys — reproduced minting a `secret_token:`
+# that is not in the model, and a duplicate `status:` that made the shell
+# reader and a python reader return different answers for the same file.
+# Newlines and control characters collapse to a space; a value is never
+# allowed to introduce a line.
+fm_value() {
+  printf '%s' "$1" | tr '\n\r\t' '   ' | tr -d '[:cntrl:]' | sed 's/[ ]\{2,\}/ /g; s/^ //; s/ $//'
 }
 
 usage() {
@@ -129,10 +157,10 @@ cmd_open() {
   {
     echo "---"
     echo "id: $id"
-    echo "kind: $intent"
-    echo "environment: $env_name"
-    echo "class: $klass"
-    echo "tag: $tag"
+    echo "kind: $(fm_value "$intent")"
+    echo "environment: $(fm_value "$env_name")"
+    echo "class: $(fm_value "$klass")"
+    echo "tag: $(fm_value "$tag")"
     echo "sha: $sha"
     echo "branch: $branch"
     echo "user: $(whoami)"
@@ -142,13 +170,13 @@ cmd_open() {
     echo "status: in-flight"
     echo "duration_s: "
     echo "error_stage: "
-    echo "approval: ${approval:-none}"
+    echo "approval: $(fm_value "${approval:-none}")"
     echo "task_refs: "
     echo "---"
     echo ""
     echo "# $id"
     echo ""
-    echo "\`$intent\` → **$env_name** (class: $klass) at tag \`$tag\`."
+    echo "\`$(fm_value "$intent")\` → **$(fm_value "$env_name")** (class: $(fm_value "$klass")) at tag \`$(fm_value "$tag")\`."
     echo ""
     echo "## Notes"
     echo ""
@@ -176,8 +204,10 @@ cmd_close() {
   local tmp; tmp="$(mktemp "${TMPDIR:-/tmp}/deploys.XXXXXX")"
   awk -v st="$status" -v dur="$duration" -v es="$error_stage" \
       -v fin="$(date -u '+%Y-%m-%d %H:%M:%S UTC')" '
-    NR==1 && $0=="---" { infm=1; print; next }
-    infm && $0=="---"  { infm=0; print; next }
+    NR==1     { sub(/^\xef\xbb\xbf/, "") }
+                { sub(/\r$/, "") }
+    NR==1 && /^---[ \t]*$/ { infm=1; print; next }
+    infm && /^---[ \t]*$/  { infm=0; print; next }
     infm {
       if ($0 ~ /^status:/)      { print "status: " st;      next }
       if ($0 ~ /^duration_s:/)  { print "duration_s: " dur; next }

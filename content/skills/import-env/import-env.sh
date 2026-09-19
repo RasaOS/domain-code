@@ -306,6 +306,31 @@ cmd_add() {
   fi
 
   # Validate enums
+  # A stamp is COMMITTED. `add` hardcoded purpose=config and stored
+  # --default verbatim, while the name-based classifier that knows
+  # STRIPE_*/`*SECRET*`/`*PASSWORD*` means a secret ran only under
+  # `suggest`. So `add STRIPE_SECRET_KEY --default sk_live_…` wrote a
+  # live-shaped credential into a file git does not ignore, and any
+  # redaction keyed on `purpose == secret` missed it. See CHANGELOG 0.48.1.
+  case "$key" in
+    *PASSWORD*|*SECRET*|*TOKEN*|*APIKEY*|*API_KEY*|*PRIVATE_KEY*|*CREDENTIAL*|\
+    STRIPE_*|OPENAI_*|ANTHROPIC_*|AWS_SECRET*|GITHUB_TOKEN*|*_DSN)
+      if [ "$purpose" = "config" ]; then
+        purpose="secret"
+        echo "  · '$key' looks like a secret — purpose set to 'secret'." >&2
+      fi
+      ;;
+  esac
+
+  if [ "$purpose" = "secret" ] && [ -n "$default" ]; then
+    echo "✗ refusing to record a default for a secret-purpose var." >&2
+    echo "  '$key' → the stamp is COMMITTED; a value here is a credential in git history." >&2
+    echo "  Stamps carry the NAME and the shape. Provision the value with /secrets," >&2
+    echo "  which is built so the AI never sees it." >&2
+    echo "  Re-run without --default, or pass --purpose config if this genuinely is not one." >&2
+    return 3
+  fi
+
   case "$purpose" in
     connection|credential|feature-flag|config|secret|url|derived) ;;
     *) echo "error: invalid --purpose '$purpose'" >&2; return 2 ;;

@@ -24,6 +24,106 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.48.2 — 2026-09-19
+
+### Frontmatter hardening — three reproduced ways the audit trail destroyed data
+
+Found by an adversarial pass over the surface-binding design, in code
+shipped earlier this week. All three reproduced by hand before and after.
+
+The common cause: **every reader gated on `$0 == "---"` and every writer
+was `echo "key: $value"` with no escaping.** Both are correct only for
+bytes this Element happens to produce itself.
+
+#### W1 — a trailing space on the closing fence rewrote the record BODY
+
+```
+--- ⎵                          ← one trailing space
+…
+status: this is PROSE in the body
+```
+
+`cmd_close`'s awk leaves frontmatter on `$0 == "---"`. With the trailing
+space that never fires, so the four rewrite branches kept matching
+body lines to EOF. The prose was replaced with field values, `close`
+exited **0**, and `check` reported `✓ ledger consistent`.
+
+The same gate is in `contract.sh`'s `fm_set` — where stamp bodies *are*
+the contract.
+
+#### W2 — a CRLF or BOM record made `close` a silent no-op
+
+`field()` gated on `NR==1 && $0=="---"`. A UTF-8 BOM or CRLF makes that
+false, so **every field returned empty**: `close` changed nothing, exited
+0, and the index row came out blank — ID included. A browser textarea, a
+Windows agent and a JSON round-trip are the three likeliest sources of
+exactly those bytes, which is the company this code is about to keep.
+
+`release.sh:60-62` was the **only** defended reader in the Element.
+
+#### W3 — a newline in a value forged frontmatter keys
+
+A value containing newlines produced a duplicate `status:` and a
+`secret_token:` that does not exist in the model. Worse, the two readers
+then disagreed about the same bytes: `field()` is first-wins and returned
+`in-flight`, a dict-building reader is last-wins and returned `success`.
+
+**Two readers over one byte stream returning two different answers was an
+unstated part of the file format.**
+
+#### The fixes
+
+- **Readers** strip a UTF-8 BOM and CR, and match `^---[ \t]*$` rather
+  than an exact string. First-wins is now stated in the file as part of
+  the format, not left accidental.
+- **The rewriter** in `cmd_close` gets the same tolerant fence.
+- **Writers** sanitize through a new `fm_value`: newlines, CR, tabs and
+  control characters collapse to a space, so a value can never introduce
+  a line. Applied to every field *and* to the body interpolations —
+  below the fence a newline cannot forge a key, but it can still plant
+  field-shaped lines a UI body-renderer would misread.
+- Applied in `deploys.sh` and `env-sync.sh`.
+
+Note the asymmetry worth remembering: `check` caught W2 (the blanked row
+loses its backticked ID, so the count drops) and **missed W1**. Drift
+detection catches the loud failure and misses the quiet one.
+
+### A live-shaped credential could be written into a committed file
+
+```
+import-env.sh add STRIPE_SECRET_KEY --required false --default 'sk_live_…'
+→ env/stamps/stripe-secret-key.md
+    purpose: config                 ← not "secret"
+    default: sk_live_…              ← the literal value
+→ git check-ignore env/stamps → NOT IGNORED
+```
+
+`cmd_add` hardcoded `purpose="config"`, while the name-based classifier
+that knows `STRIPE_*`, `*SECRET*` and `*PASSWORD*` mean a secret ran only
+under `suggest`. So any redaction rule keyed on `purpose == "secret"`
+would have missed it — which matters now that a binding design proposes
+serializing these stamps for a UI.
+
+`add` now classifies by name and **refuses** to record a default for a
+secret-purpose var, naming `/secrets` as the right home for the value.
+Non-secret vars are unaffected — verified like-for-like.
+
+### Verified
+
+W1: body prose survives `close` and the status field actually updates.
+W2: CRLF and BOM records both close correctly and keep their index row.
+W3: zero forged keys, exactly one `status:`, and the shell and python
+readers now agree. Secret refusal returns 3 and writes no stamp;
+`--required false --default` still records a literal for ordinary vars.
+
+### Not fixed here
+
+`contract.sh`'s `fm_set` has the same W1 fence and is untouched — it is
+the one engine actually installed in consumer projects, so it deserves
+its own change with its own verification rather than riding along.
+
+---
+
 ## v0.48.1 — 2026-09-19
 
 ### The Element's own source URL was dead, and `bin/init` handed it to every consumer
@@ -83,6 +183,8 @@ Element library, so correcting it is an ecosystem-wide change and not this
 patch's business. `rasa.domain.legal` and `rasa.orchestrator.workspace` carry
 the same `rasa-os` repo typo in their own manifests and need the same fix in
 their own repos.
+
+---
 
 ## v0.48.0 — 2026-09-19
 
