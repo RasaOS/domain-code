@@ -79,6 +79,7 @@ rule so it is reviewable; the per-skill SKILL.md cites this rule.
   auto-merge a PR to `main` *iff* every file in the PR matches
   the spec-file allowlist (`tasks/**/*.md`, `tasks/PHASES.md`,
   `tasks/ROADMAP.md`) and the working tree is otherwise clean.
+  `tasks/RELEASES.md`) and the working tree is otherwise clean.
   Push to a short-lived `spec/<id>` branch with a real PR
   record, merge via `gh pr merge --squash`. Any non-spec dirty
   file falls back to "leave uncommitted" — same as the

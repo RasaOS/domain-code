@@ -24,6 +24,140 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.48.0 — 2026-09-19
+
+### Release planning and bundling — and the tracker was broken on install
+
+`tasks/RELEASES.md` has never worked in a fresh project. Two shipped
+files described it and they contradicted each other:
+
+- **`seed/RELEASES.md.template`** — the file that actually lands on disk —
+  described a forward-looking plan: *"Each entry declares a release's
+  scope … before it ships,"* with 📋 Planned / 🚧 In progress / ✅ Shipped.
+- **`content/release-rules.md`** — the file the skills read — said *"The
+  📋 Planned state from earlier kit versions is gone"* and specified a
+  single 🚧 Next accumulator that tasks append to **after** they land.
+
+The seed produced **zero** 🚧 entries. `/release-add` requires exactly one
+and stops otherwise, so it hard-stopped on its first invocation in every
+fresh install. `/release` had no manifest to read.
+
+Nobody saw an error, because **`/peer-review` shipped the workaround** —
+it caught that failure and downgraded it to "a non-blocking note." So
+every merged PR in every fresh project emitted that note and nothing was
+ever tracked.
+
+Two more, found while fixing it:
+
+- **`{{NEXT}}` was never substituted.** The seed is `skip-if-exists`,
+  which never reaches substitution, and `bin/init` defines seven keys
+  that do not include it. Every install has the literal string
+  `## v{{NEXT}} — 📋 Planned` sitting on disk.
+- **`/roadmap` was a third model.** It resolves a task's shipped version
+  from phases in the seed's `**Scope.**` block, which the rules model
+  never produces — so its "Shipped in" column has resolved to
+  `(pre-versioning)` for everything, always.
+
+The ask and the bug were the same work. The revoking sentence is deleted;
+the forward-looking model wins.
+
+#### Targeted vs Bundled — two layers, two sections
+
+| | |
+|---|---|
+| **`### Targeted`** | Fluid. Any task status. Moved freely between releases. **Never read by `/release`.** |
+| **`### Bundled`** | Committed. Requires `tasks/completed/<ID>-*.md`. This is the manifest. |
+
+Separate **sections**, not two labels on one list — that is what makes
+the ship-time logic structurally unable to touch the fluid layer. A plan
+can be wrong all week at no risk.
+
+Bundling is harder to undo than targeting by construction: targeting is
+ungated while bundling requires completed work; bundling writes an
+approval line; targeted work is not in the manifest and cannot ship by
+accident; and shipping is terminal, with the manifest simultaneously
+frozen inside the annotated tag's message body.
+
+#### New — `/release-plan` and `release.sh`
+
+`/release-plan` creates a release **before anything is in it** and aims
+work at it. `release.sh` owns the mechanics: `check` `manifest` `list`
+`state` `find` `create` `target` `untarget` `bundle` `ship`.
+
+Targeting is idempotent and exclusive — targeting an id that is targeted
+elsewhere *moves* it in one edit, so an id is never in two releases.
+🚧 is **derived, not declared**: it means "has bundled work," and the
+first successful bundle flips 📋 → 🚧. Multiple open releases are legal
+and expected; the old "exactly one 🚧" invariant is gone, because it was
+the thing that hard-stopped.
+
+#### Invocation is approval
+
+Running `/release-add` **is** the approval act. Recorded once per release
+as `**Approved.** <user> via invocation` — the same `invocation` token
+the deploy ledger writes, so `grep -r invocation` joins a release to the
+run that shipped it. No prompt: `/release` has published
+invocation-is-consent since v0.33.0, a prompt cannot be answered from a
+shell with no controlling terminal, and recording an approver for a
+prompt that never fired would put a lie in an audit trail.
+
+#### `/release-add` now moves the spec when git proves the merge
+
+Nothing in the mainline flow owned the `active/` → `completed/`
+transition — `/peer-review` merges without moving the spec — so
+spec-in-`active/` plus merged-in-git is the *normal* post-merge state,
+and it is exactly what the completion gate refuses. `/release-add` is the
+only skill that runs at the moment the transition becomes true, so it
+does the `git mv` on conclusive evidence (the id named in a commit
+subject since the last tag) and says what it did. Nothing weaker moves a
+spec, and `/peer-review` was deliberately left alone.
+
+#### Neither new surface commits
+
+`git-clean.sh` counts `tasks/` as dirty for production. So a release that
+auto-committed the tracker, or exempted it from the clean-tree check,
+would pass its own preflight and then **fail the prod pipeline on the
+file it just exempted** — the exact class v0.47.1 was cut to kill. This
+refuted the mechanism all three candidate designs shared. Planning edits
+are ordinary doc edits; both skills print the commit command and run
+nothing.
+
+`/release` Step 1 also stops writing. It previously *silently added*
+missed ids during preflight — a write during the step that just asserted
+the tree was clean. It is now two read-only reports, and the ship-time
+prune that **deleted** unmerged ids outright is gone.
+
+#### Corrected: the tag example was never real
+
+`release-rules.md` documented `tag v0.37.0`. The pipeline has never
+produced a bare-version tag — `environment.sh` emits
+`v<semver>-<sha>-<env>`, and `git rev-parse v0.37.0` does not resolve.
+Shipped entries now record the stamped tag, which is also the join key to
+`deploys/records/`.
+
+#### Existing installs
+
+`seed/RELEASES.md.template` is `skip-if-exists`, so **nobody's file is
+touched**. `check` detects a pre-v0.48.0 tracker and prints the remedy:
+rename to `tasks/RELEASES.legacy.md` and start fresh. **Nothing is
+rewritten automatically.** Of the nine sibling installs, eight are
+untouched placeholders with nothing to lose; one — `kernel` — holds 410
+lines of real hand-written history in a third shape that a migrator would
+mangle. That is why no `migrate` verb exists.
+
+#### Deliberately not built
+
+A per-release record store and generated index (~750 lines; the
+frontmatter parser silently returns empty on CRLF, a BOM, or a trailing
+space after `---`). A `migrate` verb. A `/releases` renderer —
+`/release-plan` with no args renders, and `cat tasks/RELEASES.md` is the
+whole archive. `ios-release` is untouched: it never tags, never advances
+the tracker, and hard-requires a typed confirmation that inverts
+`/release`'s stated contract — all of which predates this work and is a
+genuine product decision, filed as the first follow-up.
+
+---
+
 ## v0.47.2 — 2026-09-19
 
 ### The rest of the pre-push audit — four silent-success failures

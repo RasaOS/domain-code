@@ -93,40 +93,7 @@ at a hard gate and ask the user.
 
 ## Process
 
-1. **Read the contracts.** `task-rules.md`, `craft-rules.md`,
-   `test-rules.md`, `git-flow-rules.md`, `autonomy-rules.md` (for
-   the hard-gate list), and the project's `CLAUDE.md`.
-2. **Resolve the PR target.** Accept `#NNN`, `NNN`, a GitHub URL,
-   or "the open PR on this branch" (use `gh pr view --json
-   number`). Capture: number, title, body, base branch, head
-   branch, author, status (mergeable, checks).
-3. **Fetch the diff and metadata.** `gh pr diff <N>`,
-   `gh pr view <N> --json files,title,body,headRefName,baseRefName,statusCheckRollup`.
-   Read every changed file at the head ref via `gh pr diff` and
-   spot-read the full files where the change interacts with
-   broader context.
-4. **Run the focused checks** (1–6 above) in order. On the first
-   disqualifier, stop checking and prepare a reject. If all six
-   pass, prepare an accept.
-5. **Take the action.**
-   - **Accept** → `gh pr review <N> --approve --body
-     "<approval-message-with-checked-rules>"`, then
-     `gh pr merge <N> --squash --delete-branch`. If the merge
-     fails because of branch protection, leave the approval in
-     place and report.
-   - **Reject** → `gh pr review <N> --request-changes --body
-     "<numbered-list-of-blocking-issues-with-file:line-and-rule>"`.
-     Do not also leave inline comments unless the issue is
-     specifically at one line — the body is the canonical record.
-6. **Track the merge in `RELEASES.md`** (accept path only).
-   After a successful merge, follow `release-add/SKILL.md` to
-   append every TASK-NNN / HOTFIX-NNN landed by this PR to the
-   "🚧 Next" entry of `tasks/RELEASES.md`. Idempotent — re-runs
-   are no-ops. If `release-add`'s preconditions fail (file
-   shape unexpected, no "🚧 Next" entry), surface as a
-   non-blocking note in the review report; the merge already
-   happened and is fine.
-7. **Render the review report** — see template below.
+If `/release-add` reports that the task is not in `tasks/completed/`, keep that as a **non-blocking note** in the review report — the work merged, the spec just has not moved yet, and `/release-add` will do the move itself next time it is run with git evidence. (The old degradation for "no 🚧 Next entry" is gone: that condition was the pre-v0.48.0 tracker being broken on install, not a real state. See CHANGELOG v0.48.0.)
 
 ## Output structure — the review report
 

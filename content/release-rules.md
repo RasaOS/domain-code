@@ -7,6 +7,73 @@ this file when shipping a release or auditing dependencies.** It
 extends `task-rules.md`; the five Git flow safety rules in
 `git-flow-rules.md` also apply to every release.
 
+## Targeted vs Bundled
+
+Every release has two lists, and they are separate **sections**, not two
+labels on one list. That separation is what makes the ship-time logic
+structurally unable to touch the fluid layer.
+
+### Targeted — the plan
+
+Fluid. A phase or task at **any** status may be targeted at a release,
+moved to another, or untargeted. No gate. `/release-plan` owns it.
+`/release` never reads it, so a plan can be wrong all week at no risk.
+
+### Bundled — the manifest
+
+Committed. **Only completed work is bundled**: `tasks/completed/<ID>-*.md`
+must exist. The directory decides, because `task-rules.md` calls status
+and directory "the same fact recorded twice" and a mismatch a bug to fix
+rather than a tiebreak. `/release-add` owns it, and `/release` reads it
+and nothing else.
+
+Bundling is harder to undo than targeting, deliberately:
+
+1. Targeting is ungated; bundling requires completed work.
+2. Bundling writes an approval line that did not previously exist.
+3. Targeted work is not in the manifest and cannot ship by accident.
+4. Shipping is terminal — targeting, bundling and unbundling all refuse
+   on a ✅ entry, and the manifest is simultaneously frozen inside the
+   annotated tag's message body.
+
+### Approval
+
+**Invocation is approval.** Running `/release-add` is the approval act;
+there is no separate sign-off and no prompt. It is recorded once per
+release as `**Approved.** <user> via invocation` — the same `invocation`
+token the deploy ledger writes, so `grep -r invocation` joins a release
+to the run that shipped it.
+
+Do not add a confirmation prompt on top. `/release` has published
+invocation-is-consent since v0.33.0, and a prompt cannot be answered from
+a tool-driven shell with no controlling terminal anyway. Recording an
+approver for a prompt that never fired would put a lie in an audit trail.
+
+### No `release:` field on tasks
+
+The release→work mapping lives in `tasks/RELEASES.md`, in one place.
+Tasks do not declare their release, for exactly the reason
+`task-rules.md` gives for not declaring their phase: it would drift, and
+re-targeting twelve tasks would mean editing twelve files instead of one.
+
+### Version discipline
+
+Headings are `## v<semver> — <glyph> <State>`. A duplicate version is
+refused. A version that has already shipped is refused. A version *below*
+the highest shipped one is **allowed** — maintenance lines are legitimate.
+
+🚧 is **derived, not declared**: it means "has bundled work", and the
+first successful bundle flips 📋 → 🚧. More than one open release is
+legal and expected; `/release` with no argument asks which.
+
+### Validating the ledger
+
+`.claude/skills/release/release.sh check` — exit 0 clean, 3 on drift. It
+catches duplicate versions, an id appearing twice, a glyph that
+contradicts the bundled count, a shipped entry with no tag or approval,
+and a pre-v0.48.0 file. It warns rather than fails on a tag that does not
+resolve locally, since that depends on fetch state.
+
 ## Release tracking — `tasks/RELEASES.md`
 
 `tasks/RELEASES.md` is the **live release tracker**: a single
@@ -33,7 +100,7 @@ a manual merge). The user does not maintain this file by hand.
 ---
 
 ✅ v0.37.0  ◆  /sync-all — autonomous variant of /sync
-              shipped 2026-05-20 · tag v0.37.0 · sha f77a843
+              shipped 2026-05-20 · tag `v0.37.0-<sha>-prod` · sha f77a843
 
 - TASK-040 — /sync-all skill
 - TASK-041 — /sync When-NOT cross-reference
@@ -86,10 +153,13 @@ Shipped" entries below.
    sha, then creates a **new** "🚧 Next" entry above it for the
    following release.
 
-(The 📋 Planned state from earlier kit versions is gone — the
-live-accumulator model replaces it. If you want to *plan*
-future scope before tasks exist, capture that in `intake.md`
-or a separate `tasks/ROADMAP.md` future-phase section.)
+(Superseded in v0.48.0. The 📋 Planned state is back and is the whole
+point: a release is declared BEFORE anything is in it, and work is
+targeted at it while still in progress. The single-🚧-accumulator model
+this paragraph used to describe never worked on a fresh install — the
+seed produced zero 🚧 entries and `/release-add` hard-stopped on its
+first run, which `/peer-review` then downgraded to a non-blocking note.
+See CHANGELOG v0.48.0.)
 
 ### How tasks land in the "🚧 Next" entry
 

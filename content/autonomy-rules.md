@@ -136,6 +136,7 @@ The carve-out:
 - **Allowlist.** Every file in the PR must match the spec-file
   allowlist: `tasks/**/*.md`, `tasks/PHASES.md`,
   `tasks/ROADMAP.md`. Any file outside the allowlist disqualifies
+  `tasks/RELEASES.md`. Any file outside the allowlist disqualifies
   the fast-path.
 - **Clean tree precondition.** The working tree must contain no
   non-spec dirty files at the moment the fast-path runs. If it

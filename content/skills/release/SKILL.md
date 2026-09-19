@@ -198,6 +198,31 @@ the footer becomes a §25 ERROR alert and the skill **stops**:
 └────────────────────────────────────────────────────────┘
 ```
 
+**Release tracker (v0.48.0).** Run
+`bash .claude/skills/release/release.sh check` — exit 3 is a **hard
+blocker**, the tracker is malformed and the manifest cannot be trusted.
+
+Then resolve which release is shipping: an explicit argument, else the
+single 🚧 release, else **ask**. More than one open release is legal now,
+so never guess.
+
+`release.sh manifest <version>` prints the bundled bullets. That is the
+release manifest — `### Targeted` is NOT part of it and must not be read
+here. Work can merge to `main` and legitimately not belong to this
+release.
+
+**This step does not write.** It previously *silently added* missed task
+ids during preflight — a write during the step that just asserted the
+tree is clean, on a path the production clean-tree gate counts. Report
+instead:
+
+- ids in commits since the last tag that are bundled nowhere → list them
+  as "not in any release; `/release-add` them if they belong here";
+- ids bundled into this release with no commit since the last tag → list
+  them as "bundled but not seen in commits".
+
+Both are **reports**. Neither edits the file, and neither blocks.
+
 ### Step 2 — Pick version
 
 If invoked with a version arg, use it:
