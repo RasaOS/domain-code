@@ -103,7 +103,7 @@ pointer_path() {
 # JSON operations on the registry.  _registry_py <registry-file> <op> [args...]
 _registry_py() {
   python3 - "$@" <<'PY'
-import json, sys
+import json, re, sys
 
 reg_path = sys.argv[1]
 op = sys.argv[2]
@@ -124,11 +124,39 @@ default = reg.get("default", "")
 VALID_CLASSES = ("dev", "staging", "prod")
 
 # Names that make an environment PRODUCTION even when nobody declared it.
-# Substring, case-insensitive, and deliberately generous: this heuristic
-# only ever ESCALATES. A false positive blocks a deploy (safe and loud);
-# a false negative is what shipped `production-us` past the old
-# `case $ENV in prod|production)` exact match with no gate at all.
-PROD_NAME_HINTS = ("prod", "live", "production")
+#
+# This is a TOKEN test, not a substring test. Substring matching was the
+# first implementation and it was far too greedy: `preprod`, `pre-prod`,
+# `nonprod` and `non-prod` all escalated to production and hard-locked
+# /deploy with no config escape — and so did `reproduction-test` (repROD)
+# and `alive-service` (aLIVE), which are not even close.
+#
+# The rule: split on - _ . and escalate when any TOKEN starts with "prod"
+# or "live". `reproduction` starts with "repr", `alive` with "ali", so
+# neither fires. Explicit negatives are checked first, because `pre-prod`
+# tokenizes to a bare `prod` that would otherwise escalate.
+#
+# Escalation still only ever goes UP. A false positive blocks a deploy,
+# which is loud and safe; a false negative is what shipped `production-us`
+# past the pre-v0.44.0 gate with no gate at all.
+PROD_TOKEN_PREFIXES = ("prod", "live")
+NOT_PROD_MARKERS = (
+    "preprod", "pre-prod", "pre_prod",
+    "nonprod", "non-prod", "non_prod",
+    "notprod", "not-prod", "not_prod",
+)
+
+
+def _name_says_prod(name):
+    low = name.lower()
+    for marker in NOT_PROD_MARKERS:
+        if marker in low:
+            return False
+    for token in re.split(r"[-_.]+", low):
+        for prefix in PROD_TOKEN_PREFIXES:
+            if token.startswith(prefix):
+                return True
+    return False
 
 
 def classify(name, env):
@@ -139,14 +167,12 @@ def classify(name, env):
         # Declaring `"class": "dev"` on an env called `prod-eu` is far more
         # likely a mistake than an intention, and guessing wrong here puts
         # a deploy into production.
-        low = name.lower()
-        if declared != "prod" and any(h in low for h in PROD_NAME_HINTS):
+        if declared != "prod" and _name_says_prod(name):
             return "prod", "name-escalated over declared '%s'" % declared
         return declared, "declared"
     if declared is not None:
         return "unclassified", "invalid class %r" % (declared,)
-    low = name.lower()
-    if any(h in low for h in PROD_NAME_HINTS):
+    if _name_says_prod(name):
         return "prod", "name-escalated (no class declared)"
     return "unclassified", "no class declared"
 

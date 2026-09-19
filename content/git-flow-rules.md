@@ -155,7 +155,7 @@ What the skill still does:
   end-to-end without intermediate prompts.
 
 **Non-production preview deploys** have one carve-out: `/mission`
-MAY run `./build/deploy --env=<env>` against a project-configured
+MAY run `./build/deploy --env=<env> --intent=deploy` against a project-configured
 non-prod environment, but only when the goal explicitly asks for
 a preview deploy. The carve-out is opt-in (the goal must request
 it), bounded (never `prod`/`production`, never via `/release`,

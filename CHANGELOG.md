@@ -24,6 +24,94 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.47.2 — 2026-09-19
+
+### The rest of the pre-push audit — four silent-success failures
+
+Every one of these reported success while doing the wrong thing. That is
+the class v0.43.1 exists to eliminate, and four more of them were living
+in code written this same week.
+
+#### The ship log silently discarded 75% of its entries
+
+`open` reserved a separate `.$id.lock`, and `close` deleted it. So a
+second `open` in the same second found no lock, reused the id, and
+**overwrote the completed record**. Measured: **8 back-to-back deploys
+left 2 record files** — only `v8` and `v4` survived — and `check` still
+reported `✓ ledger consistent`.
+
+An audit trail that discards entries while claiming health is worse than
+no audit trail, because you would trust it.
+
+The **record file itself** is now the reservation, claimed with
+noclobber. It is never removed, so the name can never be reused. Verified:
+8 rapid open/close cycles leave 8 records with all 8 tags, plus 6
+concurrent opens all distinct.
+
+#### Every ledger view was empty under a path containing a space
+
+`for f in $(ls …)` word-splits. In a repo at `~/code/my project/`, `list`
+printed nothing, the index had zero rows, and `check` exited 3 reporting
+drift it could not fix — while the records sat on disk. Now a
+`while IFS= read -r` fed by process substitution (**not** a pipe — the
+loop must stay in-shell so counters survive). Fixed in `deploys.sh` ×2
+and `task-enforce.sh` ×1.
+
+#### `bin/init` destroyed the files `overrides[]` exists to protect
+
+v0.43.1 made `bin/init` *preserve* `overrides[]` across a re-run. It never
+**read** it. So the copy loop overwrote every overridden file anyway —
+including `build/stages/20-build.sh`, which `/setup-deploy` writes the
+project's real build command into and which reverts to a `TODO: configure`
+stub that `exit 1`s.
+
+With `/sync` dead, re-running `bin/init` *is* the update path. So the
+update path was destroying the project it updated, in the release that
+told people the re-run was safe.
+
+`shutil.copytree` cannot skip per-file, so `directory-mirror` now walks
+and honours overrides, and `file-replace` checks too. A protected file
+prints `· keep (overridden): <path>`.
+
+#### `preprod` and `nonprod` were production
+
+The name heuristic was a substring test, and far too greedy. `preprod`,
+`pre-prod`, `nonprod`, `non-prod` all escalated to production and
+**hard-locked `/deploy` with no config escape** — and so did
+`reproduction-test` (re**prod**uction) and `alive-service` (a**live**),
+which are not even close.
+
+Now a TOKEN test: split on `- _ .`, escalate when a token *starts with*
+`prod` or `live`, with an explicit negative list checked first because
+`pre-prod` tokenizes to a bare `prod`. Escalation still only goes up.
+Verified across 16 names: `production-us`, `us-prod`, `us-live`, `PROD`
+and a `prod-eu` declaring `dev` all still escalate; the six false
+positives are free.
+
+#### Swept `--intent` into 13 shipped call sites, and added a gate
+
+v0.45.0 made `--intent` mandatory and left twelve shipped invocations
+exiting 2 — including `/setup-deploy`'s own verification step, so the
+skill that sets up the pipeline told you to run a command that fails.
+
+New **`bin/check-invocations`**, wired into CI as a hard gate: a command
+in shipped documentation is a command a consumer will paste. Hand
+enumeration missed half of these on the first pass, which is the argument
+for a gate rather than a sweep. It also reports dangling `/slash`
+references — advisory, with Claude Code built-ins allowlisted, because a
+gate that fails CI on `/help` is a gate someone disables. 14 remain; that
+is a content decision.
+
+#### One note on process
+
+The first version of `bin/check-invocations` was written with a heredoc
+that contained its own `EOF` markers, so it was silently truncated at 44
+lines mid-loop — and then printed `clean` because it never ran the checks.
+The invocation checker's first act was to be a silent-success failure.
+Caught by reading the file rather than trusting its output.
+
+---
+
 ## v0.47.1 — 2026-09-19
 
 ### Two defects found by a pre-push audit, before any of this reached anyone

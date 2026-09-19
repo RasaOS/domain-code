@@ -105,12 +105,21 @@ cmd_open() {
   base="DEP-${stamp}-${env_name}"
   id="$base"
   n=1
-  # Reserve the ID itself with noclobber, not a slug-bearing filename:
-  # two callers in the same second must not both succeed.
-  while ! ( set -C; : > "$RECORDS_DIR/.$id.lock" ) 2>/dev/null; do
+  # The RECORD FILE ITSELF is the reservation, claimed with noclobber.
+  #
+  # This used to reserve a separate `.$id.lock`, which `close` then
+  # deleted — so a second open in the same second found no lock, reused
+  # the id, and OVERWROTE the completed record. Measured: 8 back-to-back
+  # deploys left 2 record files, and `check` still reported "consistent".
+  # An audit trail that silently discards entries while claiming health is
+  # worse than no audit trail.
+  #
+  # Reserving the .md means the name can never be reused, because the file
+  # is never removed.
+  while ! ( set -C; : > "$RECORDS_DIR/$id.md" ) 2>/dev/null; do
     n=$(( n + 1 ))
     id="${base}-${n}"
-    [ "$n" -lt 100 ] || { echo "error: cannot allocate a deploy id" >&2; return 1; }
+    [ "$n" -lt 1000 ] || { echo "error: cannot allocate a deploy id" >&2; return 1; }
   done
 
   local sha branch
@@ -178,7 +187,6 @@ cmd_close() {
     { print }
   ' "$f" > "$tmp" && mv "$tmp" "$f"
 
-  rm -f "$RECORDS_DIR/.$id.lock"
   cmd_index >/dev/null
   printf '%s\n' "$id"
 }
@@ -196,7 +204,11 @@ cmd_index() {
     echo "| When (UTC) | Kind | Environment | Class | Tag | Who | Status | Took | ID |"
     echo "|---|---|---|---|---|---|---|---|---|"
     local f
-    for f in $(ls -1 "$RECORDS_DIR"/???-*.md 2>/dev/null | sort -r || true); do
+    # `for f in $(ls …)` word-splits, so every ledger view was EMPTY in a
+    # repo whose path contains a space — and `check` then reported drift it
+    # could not fix. Process substitution (not a pipe) keeps the loop in
+    # this shell so counters survive.
+    while IFS= read -r f; do
       [ -f "$f" ] || continue
       local mark dur
       case "$(field "$f" status)" in
@@ -211,7 +223,7 @@ cmd_index() {
         "$(field "$f" started)" "$(field "$f" kind)" "$(field "$f" environment)" \
         "$(field "$f" class)" "$(field "$f" tag)" "$(field "$f" user)" \
         "$mark" "$dur" "$(field "$f" id)"
-    done
+    done < <(ls -1 "$RECORDS_DIR"/???-*.md 2>/dev/null | sort -r || true)
     echo ""
     echo "_Regenerate with \`.claude/skills/deploys/deploys.sh index\`._"
   } > "$tmp" && mv "$tmp" "$INDEX"
@@ -234,7 +246,9 @@ cmd_list() {
 
   local n=0 f
   printf '%-21s %-8s %-14s %-8s %s\n' "WHEN (UTC)" "KIND" "ENV" "STATUS" "TAG"
-  for f in $(ls -1 "$RECORDS_DIR"/???-*.md 2>/dev/null | sort -r || true); do
+  # See the note in cmd_index: word-splitting broke this under any path
+  # containing a space.
+  while IFS= read -r f; do
     [ -f "$f" ] || continue
     local e; e="$(field "$f" environment)"
     [ -z "$filter_env" ] || [ "$e" = "$filter_env" ] || continue
@@ -243,7 +257,7 @@ cmd_list() {
     printf '%-21s %-8s %-14s %-8s %s\n' \
       "$(field "$f" started)" "$(field "$f" kind)" "$e" \
       "$(field "$f" status)" "$(field "$f" tag)"
-  done
+  done < <(ls -1 "$RECORDS_DIR"/???-*.md 2>/dev/null | sort -r || true)
   [ "$n" -gt 0 ] || echo "(no matching deploys)"
 }
 

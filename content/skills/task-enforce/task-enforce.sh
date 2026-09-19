@@ -253,11 +253,13 @@ ledger_index() {
   { echo "# Changes"; echo ""
     echo "<!-- GENERATED from tasks/changes/ — DO NOT HAND-EDIT. -->"; echo ""
     local f
-    for f in $(ls -1 "$dir"/*.md 2>/dev/null | sort -r || true); do
+    # `for f in $(ls …)` word-splits — empty index under any path with a
+    # space. Process substitution, not a pipe, so this stays in-shell.
+    while IFS= read -r f; do
       [ -f "$f" ] || continue
       echo "## $(basename "$f" .md)"; echo ""
       sed -n '3,$p' "$f"; echo ""
-    done
+    done < <(ls -1 "$dir"/*.md 2>/dev/null | sort -r || true)
   } > "$tmp" && mv "$tmp" "$out"
 }
 

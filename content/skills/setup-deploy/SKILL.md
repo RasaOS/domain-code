@@ -7,7 +7,7 @@ description: Walk a project through configuring its deploy pipeline and test sui
 
 Interactive setup that fills in the kit-shipped `build/` and `tests/` scaffolding with project-specific commands. Reads what's already there, detects project type, asks only what it can't infer, and writes concrete bash scripts that subsequent deploys can just invoke.
 
-After this skill runs, `./build/deploy --env=<env>` should work end-to-end. AI agents don't need to reason about how to deploy at run time — the scripts are the contract.
+After this skill runs, `./build/deploy --env=<env> --intent=deploy` should work end-to-end. AI agents don't need to reason about how to deploy at run time — the scripts are the contract.
 
 Pairs with `pipeline-rules.md` (the vocabulary: stages, gates, args, environments) and `test-rules.md` (the test stamp model and suite-as-gate convention).
 
@@ -99,7 +99,7 @@ After each user confirmation:
 
 Once all questions are answered:
 
-1. Run `./build/deploy --env=<first-env> --dry-run` to validate the wiring (stages discover correctly, env folder exists, no syntax errors).
+1. Run `./build/deploy --env=<first-env> --intent=deploy --dry-run` to validate the wiring (stages discover correctly, env folder exists, no syntax errors).
 2. Surface the dry-run output to the user.
 3. If anything errors, flag the specific file + line that needs attention. Don't try to fix silently.
 
@@ -139,19 +139,19 @@ When the skill finishes, render a summary like this:
 
 ### Dry-run result
 
-`./build/deploy --env=dev --dry-run` → ✓ all stages discovered
+`./build/deploy --env=dev --intent=deploy --dry-run` → ✓ all stages discovered
 
 ### Next steps
 
 1. Review the diff: `git diff --staged`
-2. Run a real dev deploy: `./build/deploy --env=dev`
+2. Run a real dev deploy: `./build/deploy --env=dev --intent=deploy`
 3. Add project-specific tests under `tests/stamps/` and add their names to `tests/suites/pre-deploy.md`
 4. Commit when satisfied: `git commit -m "feat: configure deploy pipeline"`
 ```
 
 ## What this skill does NOT do
 
-- **Doesn't run actual deploys.** Run them after setup with `./build/deploy --env=<env>` or `/deploy --env=<env>`.
+- **Doesn't run actual deploys.** Run them after setup with `./build/deploy --env=<env> --intent=deploy` or `/deploy <env>`.
 - **Doesn't decide approval policy for you.** Asks per-env; respects the answer.
 - **Doesn't auto-commit.** Stages changes; the human commits.
 - **Doesn't fetch secrets.** References them by env var name (`$ASC_KEY_ID`, etc.); user wires the source (CI variable group, 1Password, secret manager).
@@ -164,7 +164,7 @@ When the skill finishes, render a summary like this:
 - Migrating an old pipeline (Azure DevOps YAML, GitHub Actions, etc.) onto the kit's structure
 - Just curious about what's wired up — running with no changes is a fine way to audit current state
 
-If `build/` is fully configured and the user just wants to *run* a deploy, use `/deploy` instead (future skill — a thin wrapper around `./build/deploy`).
+If `build/` is fully configured and the user just wants to *run* a deploy, use `/deploy` instead — it ships as of v0.44.0 and is the thin wrapper around `./build/deploy`.
 
 ---
 

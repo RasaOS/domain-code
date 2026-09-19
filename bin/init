@@ -91,6 +91,53 @@ import json, os, shutil, sys
 manifest_path, element_dir, target = sys.argv[1], sys.argv[2], sys.argv[3]
 manifest = json.load(open(manifest_path))
 
+# `overrides[]` is the consumer's list of files they have deliberately
+# diverged and do NOT want overwritten. bin/init PRESERVED the list across
+# a re-run but never READ it, so the one thing it exists to protect was
+# destroyed on every re-install — including build/stages/20-build.sh, which
+# /setup-deploy writes the project's real build command into and which
+# reverts to a `TODO: configure` stub that exits 1. With /sync dead,
+# re-running bin/init IS the update path, so this was the update path
+# breaking the project it updated.
+overrides = set()
+lock = os.path.join(target, '.claude', 'rasa.lock.json')
+try:
+    with open(lock) as fh:
+        for entry in (json.load(fh).get('overrides') or []):
+            overrides.add(os.path.normpath(str(entry)))
+except (OSError, ValueError):
+    pass
+
+kept = []
+
+
+def protected(rel):
+    """True if rel — or a directory containing it — is overridden."""
+    rel = os.path.normpath(rel)
+    if rel in overrides:
+        return True
+    for o in overrides:
+        if rel.startswith(o.rstrip(os.sep) + os.sep):
+            return True
+    return False
+
+
+def mirror(src, dst, rel_base):
+    """copytree that honours overrides. shutil.copytree cannot skip
+    per-file, so the walk is done here."""
+    for root, _dirs, files in os.walk(src):
+        sub = os.path.relpath(root, src)
+        out = dst if sub == '.' else os.path.join(dst, sub)
+        os.makedirs(out, exist_ok=True)
+        for name in files:
+            rel = os.path.normpath(os.path.join(
+                rel_base, '' if sub == '.' else sub, name))
+            if protected(rel):
+                kept.append(rel)
+                continue
+            shutil.copy2(os.path.join(root, name), os.path.join(out, name))
+
+
 for entry in manifest.get('element', {}).get('files', []):
     src = os.path.join(element_dir, entry['from'])
     dst = os.path.join(target, entry['to'])
@@ -101,11 +148,17 @@ for entry in manifest.get('element', {}).get('files', []):
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     if policy == 'directory-mirror':
         if os.path.isdir(src):
-            shutil.copytree(src, dst, dirs_exist_ok=True)
+            mirror(src, dst, entry['to'])
     elif policy == 'file-replace':
+        if protected(entry['to']):
+            kept.append(os.path.normpath(entry['to']))
+            continue
         shutil.copy2(src, dst)
     else:
         print(f"  ⚠ unknown element.files[] policy: {policy} for {entry['from']}", file=sys.stderr)
+
+for rel in sorted(set(kept)):
+    print(f"    · keep (overridden): {rel}")
 PYEOF
 fi
 

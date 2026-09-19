@@ -162,7 +162,7 @@ changes what plans are visible.
 
 When the goal explicitly asks for a deployable preview ("deploy a
 preview", "have it running for me to test", "stand it up so I can
-validate"), `/mission` MAY run `./build/deploy --env=<env>`
+validate"), `/mission` MAY run `./build/deploy --env=<env> --intent=deploy`
 against a project-configured non-prod environment, but:
 
 - **Opt-in.** The goal must explicitly request a preview deploy.

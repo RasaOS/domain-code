@@ -14,6 +14,15 @@ jobs:
       - name: rasa.json is a complete inventory
         run: bash bin/check-manifest
 
+      # Hard gate on the --intent check. A command in shipped docs is a
+      # command a consumer pastes; if it cannot run, the docs are wrong in
+      # the most expensive way. v0.45.0 made --intent mandatory and left 12
+      # shipped call sites exiting 2, including /setup-deploy's own
+      # verification step. The dangling-slash half is advisory (see the
+      # script) — built-ins are allowlisted, the rest is a content call.
+      - name: Shipped commands are invocable
+        run: bash bin/check-invocations
+
   portability:
     name: bash 3.2 floor
     runs-on: ubuntu-latest

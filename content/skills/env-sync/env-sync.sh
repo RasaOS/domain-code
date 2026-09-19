@@ -154,10 +154,13 @@ record_transfer() {
   mkdir -p "$records" 2>/dev/null || return 0
   local stamp id n
   stamp="$(date -u '+%Y%m%d-%H%M%S')"
+  # The record file itself is the reservation — see the note in
+  # deploys.sh. A separate lock that gets removed lets a later write in
+  # the same second silently overwrite a completed record.
   id="ENV-${stamp}-${name}"; n=1
-  while ! ( set -C; : > "$records/.$id.lock" ) 2>/dev/null; do
+  while ! ( set -C; : > "$records/$id.md" ) 2>/dev/null; do
     n=$(( n + 1 )); id="ENV-${stamp}-${name}-${n}"
-    [ "$n" -lt 100 ] || return 0
+    [ "$n" -lt 1000 ] || return 0
   done
   {
     echo "---"
@@ -187,7 +190,6 @@ record_transfer() {
     echo ""
     echo "No contents, no remote path, and no per-key digest are recorded."
   } > "$records/$id.md"
-  rm -f "$records/.$id.lock"
   local ds="$ROOT/.claude/skills/deploys/deploys.sh"
   [ -f "$ds" ] && bash "$ds" index >/dev/null 2>&1 || true
   echo "  recorded: $id"

@@ -41,7 +41,7 @@ build/
 │   ├── tag-matches.sh
 │   └── approval.sh
 ├── deploy-log.md                 # appended every run (timestamp, env, who, result)
-└── deploy                        # entry point: ./build/deploy --env=staging
+└── deploy                        # entry point: ./build/deploy --env=staging --intent=deploy
 ```
 
 ## Entry point: `./build/deploy`
@@ -255,7 +255,7 @@ The `/deploy` Claude skill is a thin orchestrator:
 
 1. If `--env=<name>` not provided, prompt the user (multiple choice from `pipeline-config.toml`'s env list)
 2. If env requires approval (per config), confirm with explicit "yes"
-3. Invoke `./build/deploy --env=<name> [args]`
+3. Invoke `./build/deploy --env=<name> --intent=<deploy|release> [args]`
 4. Stream output back to the user
 5. Report success/failure with relevant context
 
@@ -273,7 +273,7 @@ A new project runs `/setup-deploy` (skill, ships in kit) which:
 6. Generates `tests/suites/pre-deploy.md` (default empty suite)
 7. Stages everything for git review (never auto-commits — kit convention)
 
-After `/setup-deploy`, deploys are just `./build/deploy --env=<env>` from then on.
+After `/setup-deploy`, deploys are just `./build/deploy --env=<env> --intent=deploy` from then on.
 
 ---
 

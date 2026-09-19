@@ -79,10 +79,20 @@ case "$CLASS" in
     # No registry, or the registry could not classify it. Apply the same
     # escalate-only name heuristic so a prod-looking environment is still
     # caught in a project that never set up the environment skill.
+    # Token test, matching environment.sh. A substring test escalated
+    # preprod / non-prod / reproduction-test / alive-service to production.
     lower="$(printf '%s' "$ENV_NAME" | tr '[:upper:]' '[:lower:]')"
+    CLASS="unclassified"; SOURCE="${SOURCE:-no registry}"
     case "$lower" in
-      *prod*|*live*) CLASS="prod";        SOURCE="name heuristic" ;;
-      *)             CLASS="unclassified"; SOURCE="${SOURCE:-no registry}" ;;
+      *preprod*|*pre-prod*|*pre_prod*|*nonprod*|*non-prod*|*non_prod*|*notprod*|*not-prod*|*not_prod*)
+        ;;
+      *)
+        for _tok in $(printf '%s' "$lower" | tr '\-_.' '   '); do
+          case "$_tok" in
+            prod*|live*) CLASS="prod"; SOURCE="name heuristic" ;;
+          esac
+        done
+        ;;
     esac
     ;;
 esac

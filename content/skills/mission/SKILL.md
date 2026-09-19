@@ -84,7 +84,7 @@ turns ran out. Step 6 is where that honesty is enforced.
   counter to zero. Gaps become new tasks; the mission is not done
   while any remain.
 - **Opt-in preview deploy.** Per `autonomy-rules.md` Exception 3,
-  `/mission` MAY run `./build/deploy --env=<non-prod-env>` after
+  `/mission` MAY run `./build/deploy --env=<non-prod-env> --intent=deploy` after
   opening the PR — but only when the goal explicitly asks for a
   preview deploy ("deploy a preview", "have it running for me to
   test", "stand it up so I can validate"). Never `prod`. Never
@@ -201,7 +201,7 @@ turns ran out. Step 6 is where that honesty is enforced.
      or if no `./build/deploy` script exists, or if the project
      has no deployable UI surface. Report the refusal; do not
      fail the mission.
-   - Run `./build/deploy --env=<env>`. If it succeeds, capture
+   - Run `./build/deploy --env=<env> --intent=deploy`. If it succeeds, capture
      the resulting URL/host and add it to the PR body and the
      autonomy report. If it fails, capture the error and report
      it — do not retry, do not roll back the PR.
