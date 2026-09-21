@@ -154,8 +154,12 @@ turns ran out. Step 6 is where that honesty is enforced.
    reusable test stamps per `test-rules.md`). When the acceptance
    criteria hold and the tests pass, commit the task to the branch
    — spec, code, and tests together, `TASK-NNN — <title>` — and
-   move the spec to `tasks/completed/`. A hard gate hit here stops the
-   mission.
+   move the spec to `tasks/completed/` **and flip the frontmatter to
+   match** — `task-enforce.sh stamp <id> status completed`, then
+   `stamp <id> outcome shipped` once the work is actually in. A directory
+   move alone leaves `status:` lying, and this is the one path designed to
+   run unattended, so nobody is watching to catch it. A hard gate hit here
+   stops the mission.
 
 6. **Two-pass verification re-walk.** With every task done,
    re-walk the *goal*, not the task list. Re-read the changed

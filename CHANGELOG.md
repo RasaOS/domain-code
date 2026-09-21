@@ -24,6 +24,69 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.50.0 — 2026-09-20
+
+### Tasks and runs become records (the first half of the run record)
+
+The Element could not answer "did that work?" about its own output. Tasks
+terminated at merge with no outcome field, and three of the four writers that
+create task files emitted no frontmatter at all. This ships the *shape* — the
+task half is live, the run half is the model the writer lands against.
+
+**`stamps.md` gains two adopted models.** `Stamp: task` — `id`, `category`,
+`status`, `phase`, `owner`, `blocked_by`, `outcome`, `filed`, `origin`,
+`severity`. `Stamp: run` — `run_id`, `kind`, `actor`, `actor_kind`, `status`,
+`outcome`, `gate`, `task_refs`, `started`, `finished`, `duration_s`, `sha`,
+`branch`. The `### task (proposed)` block is gone.
+
+**Run identity is deliberately not on the task.** They are many-to-many: one
+`/mission` run spans several tasks and renders one report, and one task is
+re-attempted across runs via the `active ⇄ blocked` cycle — so a single-valued
+`run_id` on the task is overwritten by attempt 2, destroying the history it
+exists to record. Run records live at `tasks/runs/`, one file per run, opened
+*before* the work (a record written only at the end cannot represent a run that
+died, and dead runs are the escape rate). `attempts` is derived by counting
+run records, never stored.
+
+**`task-enforce.sh stamp <id> <key> <value>`** — a real upsert. `contract.sh`'s
+`fm_set` has no insert branch: setting a missing key returns exit 0 with the
+file byte-identical. `stamp` inserts, rewrites, refuses an unknown key (exit 2)
+and fails loudly on a file with no frontmatter (exit 1).
+
+**Three minters now emit frontmatter.** `task-guard.sh` wrote bold-markdown
+body lines, so its stubs were uncountable by the two shipped stub-counters and
+`release.sh` rendered them as `<title from spec — fill in later>` in
+RELEASES.md. `/mvp` and `/prototype` specified frontmatter-free stubs — and
+`/mvp` is the first skill a greenfield repo runs, which made *untracked* the
+default starting state of every new project.
+
+**Three title parsers now skip frontmatter.** `status.sh` and `dashboard.py`
+read the first `# ` line, so a YAML comment inside frontmatter was displayed as
+the task's name. `release.sh` additionally returned empty for task-guard's
+em-dash H1.
+
+**`task-enforce.sh status` gains an adoption metric** — a count of tasks whose
+outcome is absent or `unrecorded`. Both counters now read frontmatter rather
+than grepping the whole file, which had been matching body text.
+
+**Two corrections to shipped rules.** `task-rules.md` claimed phase membership
+lives in ROADMAP "nowhere else. Tasks don't declare their phase in their own
+spec file" — untrue for some time, since the canonical frontmatter, all four
+templates and both auto-minters emit one. ROADMAP stays authoritative; the
+field is documented as a cache that ROADMAP wins over. And the proposed stamp
+had no `category` row, so adopting it literally would have dropped the
+discriminator ~20 skills hard-code.
+
+#### Upgrading
+
+Nothing to do. **Every new field is optional** with a declared default —
+`category`→`spec`, `status`→the directory, `outcome`→`unrecorded`, and so on;
+the full table is in `task-rules.md` "Backwards compatibility". No existing
+task file becomes invalid and none needs re-filing, which is why this is a
+MINOR. Required fields would have been a MAJOR under this Element's own rule.
+
+---
+
 ## v0.49.0 — 2026-09-20
 
 ### The production test gate could pass having run nothing (BREAKING for prod releases)

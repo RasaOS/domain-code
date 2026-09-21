@@ -49,8 +49,21 @@ does not bump versions, it does not ship.
 
   **If git proves the merge and the spec is still in `tasks/active/`,
   do the move**: the id named in a commit subject since the last tag is
-  conclusive. `git mv` the spec into `tasks/completed/`, set
-  `status: completed`, say what you did, then bundle.
+  conclusive. `git mv` the spec into `tasks/completed/`, then set
+  **both** fields mechanically — never by hand-editing frontmatter:
+
+  ```bash
+  .claude/skills/task-enforce/task-enforce.sh stamp TASK-NNN status completed
+  .claude/skills/task-enforce/task-enforce.sh stamp TASK-NNN outcome shipped
+  ```
+
+  Say what you did, then bundle.
+
+  `outcome` is a **separate fact** from `status` and is never inferred from
+  it: `shipped` when the work went out, `reverted` when it was backed out
+  afterwards, `superseded` when another task replaced it. A task that reaches
+  `completed/` still carrying `outcome: unrecorded` is exactly what this
+  field exists to surface — `task-enforce.sh status` counts those.
 
   Nothing else in the mainline flow owns that transition —
   `/peer-review` merges without moving the spec — so spec-in-`active/`
