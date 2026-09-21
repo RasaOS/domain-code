@@ -190,7 +190,38 @@ apply to ephemeral testing envs — those exist to be deployed to.
 
 Every `auto-*` skill ends with exactly one report — the user's
 single review surface, standing in for the questions they were not
-asked. Render it in chat at the end of the run:
+asked.
+
+**The report is rendered *and* recorded.** Rendering alone was the whole
+problem: a run that died mid-way left no trace at all, and a gate hit died in
+a transcript nobody was watching. You cannot compute a success rate, an escape
+rate or a cycle time from chat scrollback, and without those numbers no gate
+anywhere can ever be loosened — which collapses the work back to a human
+reading every diff.
+
+So an autonomous run brackets itself with a run record:
+
+```bash
+RUN=$(.claude/skills/runs/runs.sh open <kind> "TASK-NNN, TASK-MMM")   # BEFORE the work
+# ... the operation ...
+.claude/skills/runs/runs.sh close "$RUN" completed
+# or: close "$RUN" stopped-at-gate "locked contract user-schema"
+# or: close "$RUN" failed
+```
+
+`<kind>` is the skill that ran — `mission`, `auto-task`, `auto-develop`,
+`auto-test`, `auto-phase`, `auto-bug`, `auto-hotfix`.
+
+**Open it before the work, not after.** A record written only at the end
+cannot represent a run that died, and that is the outcome most worth knowing
+about. `runs.sh list --open` is the list of runs that never closed.
+
+The rendered report and the record carry the same facts; the record is the one
+that survives. See `stamps.md` → `Stamp: run`, and `runs.sh` for the ledger's
+shape. A task's attempt count is derived from these records
+(`runs.sh attempts TASK-NNN`), never stored on the task.
+
+Render this in chat at the end of the run:
 
 ```markdown
 # 🤖 Autonomous run — <operation> · <target>
