@@ -358,7 +358,10 @@ def gather_active_tasks(root: Path) -> list[dict[str, str]]:
         title = path.stem
         try:
             text = path.read_text(encoding="utf-8", errors="replace")
-            m = re.search(r"^#\s+(.+)$", text, re.M)
+            # Strip a leading frontmatter block first: a `#` line inside it is a
+            # YAML comment, not the title.
+            body = re.sub(r"\\A---\\n.*?\\n---\\n", "", text, count=1, flags=re.S)
+            m = re.search(r"^#\s+(.+)$", body, re.M)
             if m:
                 title = m.group(1).strip()
         except OSError:

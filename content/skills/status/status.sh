@@ -341,7 +341,10 @@ render_active_tasks() {
     [ -e "$f" ] || continue
     found=1
     local title
-    title="$(grep -m1 '^# ' "$f" 2>/dev/null | sed 's/^# *//' | tr -d '\r' | cut -c1-80)"
+    # Skip a leading frontmatter block before looking for the H1. A `#` line
+    # INSIDE frontmatter is a YAML comment, not the title — without this, a
+    # commented field reads back as the task's name on the status board.
+    title="$(awk 'NR==1 && $0=="---" {infm=1; next} infm && $0=="---" {infm=0; next} !infm && /^# / {sub(/^# */,""); print; exit}' "$f" 2>/dev/null | tr -d '\r' | cut -c1-80)"
     [ -z "$title" ] && title="$(basename "$f" .md)"
     echo "- **${title}** — \`tasks/active/$(basename "$f")\`"
   done

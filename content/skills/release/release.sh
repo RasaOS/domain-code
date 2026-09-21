@@ -572,7 +572,16 @@ _title_for() {
   for d in completed active blocked backlog triage; do
     f="$(find "$ROOT/tasks/$d" -name "$id-*.md" 2>/dev/null | head -1 || true)"
     if [ -n "$f" ]; then
-      sed -n 's/^# [A-Za-z-]*-[0-9]*: *//p' "$f" | head -1 && return 0
+      # Below frontmatter only, and accept BOTH H1 forms: the colon form
+      # `# TASK-NNN: title` written by task-enforce, and the em-dash form
+      # `# TASK-NNN — title` written by task-guard, which returned EMPTY here
+      # and put "<title from spec — fill in later>" in RELEASES.md.
+      # NOTE: the separator is stripped by separate literal subs, never a
+      # bracket expression. An em-dash is multi-byte UTF-8 and BSD awk matches
+      # brackets BYTE-wise, so [:—-] eats only part of the character and leaves
+      # mojibake in RELEASES.md.
+      _t="$(awk 'NR==1 && $0=="---" {infm=1; next} infm && $0=="---" {infm=0; next} !infm && /^# / {sub(/^# *[A-Za-z-]*-[0-9]*/,""); sub(/^[[:space:]]+/,""); sub(/^:[[:space:]]*/,""); sub(/^—[[:space:]]*/,""); sub(/^-[[:space:]]*/,""); print; exit}' "$f")"
+      [ -n "$_t" ] && printf '%s\n' "$_t" && return 0
     fi
   done
   printf '<title from spec — fill in later>\n'
