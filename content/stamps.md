@@ -221,6 +221,93 @@ feature can resolve who publishes and who depends on each contract.
 
 ---
 
+## Stamp: task
+
+**Where it lives:** `tasks/triage/<name>.md`, `tasks/backlog/<name>.md`, `tasks/active/<name>.md`, `tasks/blocked/<name>.md`, `tasks/completed/<name>.md`
+**Purpose:** Declare a unit of tracked work — what it is, where it sits in the lifecycle, who is accountable, and how it ended up.
+**Shipped in:** v0.50.0
+
+| Field | Required | Type | Description |
+|---|---|---|---|
+| `id` | yes | string | `TASK-NNN`, or `HOTFIX-NNN` for the hotfix category. Must match the filename prefix — **the filename is authoritative**; the id allocators parse it from there and a disagreeing `id:` is ignored. |
+| `category` | yes | enum | `stub` / `spec` / `bug` / `hotfix`. This model's discriminator, in place of the universal `kind` — see the exception note. Absent = `spec`. |
+| `status` | yes | enum | `triage` / `backlog` / `active` / `blocked` / `completed`. Must equal the directory the file lives in. **The directory wins** on disagreement. Absent = the directory name. |
+| `phase` | no | string | Phase id, or `null` for hotfix and triage. A denormalized convenience copy — **`tasks/ROADMAP.md` is authoritative** and wins on disagreement. Absent = resolve from ROADMAP. |
+| `owner` | no | string | The accountable human, team or agent identity. Durable and single-valued. Absent = `unassigned`; never guessed. **Not** the per-run actor — see `Stamp: run`. |
+| `blocked_by` | no | array (one line, comma-separated) | Task ids this task waits on, e.g. `TASK-012, TASK-014`. A task-graph edge — distinct from the *external* dependency named in the mandatory `## Blocker` prose section. Absent = no declared dependency. |
+| `outcome` | no | enum | Disposition of the work: `unrecorded` / `shipped` / `reverted` / `superseded`. Absent = `unrecorded`. **Never inferred** from `status: completed` or from residence in `completed/`. Does not move the file. |
+| `filed` | no | date (`YYYY-MM-DD HH:MM UTC`) | When the task file was created. Absent = unknown; never synthesized. |
+| `origin` | no | enum | How the file came to exist: `manual` / `auto-fallback` (minted by the `task-enforce` PreToolUse guard) / `auto-guard` (minted by the `task-guard` pre-commit hook). Absent = `manual`. |
+| `severity` | conditional | enum | Bug: `low` / `medium` / `high`. Hotfix: `high` / `critical`. Required on `bug` and `hotfix`; not meaningful on `stub` or `spec`. |
+
+> **Universal-field exception.** This model ships neither `name` nor
+> `kind`. Identity is the **filename** plus `id` — a third copy would be
+> a third drift surface, and the allocators already derive the id from
+> the basename. The discriminator is `category`, which four templates,
+> `task-enforce.sh` and ~20 skills hard-code; renaming it to `kind`
+> would be breaking under "Evolution rules" for no gain.
+
+> **Frontmatter is optional in `triage/`.** A triage task is filed with
+> an id and little else by design. Every reader treats an absent field
+> as its declared default — see `task-rules.md` "Backwards
+> compatibility" for the full absence table.
+
+**Run identity is deliberately absent from this model.** `actor`, `run_id`
+and `attempts` describe an *episode of work*, not the work itself, and the
+two are many-to-many: one `/mission` run spans several tasks and renders one
+report, while one task is re-attempted across many runs via the
+`active ⇄ blocked` cycle. A single-valued `run_id` here would be overwritten
+by the second attempt, destroying the history it exists to record. Those
+fields live on `Stamp: run`.
+
+## Stamp: run
+
+**Where it lives:** `tasks/runs/<RUN-id>.md`
+**Purpose:** Record one episode of agent or human work — who ran it, what it touched, and how it ended.
+**Shipped in:** v0.50.0 (model only — the writer lands with the autonomy-report work)
+
+| Field | Required | Type | Description |
+|---|---|---|---|
+| `run_id` | yes | string | `RUN-YYYYMMDD-HHMMSS-<short>`. Matches the filename. |
+| `kind` | yes | enum | `mission` / `auto-task` / `auto-develop` / `auto-test` / `auto-phase` / `auto-bug` / `auto-hotfix` / `manual`. The invoked entry point. |
+| `actor` | yes | string | Who or what ran it. Resolved from `RASA_ACTOR`, falling back to `$(whoami)`. |
+| `actor_kind` | yes | enum | `human` / `agent`. Distinct from the task's `origin`, which records how a *file* came to exist. |
+| `status` | yes | enum | `in-flight` / `completed` / `stopped` / `failed`. Opened `in-flight` **before** the work and sealed after. |
+| `outcome` | no | enum | `completed` / `stopped-at-gate` / `failed` / `abandoned`. Absent while `in-flight`. |
+| `gate` | no | string | The hard gate that stopped the run, when `outcome` is `stopped-at-gate`. |
+| `task_refs` | no | array (one line, comma-separated) | Task ids this run touched. The join key: a task's attempt count is `count(runs whose task_refs contains it)`. |
+| `started` | yes | date (`YYYY-MM-DD HH:MM UTC`) | When the record was opened. |
+| `finished` | no | date (`YYYY-MM-DD HH:MM UTC`) | When it was sealed. Absent = the run never closed. |
+| `duration_s` | no | int | Seconds. Absent = never closed. |
+| `sha` | no | string | Commit the run started from. |
+| `branch` | no | string | Branch the run worked on. |
+
+**One file per run, opened before the work.** Both properties are load-bearing
+and both are borrowed from `deploys/records/`, which learned them the hard way
+— its header records 8 back-to-back deploys leaving 2 records while `check`
+reported "consistent". A record written only at the *end* of a run cannot
+represent a run that died, and silently-dead runs are exactly the escape rate
+this model exists to measure. A single append-only log would conflict on every
+PR the moment two long-lived branches exist, which is why
+`tasks/changes/<date>-<task>.md` is already per-file.
+
+**Why `tasks/runs/` and not a top-level `runs/`.** `task-enforcement.json`
+exempts `tasks/**` but `classify_path` defaults to `code`, so a top-level
+`runs/` would have every run-record write **denied** in every consumer — and
+that config is `skip-if-exists`, so the fix would never reach an existing
+install. `build/gates/git-clean.sh` likewise excludes only `deploys/`,
+`build/deploy-log.md` and `tasks/`, so a top-level `runs/` would fail
+`/mission`'s own preview deploy on the record the mission just wrote. Under
+`tasks/runs/` both are zero-change. Not `deploys/records/` either — that
+directory is globbed `???-*.md` and would pull `RUN-` files into the ship-log
+table.
+
+**`attempts` is derived, never stored.** It is
+`count(run records whose task_refs contains the task id)`. A stored counter
+needs a read-modify-write per run — the race both `deploys.sh` and
+`task-enforce.sh` document being bitten by in this repo — and would be wrong
+for runs that never closed.
+
 ## Stamp: save
 
 **Where it lives:** `~/.claude/projects/<key>/saves/SAVED.md` (current) and `<YYYY-MM-DD-HHMM>.md` (archived)
@@ -318,18 +405,6 @@ visible *now*, before adoption drifts.
 | `root_cause_category` | enum | code-bug / config / infra / process / external / unknown |
 | `duration_minutes` | int | Incident duration |
 | `was_hotfix` | bool | Triggered the hotfix path? |
-
-### task (proposed for `tasks/active/<name>.md`, `tasks/backlog/<name>.md`, `tasks/completed/<name>.md`)
-
-| Field | Type | Description |
-|---|---|---|
-| `name` | string | TASK-NNN-slug |
-| `id` | string | TASK-NNN |
-| `phase` | string | Phase identifier |
-| `status` | enum | triage / backlog / active / blocked / completed |
-| `priority` | enum | p0 / p1 / p2 / p3 |
-| `blocked_by` | array | Names of other tasks / external blockers |
-| `assignee` | string | Handle |
 
 ### handoff (proposed for `docs/handoff/<name>.md`)
 

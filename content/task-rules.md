@@ -519,10 +519,19 @@ deliberately unphased, and are not in `ROADMAP.md` until they graduate.
 
 ### `tasks/ROADMAP.md` is the registry
 
-Phase membership lives in ROADMAP.md, nowhere else. Tasks don't
-declare their phase in their own spec file (that would drift). The
-skills (`/roadmap`, `/backlog`) parse ROADMAP to build the task→phase
-map.
+**`tasks/ROADMAP.md` is authoritative for phase membership.** The skills
+(`/roadmap`, `/backlog`) parse ROADMAP to build the task→phase map, and
+ROADMAP wins on any disagreement.
+
+A task file also carries a `phase:` field. This is a denormalized
+convenience copy, not a second source of truth — it lets a reader see the
+phase without resolving ROADMAP, and it is what `task-enforce.sh` writes
+(as `null`) when it mints a stub outside any phase. Earlier revisions of
+this rule said tasks "don't declare their phase in their own spec file",
+which had not been true for some time: the canonical frontmatter above,
+all four templates, and both auto-minters emit one. The rule is corrected
+rather than the field removed — but treat the field as a cache, and fix
+ROADMAP when they disagree.
 
 ### Adding a task
 
@@ -571,8 +580,23 @@ id: TASK-042            # or HOTFIX-042 for Hotfix category
 category: spec          # stub | spec | bug | hotfix
 phase: phase-3          # null for hotfix (skips ROADMAP)
 status: backlog         # triage | backlog | active | blocked | completed
+owner: unassigned       # accountable human/team/agent — NOT the per-run actor
+blocked_by:             # comma-separated task ids this waits on
+outcome: unrecorded     # unrecorded | shipped | reverted | superseded
+filed: 2026-09-20 21:00 UTC
+origin: manual          # manual | auto-fallback | auto-guard
 ---
 ```
+
+Every field after `status` is **optional**, with a declared default when
+absent — see "Backwards compatibility" below. Nothing has to be re-filed.
+The full model, including the `severity` field that `bug` and `hotfix`
+carry, is `stamps.md` → `Stamp: task`.
+
+**Do not put a comment on its own line inside frontmatter.** A standalone
+`#` line is a YAML comment, but the title parsers look for the first `# `
+line; they now skip the frontmatter block, and keeping comments inline
+(as above) avoids relying on that.
 
 ### `stub` — track lightly, no full spec
 
@@ -660,10 +684,27 @@ governs *intended shape* of the work. Both apply:
 
 ### Backwards compatibility
 
-Tasks that predate categories (no `category:` frontmatter)
-default to `category: spec`. Adding categories does not require
-re-filing existing tasks; the absence of the field is the same
-as declaring `spec`.
+Every field is optional and has a declared default when absent. Adding
+fields never requires re-filing an existing task, and a task file with no
+`---` block at all remains valid.
+
+| Field | Absent means |
+|---|---|
+| `id` | parse it from the filename — the filename is authoritative either way |
+| `category` | `spec` |
+| `status` | the directory the file is in |
+| `phase` | resolve from `tasks/ROADMAP.md` |
+| `owner` | `unassigned` — never guessed |
+| `blocked_by` | no declared dependency |
+| `outcome` | `unrecorded` — **never** inferred from `status: completed` or from living in `completed/` |
+| `filed` | unknown — never synthesized |
+| `origin` | `manual` |
+| `severity` | not meaningful outside `bug` and `hotfix` |
+
+This is why the additions are a MINOR, not a MAJOR: a reader that wants a
+value resolves the default, and no existing file becomes invalid. Making
+any of them required would be breaking, and the v0.36.0 status overhaul is
+the cautionary precedent.
 
 ## Adding tasks to the backlog (priority rule)
 

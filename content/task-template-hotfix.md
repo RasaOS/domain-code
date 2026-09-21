@@ -5,6 +5,10 @@ phase: null
 status: active | blocked | completed
 severity: high | critical
 filed: <YYYY-MM-DD HH:MM UTC>
+owner: unassigned       # accountable human/team/agent — not the per-run actor
+blocked_by:             # comma-separated task ids, e.g. TASK-012, TASK-014
+outcome: unrecorded     # unrecorded | shipped | reverted | superseded
+origin: manual          # manual | auto-fallback | auto-guard
 ---
 
 # HOTFIX-XXX: <short title — describe what's broken in prod>

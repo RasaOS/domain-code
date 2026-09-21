@@ -3,6 +3,11 @@ id: TASK-XXX
 category: spec
 phase: <phase-id>
 status: backlog | active | blocked | completed
+owner: unassigned       # accountable human/team/agent — not the per-run actor
+blocked_by:             # comma-separated task ids, e.g. TASK-012, TASK-014
+outcome: unrecorded     # unrecorded | shipped | reverted | superseded
+filed: <YYYY-MM-DD HH:MM UTC>
+origin: manual          # manual | auto-fallback | auto-guard
 ---
 
 # TASK-XXX: <short title>
