@@ -69,6 +69,8 @@ is this soft.
    brownfield carve-out
 6. `TASK-017` — Rename `tasks/done/` to `tasks/completed/` in this repo
    to match the rule it ships
+7. `TASK-055` — The `bin/lint` release gate is red on `main` (14
+   pre-existing findings); found while verifying TASK-013
 
 ## P2 — The run record
 
