@@ -2,7 +2,7 @@
 id: TASK-018
 category: spec
 phase: P2
-status: active
+status: completed
 ---
 
 # TASK-018: Define the task and run record shape
@@ -119,22 +119,47 @@ only in the frontmatter block would be a lie for half the auto-minted corpus.
 
 ## Acceptance criteria
 
-- [ ] All three title parsers ignore frontmatter; verified against a fixture
+- [x] All three title parsers ignore frontmatter; verified against a fixture
       whose frontmatter contains a standalone `#` line
-- [ ] `stamps.md` carries adopted `## Stamp: task` and `## Stamp: run`; the
+- [x] `stamps.md` carries adopted `## Stamp: task` and `## Stamp: run`; the
       `### task (proposed…)` block is gone
-- [ ] All four templates carry the adopted keys, readable by `deploys.sh`'s
+- [x] All four templates carry the adopted keys, readable by `deploys.sh`'s
       `field()` helper
-- [ ] `task-enforce.sh stamp` inserts a missing key (md5 changes), rewrites an
+- [x] `task-enforce.sh stamp` inserts a missing key (md5 changes), rewrites an
       existing one, refuses an unknown key, and **exits non-zero** on a file
       with no frontmatter
-- [ ] `task-guard.sh` emits real frontmatter with `origin: auto-guard`, and
+- [x] `task-guard.sh` emits real frontmatter with `origin: auto-guard`, and
       `release.sh`'s `_title_for` returns non-empty for it (returns empty today)
-- [ ] `/mvp` and `/prototype` stubs carry frontmatter
-- [ ] Every new field is **optional** with a declared absence-default
+- [x] `/mvp` and `/prototype` stubs carry frontmatter
+- [x] Every new field is **optional** with a declared absence-default
       (MINOR per `CHANGELOG.md:5-9`; required fields would be MAJOR)
-- [ ] `check-manifest` 184 unchanged, `check-bash32` 0, `check-invocations` 0,
+- [x] `check-manifest` 184 unchanged, `check-bash32` 0, `check-invocations` 0,
       `bin/lint` **0** — the baseline is green as of TASK-055 and must stay so
+
+## Outcome
+
+Verified from a **fresh clone + fresh `bin/init` install**: all four gates exit
+0 (lint included, post-TASK-055), VERSION 0.50.0, all four templates carry the
+adopted keys, `Stamp: task` and `Stamp: run` and the absence table all reach
+the consumer, and a mint→stamp round trip works in the installed copy
+(`outcome=shipped origin=manual owner=unassigned`).
+
+Six commits, stacked on TASK-055:
+
+| | |
+|---|---|
+| `ea30504` | the three title parsers (prerequisite) |
+| `01781e7` | adopted `Stamp: task` + `Stamp: run`, task-rules, 4 templates |
+| `9f91643` | `task-enforce.sh stamp` upsert, mint_stub shape, anchored counters |
+| `a3741f0` | task-guard / mvp / prototype emit frontmatter |
+| `5f432ae` | terminal transition wired, 0.50.0 |
+
+**Bookkeeping error, corrected:** all five TASK-018 commits initially landed on
+the `task/TASK-055` branch because I never switched back after finishing that
+task. The first smoke-test run cloned the stale TASK-018 branch and reported
+everything missing. Branch labels were re-pointed (`TASK-055` → its own commit,
+`TASK-018` → the stack tip); no work was lost and the stack is genuine, since
+018 was built on 055.
 
 ## Out of scope
 
