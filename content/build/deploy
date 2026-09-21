@@ -94,6 +94,18 @@ if [[ -f "$ENV_DIR/env.sh" ]]; then
   source "$ENV_DIR/env.sh"
 fi
 
+# env.sh is sourced into THIS shell, so a committed env.sh can reassign the
+# paths the driver resolves its gates through. Measured: `BUILD_DIR=/tmp/evil`
+# in env.sh made a stub class-guard run and allowed --intent=deploy into a
+# prod-class environment — i.e. it defeats the one gate documented as having
+# no bypass. Re-derive both paths from this script's own location.
+#
+# Deliberately NOT `readonly`: an env.sh assigning a readonly variable is fatal
+# under `set -e`, which would hard-break any consumer already doing so.
+# Re-derivation is idempotent and breaks nobody.
+BUILD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$BUILD_DIR/.." && pwd)"
+
 # Export pipeline-wide vars accessible to stages and deploy scripts
 export ENVIRONMENT="$ENV"
 
@@ -136,10 +148,28 @@ fi
 case "$ENV_CLASS" in
   dev|staging|prod) ;;
   *)
-    case "$(printf '%s' "$ENV" | tr '[:upper:]' '[:lower:]')" in
-      *prod*|*live*) ENV_CLASS="prod" ;;
-      *)             ENV_CLASS="unclassified" ;;
+    # Escalate-only name heuristic. Token test, matching gates/class-guard.sh
+    # and environment.sh. This used to be a substring test (*prod*|*live*),
+    # which disagreed with class-guard and escalated preprod / non-prod /
+    # reproduction-test / alive-service to production: `--env=preprod` printed
+    # "class-guard: deploy → preprod (class: unclassified)" and then bannered
+    # "(class: prod)" on the very next line. Token-prod is a strict subset of
+    # substring-prod, so reconciling only ever relaxes the driver — it never
+    # un-guards anything class-guard calls prod.
+    _lower="$(printf '%s' "$ENV" | tr '[:upper:]' '[:lower:]')"
+    ENV_CLASS="unclassified"
+    case "$_lower" in
+      *preprod*|*pre-prod*|*pre_prod*|*nonprod*|*non-prod*|*non_prod*|*notprod*|*not-prod*|*not_prod*)
+        ;;
+      *)
+        for _tok in $(printf '%s' "$_lower" | tr '\-_.' '   '); do
+          case "$_tok" in
+            prod*|live*) ENV_CLASS="prod" ;;
+          esac
+        done
+        ;;
     esac
+    unset _lower _tok
     ;;
 esac
 export ENV_CLASS
