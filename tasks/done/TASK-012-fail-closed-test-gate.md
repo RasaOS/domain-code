@@ -2,7 +2,7 @@
 id: TASK-012
 category: bug
 phase: P1
-status: active
+status: completed
 ---
 
 # TASK-012: The test gate cannot pass vacuously
@@ -107,27 +107,27 @@ Ordering is the whole risk. Prerequisites land before the gate.
 
 ## Acceptance criteria
 
-- [ ] Fresh install + prod env: `FORCE_APPROVAL=1 ./build/deploy --env=prod
+- [x] Fresh install + prod env: `FORCE_APPROVAL=1 ./build/deploy --env=prod
       --intent=release` exits non-zero on an empty suite (today: exit 0)
-- [ ] Gate refuses under `--skip-tests`, `--skip-gates`, `--dry-run`, and under
+- [x] Gate refuses under `--skip-tests`, `--skip-gates`, `--dry-run`, and under
       `SKIP_TESTS`/`SKIP_GATES`/`DRY_RUN` set in the environment or assigned by
       `build/environments/<env>/env.sh`. No new bypass variable is introduced
-- [ ] `--skip-tests` at prod class exits 2 with a refusal; below prod it still skips
-- [ ] All-quarantined suite FAILS at prod, passes-with-warning below
-- [ ] `status: retired` on a listed member FAILS (not treated as quarantined)
-- [ ] Missing/unrecognized `status:` causes the test to RUN with a warning, never skip
-- [ ] `tests: [a, b]` inline flow runs its tests at prod; zero-indent and tab
+- [x] `--skip-tests` at prod class exits 2 with a refusal; below prod it still skips
+- [x] All-quarantined suite FAILS at prod, passes-with-warning below
+- [x] `status: retired` on a listed member FAILS (not treated as quarantined)
+- [x] Missing/unrecognized `status:` causes the test to RUN with a warning, never skip
+- [x] `tests: [a, b]` inline flow runs its tests at prod; zero-indent and tab
       block sequences parse; an unreadable `tests:` key is a hard failure at prod
-- [ ] Suite listing `alpha` no longer resolves to `alpha-extended`; two stamps
+- [x] Suite listing `alpha` no longer resolves to `alpha-extended`; two stamps
       sharing a name fail as ambiguous rather than `head -1`
-- [ ] A failing test's output is printed (today `>/dev/null 2>&1` hides it, and
+- [x] A failing test's output is printed (today `>/dev/null 2>&1` hides it, and
       the stamp-not-found branch is dead code under `set -euo pipefail`)
-- [ ] Re-running `bin/init` on a populated suite prints `skip (exists)` and
+- [x] Re-running `bin/init` on a populated suite prints `skip (exists)` and
       leaves the `tests:` array intact
-- [ ] Deploys to staging / preprod / nonprod with an empty suite still exit 0
-- [ ] `check-manifest` + `check-bash32` pass **from a fresh clone**
-- [ ] No `prod-gate.md` ships anywhere
-- [ ] Every criterion verified by RUNNING the pipeline in a temp install
+- [x] Deploys to staging / preprod / nonprod with an empty suite still exit 0
+- [x] `check-manifest` + `check-bash32` pass **from a fresh clone**
+- [x] No `prod-gate.md` ships anywhere
+- [x] Every criterion verified by RUNNING the pipeline in a temp install
 
 **Baselines that are not signals:** `bin/lint` already exits 1 (TASK-055);
 `bin/check-invocations` prints ~14 advisory findings then exits 0.
@@ -174,6 +174,29 @@ vacuous pass with extra steps); `rasa.lock.json#overrides` as the mitigation
 ## Blocker notes
 
 (none)
+
+## Outcome
+
+All criteria verified from a **fresh clone + fresh `bin/init` install**, not the
+working tree. Seven commits on `task/TASK-012-fail-closed-test-gate`:
+
+| | |
+|---|---|
+| `b2a468e` | prerequisites — ENV_CLASS reconcile, `BUILD_DIR` hijack |
+| `5913693` | suite file becomes consumer data (`seed` + `skip-if-exists`) |
+| `2e286f1` | `suite-lib.sh` + `tests-required.sh` + wiring + `--skip-tests` refusal |
+| `5e06876` | `30-test.sh` rewritten on the shared parser |
+| `8bd636d` | docs, `env.sh` warning, 0.49.0 |
+
+Before: `FORCE_APPROVAL=1 ./build/deploy --env=prod --intent=release` on a fresh
+install printed `Skipping.`, `SHIPPING to prod`, `✓ release complete`, exit 0.
+After: exit 1, refused, with a message naming the fix and the consumer's own
+unwired stamps.
+
+Filed out of scope, each a separate task: the four adjacent fail-open gates
+(`class-guard` registry read, `git-clean` FORCE_DIRTY, `40-publish`
+unconditional exit 0, `validate-image` absent-hadolint pass), the two
+incompatible stamp models, and `--dry-run`'s ledger row.
 
 ---
 
