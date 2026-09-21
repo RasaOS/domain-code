@@ -2,7 +2,7 @@
 id: TASK-013
 category: bug
 phase: P1
-status: active
+status: completed
 ---
 
 # TASK-013: Repair the spec-file allowlist
