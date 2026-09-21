@@ -161,6 +161,39 @@ RE_RUST='Cargo\.toml|Cargo\.lock|[^A-Za-z0-9_]cargo[^A-Za-z0-9_]|[^A-Za-z0-9_]ru
 # declares itself platform-agnostic and then enumerates platforms to prove
 # it. Both were reported HIGH on the first honest run. They are surfaced at
 # MEDIUM, not silenced.
+# Reviewed exemptions — `<relpath>|<token>` pairs judged correct on inspection.
+#
+# The cross-cutting list above demotes an ENTIRE FILE, which is too blunt for
+# core universal files: it would hide real future drift in craft-rules.md or
+# test-rules.md. These entries are narrower — one token in one file — so every
+# other platform token in those same files still reports HIGH.
+#
+# Each entry is a decision, not a silencing. Demoted to LOW, so `VERBOSE=1
+# bin/lint` still shows them. Adding one means writing the reason here.
+#
+#   content/craft-rules.md|SwiftUI
+#     A PAIRED list: "Web (kit default): ..." then "iOS (kit default): ...",
+#     each cross-referencing its own web-conventions.md / ios-conventions.md.
+#     Deliberately bi-platform. The ±5 window cannot see it because the Web
+#     half is written in prose (hooks, components, pages) with no lintable
+#     token, so ctx_platforms_count never reaches 2.
+#
+#   content/migration-rules.md|npm run
+#     "`npm run migrate` / equivalent" — the "/ equivalent" IS the generality
+#     marker. One concrete example standing for any toolchain.
+#
+#   content/skills/runtime/SKILL.md|pip install
+#     PyYAML is the RUNTIME SKILL'S OWN dependency, documented under its
+#     "### Dependencies" heading and repeated in its error-path section. This
+#     is not Python content leaking into a universal file; it is the toolkit
+#     stating what its own script needs. Moving it to a python-* file would
+#     strip the skill of its own install instruction.
+#
+#   content/test-rules.md|xcodebuild
+#     Inside a fenced YAML block demonstrating test-stamp frontmatter, with
+#     `language: swift` two lines above. An illustrative stamp, not guidance.
+REVIEWED_OK='content/craft-rules.md|SwiftUI:content/migration-rules.md|npm run:content/skills/runtime/SKILL.md|pip install:content/test-rules.md|xcodebuild'
+
 CROSS_CUTTING_BASENAMES='CLAUDE.md.template:AUDIT.md.template:PHASES.md.template:ROADMAP.md.template:task-template.md:batch-handoff.md:release-rules.md:output-rules.md:output-styles.md:runtime-mobile-app.md.template:runtime-dev-server.md.template:runtime-script.md.template:runtime-worker.md.template:pipeline-rules.md'
 
 scan_file_via_awk() {
@@ -173,7 +206,8 @@ scan_file_via_awk() {
       -v RE_IOS="$RE_IOS" -v RE_ANDROID="$RE_ANDROID" -v RE_WEB="$RE_WEB" \
       -v RE_PYTHON="$RE_PYTHON" -v RE_GO="$RE_GO" -v RE_RUBY="$RE_RUBY" \
       -v RE_RUST="$RE_RUST" \
-      -v CROSS_CUTTING="$CROSS_CUTTING_BASENAMES" '
+      -v CROSS_CUTTING="$CROSS_CUTTING_BASENAMES" \
+      -v REVIEWED_OK="$REVIEWED_OK" '
     BEGIN {
       # Build cross-cutting set.
       n = split(CROSS_CUTTING, parts, ":")
@@ -181,6 +215,12 @@ scan_file_via_awk() {
         cross_cutting[parts[i]] = 1
       }
       is_cross_cutting = (BASE in cross_cutting) ? 1 : 0
+
+      # Build the reviewed-exemption set: "<relpath>|<token>".
+      nr = split(REVIEWED_OK, rparts, ":")
+      for (i = 1; i <= nr; i++) {
+        if (rparts[i] != "") reviewed_ok[rparts[i]] = 1
+      }
 
       labels[1] = "iOS"
       labels[2] = "Android"
@@ -347,6 +387,13 @@ scan_file_via_awk() {
           # files; demote to MEDIUM.
           if (is_cross_cutting && severity == "HIGH") {
             severity = "MEDIUM"
+          }
+
+          # Reviewed exemption: this exact token in this exact file has been
+          # inspected and judged correct. Demoted to LOW, never silenced —
+          # VERBOSE=1 still lists it. See REVIEWED_OK for the reasons.
+          if ((REL "|" token) in reviewed_ok) {
+            severity = "LOW"
           }
 
           # Clean text for display: strip tabs, cut to 100 chars.
