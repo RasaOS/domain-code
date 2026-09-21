@@ -179,11 +179,16 @@ record_transfer() {
     n=$(( n + 1 )); id="ENV-${stamp}-${name}-${n}"
     [ "$n" -lt 1000 ] || return 0
   done
+  # `rev-parse` prints to stdout AND exits non-zero in a commit-less repo, so
+  # `$(cmd || echo unknown)` appends a second line and corrupts the record.
+  # `--verify --quiet` prints nothing and exits 1 cleanly — the same idiom
+  # bin/init uses for ELEMENT_SHA (773d89b), kept identical on purpose so there
+  # is one lesson in this repo and not two.
   local _es_sha _es_branch
-  if ! _es_sha="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null)"; then _es_sha="unknown"; fi
-  if ! _es_branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)"; then _es_branch="unknown"; fi
+  _es_sha="$(git -C "$ROOT" rev-parse --verify --quiet --short HEAD 2>/dev/null || true)"
+  _es_branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
   [ -n "$_es_sha" ] || _es_sha="unknown"
-  [ -n "$_es_branch" ] || _es_branch="unknown"
+  { [ -n "$_es_branch" ] && [ "$_es_branch" != "HEAD" ]; } || _es_branch="unknown"
 
   {
     echo "---"
@@ -194,11 +199,6 @@ record_transfer() {
     echo "tag: $dig"
     echo "direction: $direction"
     echo "peer_host: $host"
-    # NOTE: `$(cmd || echo unknown)` is wrong for --abbrev-ref and corrupts the
-    # record. On a repo with no commits it PRINTS "HEAD" and THEN exits 128, so
-    # the fallback APPENDS rather than replaces and the frontmatter gets a stray
-    # bare `unknown` line. (--short fails cleanly, printing nothing, so only
-    # --abbrev-ref is affected — but both are written defensively here.)
     echo "sha: $_es_sha"
     echo "branch: $_es_branch"
     echo "user: $(rasa_actor)"

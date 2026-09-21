@@ -113,16 +113,16 @@ cmd_open() {
     [ "$n" -lt 1000 ] || { echo "error: cannot allocate a run id" >&2; return 1; }
   done
 
-  # NOTE: `$(cmd || echo unknown)` is wrong here and corrupts the record.
-  # On a repo with no commits, `git rev-parse --abbrev-ref HEAD` PRINTS "HEAD"
-  # and THEN exits non-zero, so the fallback appends rather than replaces and
-  # the frontmatter gets a stray bare `unknown` line after `branch:`. Assign
-  # first, then test the status.
+  # `rev-parse` prints to stdout AND exits non-zero in a commit-less repo, so
+  # `$(cmd || echo unknown)` appends a second line and corrupts the record.
+  # `--verify --quiet` prints nothing and exits 1 cleanly — same idiom bin/init
+  # uses for ELEMENT_SHA (773d89b), kept identical on purpose so there is one
+  # lesson here and not two.
   local sha branch
-  if ! sha="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null)"; then sha="unknown"; fi
-  if ! branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)"; then branch="unknown"; fi
+  sha="$(git -C "$ROOT" rev-parse --verify --quiet --short HEAD 2>/dev/null || true)"
+  branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
   [ -n "$sha" ] || sha="unknown"
-  [ -n "$branch" ] || branch="unknown"
+  { [ -n "$branch" ] && [ "$branch" != "HEAD" ]; } || branch="unknown"
 
   {
     echo "---"
