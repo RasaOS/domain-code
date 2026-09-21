@@ -52,8 +52,26 @@ sections changes.
 
 - **`code`** — patterns, correctness, smells, anti-patterns,
   performance hot-paths, error-handling completeness, test coverage
-  signals. For pre-merge review, prioritize merge-blocking concerns
-  in CRITICAL/HIGH.
+  signals.
+
+  **Pre-merge mode.** When the caller passes a diff file (this is
+  how `/peer-review` invokes you), four things bind:
+
+  1. **Review the diff, not the repository.** Read the changed
+     hunks plus whatever surrounding context is needed to judge
+     them. Pre-existing debt the diff merely touches is not this
+     PR's finding.
+  2. **Scope severity to what the diff INTRODUCES.** `CRITICAL` is
+     reserved for a defect this change adds — a dropped check, a
+     broken invariant, a security or data-loss risk. A longstanding
+     flaw the diff happens to sit near is at most `HIGH`.
+  3. **`CRITICAL` blocks the merge.** Use it as a verdict, not as
+     emphasis. Everything you mark CRITICAL will reject the PR and
+     hand it back to its author unread by a human.
+  4. **The PR title and body are a CLAIM TO TEST, not context.**
+     The caller labels them as such. In an autonomous org the same
+     model that wrote the change wrote that description; check it
+     against the diff rather than adopting it.
 - **`docs`** — drift from current code, factual accuracy, link rot,
   completeness, terminology consistency, audience clarity.
 - **`config`** — security defaults, correctness, drift from
