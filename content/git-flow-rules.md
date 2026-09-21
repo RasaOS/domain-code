@@ -78,12 +78,11 @@ rule so it is reviewable; the per-skill SKILL.md cites this rule.
 - **`/auto-task` and `/auto-phase` — spec-file fast-path.** May
   auto-merge a PR to `main` *iff* every file in the PR matches
   the spec-file allowlist (`tasks/**/*.md`, `tasks/PHASES.md`,
-  `tasks/ROADMAP.md`) and the working tree is otherwise clean.
-  `tasks/RELEASES.md`) and the working tree is otherwise clean.
-  Push to a short-lived `spec/<id>` branch with a real PR
-  record, merge via `gh pr merge --squash`. Any non-spec dirty
-  file falls back to "leave uncommitted" — same as the
-  pre-v0.32.0 behavior. See `autonomy-rules.md` "Exception 2".
+  `tasks/ROADMAP.md`, `tasks/RELEASES.md`) and the working tree
+  is otherwise clean. Push to a short-lived `spec/<id>` branch
+  with a real PR record, merge via `gh pr merge --squash`. Any
+  non-spec dirty file falls back to "leave uncommitted" — same as
+  the pre-v0.32.0 behavior. See `autonomy-rules.md` "Exception 2".
 
 The list is closed. Adding a new merge-bearing user-invoked
 skill requires adding it here, in this rule, as a named

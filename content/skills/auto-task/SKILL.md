@@ -49,11 +49,11 @@ the repo doesn't hold is a flagged assumption, surfaced loudly.
   `autonomy-rules.md` "Exception 2", `/auto-task` auto-commits the
   spec and auto-merges a `spec-only` PR to `main` when the
   working tree contains *only* allowlisted spec files
-  (`tasks/**/*.md`, `tasks/PHASES.md`, `tasks/ROADMAP.md`). If
-  any non-spec file is dirty, fall back to "leave uncommitted" —
-  the file lands in `tasks/backlog/` (or `tasks/triage/`), the
-  user commits manually, and the autonomy report notes why the
-  fast-path was skipped.
+  (`tasks/**/*.md`, `tasks/PHASES.md`, `tasks/ROADMAP.md`,
+  `tasks/RELEASES.md`). If any non-spec file is dirty, fall back
+  to "leave uncommitted" — the file lands in `tasks/backlog/` (or
+  `tasks/triage/`), the user commits manually, and the autonomy
+  report notes why the fast-path was skipped.
 
 ## Process
 
@@ -75,12 +75,12 @@ the repo doesn't hold is a flagged assumption, surfaced loudly.
 5. **Spec-file fast-path** (per `autonomy-rules.md` Exception 2).
    Check the working tree:
    - If every dirty file matches the spec-file allowlist
-     (`tasks/**/*.md`, `tasks/PHASES.md`, `tasks/ROADMAP.md`) and
-     nothing else is dirty: create a `spec/TASK-NNN-slug` branch
-     from a fresh `main`, commit the spec there
-     (`TASK-NNN spec — <title>`), push, open a PR labeled
-     `spec-only` with the autonomy report's assumptions in the
-     body, and merge via `gh pr merge --squash --delete-branch`.
+     (`tasks/**/*.md`, `tasks/PHASES.md`, `tasks/ROADMAP.md`,
+     `tasks/RELEASES.md`) and nothing else is dirty: create a
+     `spec/TASK-NNN-slug` branch from a fresh `main`, commit the
+     spec there (`TASK-NNN spec — <title>`), push, open a PR
+     labeled `spec-only` with the autonomy report's assumptions in
+     the body, and merge via `gh pr merge --squash --delete-branch`.
      If branch protection refuses the merge, leave the PR open
      and report it.
    - If any non-spec file is dirty: skip the fast-path, leave the

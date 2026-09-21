@@ -38,11 +38,11 @@ for the whole phase.
   `autonomy-rules.md` "Exception 2", `/auto-phase` auto-commits
   the phase's new specs and auto-merges a `spec-only` PR to
   `main` when the working tree contains *only* allowlisted spec
-  files (`tasks/**/*.md`, `tasks/PHASES.md`, `tasks/ROADMAP.md`).
-  A whole-phase fast-path is a *single* PR carrying every new
-  spec, not one PR per spec. If any non-spec file is dirty, fall
-  back to "leave uncommitted" — and the autonomy report says
-  why.
+  files (`tasks/**/*.md`, `tasks/PHASES.md`, `tasks/ROADMAP.md`,
+  `tasks/RELEASES.md`). A whole-phase fast-path is a *single* PR
+  carrying every new spec, not one PR per spec. If any non-spec
+  file is dirty, fall back to "leave uncommitted" — and the
+  autonomy report says why.
 - **Watch for phase-collision.** Other in-flight branches may
   already have task numbers reserved against the same phase.
   `/auto-phase` assigns `TASK-NNN` sequentially from
