@@ -15,7 +15,7 @@ bottom). Don't fork the definition into prose somewhere else.
 > `kit/vocabulary.md`. After `/sync`, it lands at
 > `.claude/vocabulary.md` (file-replace each sync). Project
 > overrides live at `.claude/vocabulary-overrides.md`
-> (bootstrap-only, skip-if-exists, never overwritten). Skills that
+> (seed-only, skip-if-exists, never overwritten). Skills that
 > resolve a term read overrides first and fall back here.
 
 ---
@@ -259,8 +259,8 @@ it helps + one file" instead of "two files per resource" or
 "prose blobs that AI has to parse."
 
 Adding a new resource type that follows this pattern: ship a
-`bootstrap/<thing>.md.template`, scaffold the `.claude/<things>/`
-directory in MANIFEST, document in CHANGELOG, optionally add a
+`seed/<thing>.md.template`, scaffold the `.claude/<things>/`
+directory in `rasa.json`, document in CHANGELOG, optionally add a
 SKILL.md / script for skill integration.
 
 > Override in `.claude/vocabulary-overrides.md` if your project

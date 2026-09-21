@@ -362,7 +362,7 @@ under `docs/blast-radius/` for future reference.*
   surface-area scanner. `/blast-radius` is the
   what-could-break scanner.
 - **Designing a new feature** → `/plan`.
-- **Reviewing an in-flight PR** → `/review` or `/ultrareview`.
+- **Reviewing an in-flight PR** → `/review` or `/code-review ultra`.
 - **Auditing existing code** → `/audit` for a slice,
   `/wrangle` for the whole repo.
 - **The change is genuinely small and well-contained** —

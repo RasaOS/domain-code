@@ -113,8 +113,8 @@ back to inferring from manifest files (`*.xcodeproj` → ios,
 If this project is a sub-repo of a multi-stack company, the
 cross-repo architectural truth — stack inventory, contracts,
 conventions, ADRs, migrations — lives in the company's
-**orchestrator** repo (built from
-[claude-orchestrator](https://github.com/ChazzCoin/claude-orchestrator)).
+**orchestrator** repo (built from the RasaOS orchestrator Element,
+`rasa.orchestrator.core` — see its `content/SHAPE.md` Pattern 3).
 Set the path:
 
 **Orchestrator path:** `{{ABSOLUTE_PATH_TO_COMPANY_ORCHESTRATOR or "n/a — solo project"}}`

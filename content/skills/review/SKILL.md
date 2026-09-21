@@ -225,7 +225,7 @@ The voice to hit:
 
 - **High-level architectural read** → use `/audit`. Audit is system
   shape; review is line-by-line.
-- **Reviewing a PR / diff specifically** → use `/ultrareview` if
+- **Reviewing a PR / diff specifically** → use `/code-review ultra` if
   available, or a normal PR review tool. This skill reviews code in
   the working tree, not a diff.
 - **Filing follow-up tasks from review findings** → use `/task` after
