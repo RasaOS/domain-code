@@ -191,7 +191,12 @@ mint_stub() {
     echo "category: stub"
     echo "phase: null"
     echo "status: backlog"
-    echo "filed: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+    echo "owner: unassigned"
+    echo "blocked_by:"
+    echo "outcome: unrecorded"
+    # One timestamp grammar across the Element: the hotfix template's
+    # `YYYY-MM-DD HH:MM UTC` is canonical. This used to emit seconds too.
+    echo "filed: $(date -u '+%Y-%m-%d %H:%M UTC')"
     echo "origin: $origin"
     echo "---"
     echo ""
@@ -408,10 +413,84 @@ cmd_status() {
     echo "  always audited (overrides exemptions):"
     printf '%s\n' "$anyway" | sed 's/^/    · /'
   fi
-  local n
-  n="$(find "$root/tasks" -name 'TASK-*.md' 2>/dev/null | xargs grep -l '^origin: auto-fallback' 2>/dev/null | wc -l | tr -d ' ' || true)"
-  [ "${n:-0}" -gt 0 ] && echo "  auto-filed stubs needing a real title: ${n}"
+  # Both counters read FRONTMATTER, not the whole file. The old unanchored
+  # `grep -l '^origin: auto-fallback'` also matched any task whose BODY quoted
+  # that line at column 0 — which every task spec documenting this field does.
+  local n_auto=0 n_unrec=0 f
+  for f in $(find "$root/tasks" -name 'TASK-*.md' 2>/dev/null); do
+    [ -f "$f" ] || continue
+    [ "$(fm_field "$f" origin)" = "auto-fallback" ] && n_auto=$((n_auto + 1))
+    case "$(fm_field "$f" outcome)" in
+      ''|unrecorded) n_unrec=$((n_unrec + 1)) ;;
+    esac
+  done
+  [ "$n_auto" -gt 0 ] && echo "  auto-filed stubs needing a real title: ${n_auto}"
+  [ "$n_unrec" -gt 0 ] && echo "  tasks with no recorded outcome: ${n_unrec}"
   echo ""
+}
+
+# ---------- frontmatter read/write ----------
+# Read one key from a file's FIRST frontmatter block. Empty if absent or if
+# the file has no block. Never reads the body.
+fm_field() {
+  awk -v k="$2" '
+    NR==1 && $0=="---" { fm=1; next }
+    fm && $0=="---"    { exit }
+    fm {
+      if ($0 ~ "^"k"[[:space:]]*:") {
+        sub("^"k"[[:space:]]*:[[:space:]]*", "")
+        sub(/[[:space:]]+#.*$/, "")
+        sub(/[[:space:]]+$/, "")
+        print; exit
+      }
+    }
+  ' "$1" 2>/dev/null
+}
+
+# The keys `stamp` may write. Restricted on purpose: nothing else validates
+# task frontmatter, so a typo'd key would otherwise be written silently and
+# read back as absent forever.
+STAMPABLE="id category status phase owner blocked_by outcome filed origin severity"
+
+# stamp <TASK-NNN> <key> <value> — a real UPSERT over a task's frontmatter.
+#
+# Rewrites the key if present, INSERTS it before the closing `---` if absent,
+# and fails loudly when the file has no frontmatter block at all. That last
+# case matters: contract.sh's fm_set — the Element's only other frontmatter
+# writer — has no insert branch, so setting a missing key returns exit 0 with
+# the file byte-identical. A field nothing can write does not exist.
+cmd_stamp() {
+  local id="$1" key="$2" val="$3" root file tmp
+  root="$(repo_root)" || return 1
+
+  case " $STAMPABLE " in
+    *" $key "*) ;;
+    *) echo "error: '$key' is not a stampable field" >&2
+       echo "  allowed: $STAMPABLE" >&2
+       return 2 ;;
+  esac
+
+  file="$(find "$root/tasks" -name "$id-*.md" 2>/dev/null | head -1)"
+  [ -n "$file" ] || { echo "error: no task file for $id under tasks/" >&2; return 1; }
+
+  head -1 "$file" | grep -q '^---$' || {
+    echo "error: $file has no frontmatter block — refusing to stamp" >&2
+    echo "  add a '---' block first; see stamps.md 'Stamp: task'" >&2
+    return 1
+  }
+
+  tmp="$(mktemp)"
+  awk -v k="$key" -v v="$val" '
+    NR==1 && $0=="---" { fm=1; print; next }
+    fm && $0=="---" {
+      if (!seen) print k": "v          # insert before the closing fence
+      fm=0; print; next
+    }
+    fm && $0 ~ "^"k"[[:space:]]*:" { print k": "v; seen=1; next }
+    { print }
+  ' "$file" > "$tmp" && mv "$tmp" "$file"
+
+  echo "$id: $key = $val"
 }
 
 main() {
@@ -435,6 +514,9 @@ main() {
       local r; r="$(repo_root)" || return 1
       local id; id="$(mint_stub "$r" "$1" manual)" || return 1
       set_current "$r" "$id"; echo "filed + linked: $id" ;;
+    stamp)
+      [ $# -ge 3 ] || { echo "error: stamp needs TASK-NNN <key> <value>" >&2; return 2; }
+      cmd_stamp "$1" "$2" "$3" ;;
     classify)
       [ $# -ge 1 ] || { echo "error: classify needs a path" >&2; return 2; }
       local r; r="$(repo_root)" || return 1
