@@ -78,8 +78,18 @@ ELEMENT_VERSION="$(python3 -c "import json; print(json.load(open('$MANIFEST'))['
 ELEMENT_REPO="$(python3 -c "import json; print(json.load(open('$MANIFEST'))['source']['repo'])")"
 ELEMENT_BRANCH="$(python3 -c "import json; print(json.load(open('$MANIFEST'))['source']['branch'])")"
 
-# Resolve current Element SHA
-ELEMENT_SHA="$(git -C "$ELEMENT_DIR" rev-parse HEAD 2>/dev/null || echo "uncommitted")"
+# Resolve current Element SHA.
+#
+# `rev-parse HEAD` is the wrong idiom here: in a repo with no commits it
+# prints "HEAD" on stdout AND exits non-zero, so a `|| echo uncommitted`
+# fallback appends a SECOND line and the stamped lockfile ends up with a
+# raw newline inside a JSON string — invalid JSON. Every Element freshly
+# created by `bin/new-element` (git init, no commit yet) hits that.
+# `--verify --quiet` prints nothing and exits 1 when HEAD is unresolvable.
+ELEMENT_SHA="$(git -C "$ELEMENT_DIR" rev-parse --verify --quiet HEAD 2>/dev/null || true)"
+if [[ -z "$ELEMENT_SHA" || "$ELEMENT_SHA" == *[!0-9a-f]* ]]; then
+  ELEMENT_SHA="uncommitted"
+fi
 TODAY="$(date -u +%Y-%m-%d)"
 
 echo "→ Installing $ELEMENT_NAME @ $ELEMENT_VERSION ($ELEMENT_SHA)"
