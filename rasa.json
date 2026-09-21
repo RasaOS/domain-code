@@ -34,11 +34,26 @@
   ],
   "requires": {
     "elements": [
-      { "name": "rasa.module.tasks",     "version": ">=0.1.0" },
-      { "name": "rasa.module.releases",  "version": ">=0.1.0" },
-      { "name": "rasa.module.pipelines", "version": ">=0.1.0" },
-      { "name": "rasa.module.tests",     "version": ">=0.1.0" },
-      { "name": "rasa.module.jobs",      "version": ">=0.1.0" }
+      {
+        "name": "rasa.module.tasks",
+        "version": ">=0.1.0"
+      },
+      {
+        "name": "rasa.module.releases",
+        "version": ">=0.1.0"
+      },
+      {
+        "name": "rasa.module.pipelines",
+        "version": ">=0.1.0"
+      },
+      {
+        "name": "rasa.module.tests",
+        "version": ">=0.1.0"
+      },
+      {
+        "name": "rasa.module.jobs",
+        "version": ">=0.1.0"
+      }
     ]
   },
   "rasa": {
@@ -255,12 +270,6 @@
         "note": "Per-environment env.sh + deploy.sh. Kit ships the 'example' folder as a template — projects copy per env."
       },
       {
-        "from": "content/tests/suites/",
-        "to": "tests/suites/",
-        "policy": "directory-mirror",
-        "note": "Named test suites that gate pipeline stages."
-      },
-      {
         "from": "content/tests/container/",
         "to": "tests/container/",
         "policy": "directory-mirror",
@@ -447,6 +456,12 @@
         "policy": "skip-if-exists"
       },
       {
+        "from": "seed/pre-deploy.md.template",
+        "to": "tests/suites/pre-deploy.md",
+        "policy": "skip-if-exists",
+        "note": "Default gate suite. Membership is consumer-owned data — seeded once, never overwritten by an update."
+      },
+      {
         "from": "seed/TESTS.md.template",
         "to": "tests/TESTS.md",
         "policy": "skip-if-exists",
@@ -480,7 +495,7 @@
         "from": "seed/env-transport.md.template",
         "to": ".claude/env-transport.md",
         "policy": "skip-if-exists",
-        "note": "Project-owned map of which machines hold which env profiles. Names and paths only \u2014 never values. Used by /env-sync as a lookup; it does not authorize a destination."
+        "note": "Project-owned map of which machines hold which env profiles. Names and paths only — never values. Used by /env-sync as a lookup; it does not authorize a destination."
       },
       {
         "from": "seed/environments.json.template",

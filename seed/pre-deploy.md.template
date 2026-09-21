@@ -1,0 +1,52 @@
+---
+name: pre-deploy
+kind: test-suite
+suite_kind: gate
+runs_for: [dev, staging, prod]
+tests:
+#  - your-stamp-name
+---
+
+# Suite: pre-deploy
+
+Default test suite invoked by `build/stages/30-test.sh` for every deploy. Add test stamp names to the `tests:` list above.
+
+**This file is yours.** It is seeded once on install and never overwritten by an update — your membership list is data the Element does not own.
+
+> **At prod class an empty suite FAILS the deploy.** A gate that runs no tests is not a gate. Below prod class it warns and passes, so dev and staging work untouched while you populate it. If this project genuinely has no tests yet, the fastest legal answer is one bash script stamped as a test — see "No tests yet?" below.
+
+**Membership criteria:** anything that, if broken, would cause user-facing failure within the first 5 minutes of deploy. Keep this lean — it runs on every deploy. Heavier regression suites go in `prod-gate.md` or environment-specific suites.
+
+## Adding a test
+
+1. Create a test stamp under `tests/stamps/YYYYMMDD_NNN_slug.md` (see `test-rules.md`)
+2. Add the stamp's `name` to the `tests:` list in this file's frontmatter
+3. Verify locally: `./build/stages/30-test.sh dev`
+
+Both YAML list forms work:
+
+```yaml
+tests:
+  - api-health-check
+  - user-auth-flow
+```
+
+```yaml
+tests: [api-health-check, user-auth-flow]
+```
+
+## No tests yet?
+
+Write one bash script that exercises the riskiest path, drop it in
+`tests/scripts/`, stamp it, and list the stamp here. `test-rules.md` sanctions
+this explicitly. One real check beats an empty gate.
+
+## Notes
+
+- Test execution order matches list order — put fast tests first.
+- Failed tests abort the deploy. The `30-test.sh` stage exits non-zero, the pipeline halts before publish/deploy.
+- A member whose stamp is `status: quarantined` is skipped with a warning and does **not** count as having run. If every member is quarantined the suite is treated as empty, and so fails at prod class.
+- A member whose stamp is `status: retired` fails the suite — a retired test still listed in a gate is a broken suite, not a pass.
+- A member with no stamp, or an ambiguous stamp name, fails the suite rather than being skipped.
+- For container projects, include `container-greenlight` (the Element-shipped image validation suite).
+- `suite_kind` and `runs_for` are advisory metadata; they are not read at runtime. Suite selection is by filename.
