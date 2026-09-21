@@ -150,6 +150,16 @@ The carve-out:
 - **Never code.** This carve-out exists *because* spec files are
   not code. The moment any non-allowlist file is in the change
   set, the fast-path is off — no exceptions.
+- **The allowlist is checked by a program, not by reading.**
+  `task-enforce.sh spec-gate` verifies the change set, and
+  `spec-gate --pr <N>` verifies the **pushed artifact** before the
+  merge. No bypass variable, by the `class-guard.sh` precedent.
+  Until v0.52.0 this precondition was prose only: there was no
+  script behind either skill and no `git diff --name-only` anywhere
+  near them, so the sole autonomous path to `main` rested on the
+  authoring model correctly applying a glob list to its own change.
+  The allowlist text was itself silently corrupted from v0.48.0 to
+  v0.49.0 for exactly that reason — nothing read it.
 
 Rationale: spec content is the team's plan, not the team's
 runtime. Auto-merging a spec is the same review-tradeoff as

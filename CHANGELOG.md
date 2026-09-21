@@ -24,6 +24,121 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.52.0 — 2026-09-21
+
+### The spec fast-path's allowlist is now checked by a program
+
+`autonomy-rules.md` Exception 2 lets `/auto-task` and `/auto-phase` merge
+spec-only PRs to `main` unattended. Its whole safety argument is one sentence:
+*"The moment any non-allowlist file is in the change set, the fast-path is off
+— no exceptions."*
+
+**Nothing checked that.** There was no script behind either skill and no
+`git diff --name-only` anywhere near them, so the sole autonomous path to
+`main` rested on the authoring model correctly applying a glob list, from
+prose, to its own change.
+
+Every other gate here is a program — `class-guard.sh`, `tests-required.sh`,
+`approval.sh`, `git-clean.sh`, `task-enforce.sh`'s PreToolUse deny. This one was
+a paragraph. And a prose allowlist can be wrong for a long time unnoticed: this
+one was silently corrupted from v0.48.0 to v0.49.0, a duplicated line that left
+it not parsing as a list.
+
+**`task-enforce.sh spec-gate`**, with no bypass variable:
+
+```bash
+task-enforce.sh spec-gate            # pre-push: the dirty tree
+task-enforce.sh spec-gate --pr <N>   # pre-merge: the PUSHED artifact
+```
+
+The `--pr` form is load-bearing — the merge acts on the PR, not the working
+tree, so what gets verified is what was actually pushed. The allowlist is now
+data in one place, so prose and enforcement cannot drift apart again.
+
+Fails closed wherever it cannot be sure: an empty change set, an unreadable PR
+and a missing `gh` are all refusals. "Cannot check" is never "nothing to find."
+
+#### What this does not change
+
+Exception 2's reasoning stands and was not relitigated. Spec files do not
+execute, the merge is reversible and leaves a PR record, and a mandatory
+reviewer on every spec filing would be the expensive step that cries wolf. The
+carve-out was sound; its precondition was unenforced.
+
+#### Honest ceiling
+
+A script cannot stop a model from typing `gh pr merge` regardless. This is a
+mechanical answer that fails closed plus a contract requiring it — a hardened
+convention, not enforcement. Real enforcement is branch protection on the
+remote: the consumer's repo setting, outside this Element.
+
+---
+
+## v0.51.0 — 2026-09-20
+
+### /peer-review reads the PR again, and no longer forms its own verdict
+
+Half of this is a regression repair. **v0.48.0 (`72f1149`) deleted
+`/peer-review`'s entire `## Process` section** — 34 lines, including the only
+instruction that fetched the PR from the remote:
+
+```
+gh pr diff <N>
+gh pr view <N> --json files,title,body,headRefName,baseRefName,statusCheckRollup
+```
+
+After that, `gh pr diff` and `gh pr view` appeared **nowhere in the Element**,
+and the skill's instruction to "read the diff" was satisfied — in the session
+that wrote the change — by memory of having written it. The same commit botched
+the spec-file allowlist repaired in v0.49.0.
+
+**What changed.** `/peer-review` now fetches the artifact
+(`peer-review.sh scope <N>`), runs the project's own checks, and hands the diff
+to a context-isolated `auditor` subagent that never saw the change being
+written. A `CRITICAL` finding **rejects** the PR. Approve and merge are no
+longer adjacent, and approving before the auditor returns is called out as the
+failure the contract exists to prevent.
+
+`CRITICAL` blocks; `HIGH` does not. The auditor defines HIGH as "action this
+batch" — a backlog horizon, not a merge verdict — and blocking on it across many
+repos produces chronic false rejects on debt a diff merely brushes. A mandatory
+step that cries wolf is the step that gets disabled. HIGH is named in the
+approval body instead.
+
+A reject is a **verdict, never a question**. Rule 2's "invocation is consent"
+forbids asking, not stopping, so `/peer-review` never asks "merge anyway?".
+It hands the PR back to its author rather than to a human.
+
+**Rule 2 is amended for disclosure, not power.** The refusal needed no new
+authorization — the grant is "for an accepted PR", and declining to accept falls
+back to the rule's own default. Still exactly three carve-out bullets; this
+narrows `/peer-review`'s authority rather than widening it.
+
+#### What this buys, stated plainly
+
+Re-deriving the verdict from the pushed artifact is the largest win and needed
+no subagent at all. Context isolation is second: the reviewer never sees the
+author's reasoning trace. Read-only tools are tamper-resistance — the reviewer
+cannot quietly fix a defect and then bless it.
+
+It is the **same model, same session, same credentials**. This is *decorrelated
+error, not an independent party*, and nothing on the PR claims otherwise.
+**Model diversity was considered and declined**: a weaker reviewer misses more,
+and there is no second provider here.
+
+No `independent` boolean is emitted anywhere. `rasa_actor()` and a GitHub login
+are different namespaces with no mapping, so comparing them would report an
+independence that was never verified. The record carries the *mechanism*
+(`review_mode: delegated-subagent`) and the PR number.
+
+#### Not closed by this
+
+`/auto-task` and `/auto-phase` auto-merge their own spec PRs under
+autonomy-rules Exception 2, ungraded by anyone, and never call `/peer-review`.
+That is the door an autonomous fleet actually walks through. Filed separately.
+
+---
+
 ## v0.50.0 — 2026-09-20
 
 ### Tasks and runs become records (the first half of the run record)

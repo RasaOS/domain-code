@@ -493,6 +493,105 @@ cmd_stamp() {
   echo "$id: $key = $val"
 }
 
+# ---------- the spec-only fast-path gate ----------
+#
+# autonomy-rules.md Exception 2 lets /auto-task and /auto-phase merge spec-only
+# PRs to main unattended, and rests its whole safety argument on one sentence:
+# "The moment any non-allowlist file is in the change set, the fast-path is off
+# — no exceptions."
+#
+# Nothing checked that. There was no script behind either skill, and no
+# `git diff --name-only` anywhere near them, so the allowlist was prose applied
+# by the same model that authored the change, moments before it merged to main.
+# Every other gate in this Element is a program: class-guard.sh,
+# tests-required.sh, approval.sh, git-clean.sh, and the PreToolUse deny above.
+#
+# Corroboration that prose is not enough: the allowlist itself was silently
+# corrupted from v0.48.0 until v0.49.0 — a duplicated line that left it not
+# parsing as a list — and nothing caught it, because nothing read it.
+#
+# NO BYPASS VARIABLE, by the class-guard precedent.
+
+# The allowlist, defined ONCE. Prose cites this; this is what runs.
+SPEC_ALLOW_GLOBS="tasks/*.md tasks/**/*.md"
+
+# spec_path_ok <path> — bash 3.2, no extglob, no globstar.
+# Allowed: anything under tasks/ ending .md, at any depth. That covers
+# tasks/PHASES.md, tasks/ROADMAP.md, tasks/RELEASES.md and tasks/**/*.md.
+spec_path_ok() {
+  case "$1" in
+    tasks/*.md) return 0 ;;
+    tasks/*/*.md|tasks/*/*/*.md|tasks/*/*/*/*.md) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# cmd_spec_gate [--pr <N>]
+#   no args  -> check the dirty working tree (pre-push)
+#   --pr <N> -> check the PUSHED artifact via gh (pre-merge). This is the
+#               load-bearing mode: local state at check time is not necessarily
+#               what got pushed, and the merge acts on the PR, not the tree.
+cmd_spec_gate() {
+  local root paths="" mode="tree" pr=""
+  root="$(repo_root)" || return 1
+
+  if [ "${1:-}" = "--pr" ]; then
+    mode="pr"; pr="${2:-}"
+    [ -n "$pr" ] || { echo "error: --pr needs a number" >&2; return 2; }
+    command -v gh >/dev/null 2>&1 || {
+      echo "✗ spec-gate: gh is required to read PR $pr and is not available" >&2
+      echo "  Refusing. 'cannot check' is not 'nothing to find'." >&2
+      return 1
+    }
+    paths="$(gh pr view "${pr#\#}" --json files --jq '.files[].path' 2>/dev/null)" || {
+      echo "✗ spec-gate: could not read the file list for PR $pr" >&2
+      echo "  Refusing. An unreadable PR is never a pass." >&2
+      return 1
+    }
+  else
+    # -uall is load-bearing: plain --porcelain COLLAPSES an untracked
+    # directory to "tasks/" instead of listing the files inside it, so a
+    # genuinely spec-only change set in a fresh repo would be refused for
+    # containing a path that is not *.md. Fails closed either way, but a gate
+    # that cries wolf on correct input is the gate that gets removed.
+    paths="$(git -C "$root" status --porcelain -uall | awk '{ $1=""; sub(/^ +/,""); print }')"
+  fi
+
+  if [ -z "$paths" ]; then
+    echo "✗ spec-gate: empty change set — nothing to merge"
+    return 1
+  fi
+
+  local bad="" n=0 p
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    n=$(( n + 1 ))
+    spec_path_ok "$p" || bad="$bad  $p
+"
+  done <<EOF
+$paths
+EOF
+
+  if [ -n "$bad" ]; then
+    {
+      echo "✗ spec-gate: REFUSED — the change set is not spec-only."
+      echo ""
+      echo "  These paths are outside the allowlist ($SPEC_ALLOW_GLOBS):"
+      printf '%s' "$bad"
+      echo "  The spec-file fast-path exists BECAUSE spec files do not execute."
+      echo "  With any other file present the carve-out does not apply: leave the"
+      echo "  work uncommitted and say in the autonomy report that the fast-path"
+      echo "  was skipped, per autonomy-rules.md Exception 2."
+      echo ""
+      echo "  There is no flag or environment variable that skips this gate."
+    } >&2
+    return 1
+  fi
+
+  echo "✓ spec-gate: $n path(s), all spec-only (${mode}${pr:+ #$pr})"
+  return 0
+}
+
 main() {
   local action="${1:-}"; [ $# -gt 0 ] && shift
   case "$action" in
@@ -514,6 +613,8 @@ main() {
       local r; r="$(repo_root)" || return 1
       local id; id="$(mint_stub "$r" "$1" manual)" || return 1
       set_current "$r" "$id"; echo "filed + linked: $id" ;;
+    spec-gate)
+      cmd_spec_gate "$@" ;;
     stamp)
       [ $# -ge 3 ] || { echo "error: stamp needs TASK-NNN <key> <value>" >&2; return 2; }
       cmd_stamp "$1" "$2" "$3" ;;

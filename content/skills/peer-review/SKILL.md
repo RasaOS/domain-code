@@ -45,12 +45,25 @@ passes, Z fails because <reason>" is.
   gated file the PR modifies without authorization, a destructive
   change. Stop and surface; do not approve or reject. The PR
   needs human judgment for these.
-- **Merge mechanism.** On accept: `gh pr review --approve` first,
-  then `gh pr merge --squash --delete-branch`. Squash because a
-  single PR == single logical change == single commit on `main`.
-  If branch protection refuses the merge (required checks
-  failing, required reviews short), leave the review approved
-  and report — do not use `--admin` or force the merge.
+- **The verdict is not yours to form.** You resolve and fetch the
+  PR, you run the project's own checks, and you hand the diff to a
+  context-isolated `auditor` subagent that never saw the change
+  being written. Its findings decide accept/reject. This exists
+  because in an autonomous org the PR is usually authored by the
+  same model instance that would otherwise review it, and a reader
+  that already holds the author's reasoning is not a second
+  reader. See "Process" below.
+- **Merge mechanism.** On accept — and only once the auditor has
+  returned with no CRITICAL — `gh pr review --approve` first, then
+  `gh pr merge --squash --delete-branch`. Squash because a single
+  PR == single logical change == single commit on `main`. If branch
+  protection refuses the merge (required checks failing, required
+  reviews short), leave the review approved and report — do not use
+  `--admin` or force the merge.
+  **Never approve before the auditor returns.** Approving and then
+  pasting the findings into the body is not a gate; it is a
+  decoration, and it is the exact failure this contract exists to
+  prevent.
 - **Reject mechanism.** `gh pr review --request-changes` with a
   body that names each blocking issue, the file and line, the
   rule it violates (`task-rules.md` §X / `craft-rules.md` §Y /
@@ -92,6 +105,86 @@ ambiguity in the rules, a domain call the kit can't make) → stop
 at a hard gate and ask the user.
 
 ## Process
+
+Restored in v0.51.0. v0.48.0 (`72f1149`) deleted this section, and with it the
+only instruction that fetched the PR from the remote — after which "read the
+diff" was satisfied, in the authoring session, by memory of having written it.
+
+1. **Read the contracts.** `task-rules.md`, `craft-rules.md`,
+   `test-rules.md`, `git-flow-rules.md`, `autonomy-rules.md` (for
+   the hard-gate list), and the project's `CLAUDE.md`.
+
+2. **Resolve the PR target.** Accept `#NNN`, `NNN`, a GitHub URL,
+   or "the open PR on this branch" (`gh pr view --json number`).
+
+3. **Fetch the artifact from the remote. Do not skip this even if
+   you believe you know what is in the PR** — especially then.
+
+   ```bash
+   .claude/skills/peer-review/peer-review.sh scope <N>
+   ```
+
+   It runs `gh pr view <N> --json
+   files,title,body,headRefName,baseRefName,author,statusCheckRollup`
+   and writes the full `gh pr diff <N>` to a temp file, returning
+   its path. The diff on disk — not your recollection — is the
+   subject of the review.
+
+4. **Run the project's own checks** (check 4 below): lint, build,
+   test. This is the one check that already had an oracle outside
+   the model, and its output becomes evidence for step 5 rather
+   than something the reviewer re-runs.
+
+5. **Delegate the judgment.** Spawn the `auditor` subagent with
+   `subagent_type: "auditor"`, `--lens code`, pre-merge mode:
+
+   - Pass **the diff file path** from step 3, the scope lines, and
+     the check output from step 4.
+   - Pass the PR title and body **only as a labeled claim to
+     test** — "the author asserts X; verify against the diff" —
+     never as context. Under `/mission` the same family wrote that
+     body.
+   - Let the **script's** file list define scope. Never narrate
+     which files matter; that is the author's framing leaking into
+     the reviewer's window.
+
+6. **Apply the verdict.** The auditor returns severity-tagged
+   findings, not an accept/reject.
+
+   - **Any CRITICAL → reject.** Not negotiable, and not a question
+     to the user: "invocation is consent" forbids asking, not
+     stopping (`git-flow-rules.md` Rule 2).
+   - **HIGH → does not block.** The auditor defines HIGH as "action
+     this batch" — a backlog horizon, not a merge verdict. Name
+     each one in the approval body as a non-blocking concern.
+     Blocking on HIGH across many repos produces chronic false
+     rejects on pre-existing debt a diff merely brushes, and a
+     mandatory step that cries wolf is the step that gets disabled.
+   - **A hard gate (locked contract, gated file, destructive
+     change) still stops the run** — neither accept nor reject.
+
+7. **Take the action.**
+   - **Accept** → `gh pr review <N> --approve --body "<...>"`,
+     then `gh pr merge <N> --squash --delete-branch`.
+   - **Reject** → `gh pr review <N> --request-changes --body
+     "<numbered blocking issues, each with file:line and the rule>"`.
+     A reject hands the PR back to the authoring agent, which is
+     what an autonomous org wants — not to a human.
+
+8. **Track the merge in `RELEASES.md`** (accept path only), per
+   `release-add/SKILL.md`. Idempotent; re-runs are no-ops.
+
+9. **Render the review report** — template below. It records
+   `review_mode: delegated-subagent` and the PR number, so a review
+   that was skipped is visible afterwards.
+
+**What this does and does not buy.** The reviewer runs in a separate
+context window and cannot write, so it is decorrelated from the
+author's reasoning and cannot quietly fix a defect then bless it.
+It is the *same model*, in the same session, under the same
+credentials — so this is **decorrelated error, not an independent
+party**. Do not write anything on the PR implying a second person
+or second party reviewed it.
 
 If `/release-add` reports that the task is not in `tasks/completed/`, keep that as a **non-blocking note** in the review report — the work merged, the spec just has not moved yet, and `/release-add` will do the move itself next time it is run with git evidence. (The old degradation for "no 🚧 Next entry" is gone: that condition was the pre-v0.48.0 tracker being broken on install, not a real state. See CHANGELOG v0.48.0.)
 
