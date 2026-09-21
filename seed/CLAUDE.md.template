@@ -20,6 +20,7 @@ file. Delete a line if the file isn't used in this project.
 @.claude/mode.md
 @.claude/bookmarks.md
 @.claude/wont-do.md
+@.claude/context/project-map.md
 @docs/notes/INDEX.md
 
 *Why each one:*
@@ -36,6 +37,10 @@ file. Delete a line if the file isn't used in this project.
   orientation.
 - **`wont-do.md`** — anti-feature list. Stops relitigating closed
   conversations.
+- **`project-map.md`** — the Claude-targeted summary `/wrangle`
+  writes after auditing the codebase, so a cold session lands with
+  project context already loaded. Only present after `/wrangle` has
+  run; harmless before that, like `mode.md`.
 - **`docs/notes/INDEX.md`** — rolling index of `/lessons` notes.
   Future Claude sessions read prior learnings on session start.
 
