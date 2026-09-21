@@ -139,9 +139,16 @@ cmd_open() {
     [ "$n" -lt 1000 ] || { echo "error: cannot allocate a deploy id" >&2; return 1; }
   done
 
+  # NOTE: `$(cmd || echo unknown)` is wrong for --abbrev-ref and corrupts the
+  # record. On a repo with no commits it PRINTS "HEAD" and THEN exits 128, so
+  # the fallback APPENDS rather than replaces and the frontmatter gets a stray
+  # bare `unknown` line. (--short fails cleanly, printing nothing, so only
+  # --abbrev-ref is affected — but both are written defensively here.)
   local sha branch
-  sha="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-  branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+  if ! sha="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null)"; then sha="unknown"; fi
+  if ! branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)"; then branch="unknown"; fi
+  [ -n "$sha" ] || sha="unknown"
+  [ -n "$branch" ] || branch="unknown"
 
   {
     echo "---"
