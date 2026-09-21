@@ -47,6 +47,23 @@ GLYPH_PLANNED='📋'
 GLYPH_NEXT='🚧'
 GLYPH_SHIPPED='✅'
 
+# rasa_actor — the ONE actor-resolution order across the Element.
+#
+#   RASA_ACTOR  -> set by a runner, CI job or agent harness. The knob.
+#   git identity -> the human configured in this clone.
+#   OS user      -> last resort.
+#
+# Canonical definition: stamps.md, "Stamp: run" -> actor. Before this existed,
+# five sites called $(whoami) directly, so a service account running an agent
+# was recorded in the ledger exactly as a human would be.
+rasa_actor() {
+  local a="${RASA_ACTOR:-}"
+  [ -n "$a" ] || a="$(git config user.name 2>/dev/null || true)"
+  [ -n "$a" ] || a="$(whoami 2>/dev/null || true)"
+  [ -n "$a" ] || a="${USER:-unknown}"
+  printf '%s' "$a"
+}
+
 repo_root() {
   local d
   if d="$(git rev-parse --show-toplevel 2>/dev/null)"; then
@@ -511,7 +528,7 @@ cmd_bundle() {
   # Approval is recorded once per release. Invocation IS the approval —
   # the same token the deploy ledger writes, so a grep joins them.
   if ! section_body "$version" | grep -q '^\*\*Approved\.\*\*'; then
-    [ -n "$approved_by" ] || approved_by="$(whoami)"
+    [ -n "$approved_by" ] || approved_by="$(rasa_actor)"
     tmp="$(mktemp "${TMPDIR:-/tmp}/rel.XXXXXX")"
     awk -v ver="## $version " -v who="$approved_by" '
       { print }

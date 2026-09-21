@@ -51,6 +51,23 @@ set -euo pipefail
 umask 077   # anything this script creates is 0600 from birth
 
 # --------------------------------------------------------------- paths
+# rasa_actor — the ONE actor-resolution order across the Element.
+#
+#   RASA_ACTOR  -> set by a runner, CI job or agent harness. The knob.
+#   git identity -> the human configured in this clone.
+#   OS user      -> last resort.
+#
+# Canonical definition: stamps.md, "Stamp: run" -> actor. Before this existed,
+# five sites called $(whoami) directly, so a service account running an agent
+# was recorded in the ledger exactly as a human would be.
+rasa_actor() {
+  local a="${RASA_ACTOR:-}"
+  [ -n "$a" ] || a="$(git config user.name 2>/dev/null || true)"
+  [ -n "$a" ] || a="$(whoami 2>/dev/null || true)"
+  [ -n "$a" ] || a="${USER:-unknown}"
+  printf '%s' "$a"
+}
+
 repo_root() {
   local d
   if d="$(git rev-parse --show-toplevel 2>/dev/null)"; then
@@ -173,7 +190,7 @@ record_transfer() {
     echo "peer_host: $host"
     echo "sha: $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
     echo "branch: $(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
-    echo "user: $(whoami)"
+    echo "user: $(rasa_actor)"
     echo "host: $(hostname -s 2>/dev/null || echo unknown)"
     echo "started: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
     echo "finished: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"

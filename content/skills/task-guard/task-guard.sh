@@ -58,9 +58,13 @@ git_common_dir() {
   ( cd -P "$d" 2>/dev/null && pwd -P )
 }
 
+# Same resolution order as rasa_actor() elsewhere in the Element — RASA_ACTOR
+# first, so an agent harness can identify itself instead of inheriting whatever
+# git identity the clone happens to carry. See stamps.md, "Stamp: run".
 actor() {
-  local a
-  a="$(git config user.name 2>/dev/null || true)"
+  local a="${RASA_ACTOR:-}"
+  [ -n "$a" ] || a="$(git config user.name 2>/dev/null || true)"
+  [ -n "$a" ] || a="$(whoami 2>/dev/null || true)"
   [ -n "$a" ] || a="${USER:-unknown}"
   printf '%s' "$a"
 }

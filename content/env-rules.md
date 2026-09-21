@@ -6,6 +6,31 @@ Pairs with `runtime-rules` (per-runtime env requirements), `cloud-rules` (per-cl
 
 `secrets-rules.md` is the companion: this file is the registry (what each var *is*), `secrets-rules.md` governs the *values* (how a secret value gets entered, and how it is kept out of the AI's context). The `/secrets` skill provisions values; `/import-env` and `/export-env` move keys between `.env` files and stamps.
 
+## `RASA_ACTOR` — who the ledgers record
+
+`RASA_ACTOR` names the identity every ledger attributes work to. It is the one
+knob; nothing else needs setting.
+
+```bash
+RASA_ACTOR="agent:mission-runner" ./build/deploy --env=staging --intent=deploy
+```
+
+Resolution order, identical in every script that records provenance:
+
+1. `RASA_ACTOR`
+2. the clone's git identity (`git config user.name`)
+3. the OS user
+
+Set it in any unattended context — CI, a scheduled job, an agent harness.
+Without it, an agent running under a service account is recorded in the deploy
+ledger, the env-sync ledger and the release approval line exactly as a human
+would be, and "who shipped this" has no truthful answer. It is **not** a
+secret and carries no authorization: it says who acted, not who approved.
+
+It is deliberately not a per-environment `env.sh` value — that file is sourced
+into the deploy driver's own shell, and identity should not be settable by the
+thing being deployed.
+
 ## Why a separate system
 
 Runtime stamps already say "this runtime requires `POSTGRES_HOST`." Cloud stamps say "this cloud needs `AZURE_CLIENT_ID`." Build env scripts export per-deploy-target vars. What's missing:

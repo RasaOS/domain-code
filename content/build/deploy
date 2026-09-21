@@ -28,6 +28,23 @@ BUILD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$BUILD_DIR/.." && pwd)"
 cd "$PROJECT_DIR"
 
+# rasa_actor — the ONE actor-resolution order across the Element.
+#
+#   RASA_ACTOR  -> set by a runner, CI job or agent harness. The knob.
+#   git identity -> the human configured in this clone.
+#   OS user      -> last resort.
+#
+# Canonical definition: stamps.md, "Stamp: run" -> actor. Before this existed,
+# five sites called $(whoami) directly, so a service account running an agent
+# was recorded in the ledger exactly as a human would be.
+rasa_actor() {
+  local a="${RASA_ACTOR:-}"
+  [ -n "$a" ] || a="$(git config user.name 2>/dev/null || true)"
+  [ -n "$a" ] || a="$(whoami 2>/dev/null || true)"
+  [ -n "$a" ] || a="${USER:-unknown}"
+  printf '%s' "$a"
+}
+
 # ─── Defaults ──────────────────────────────────────────────────────────────
 ENV=""
 INTENT=""
@@ -135,7 +152,7 @@ if [[ -f "$ENV_SH" ]]; then
   DEPLOY_TO="$(bash "$ENV_SH" get "$ENV" deploy_to 2>/dev/null || true)"
 fi
 
-export DEPLOY_USER="$(whoami)"
+export DEPLOY_USER="$(rasa_actor)"
 export DEPLOY_TIMESTAMP="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 
 # ─── Resolve direction, then enforce it ────────────────────────────────────
