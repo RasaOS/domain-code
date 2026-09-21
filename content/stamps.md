@@ -4,7 +4,7 @@ Canonical models for every kit-tracked **reference stamp**. New
 entries follow the model; skills parse them; humans read them.
 
 This file is the registry. Adding a new stamp model means adding
-an entry here AND shipping a bootstrap template that demonstrates
+an entry here AND shipping a seed template that demonstrates
 the model.
 
 > **What's a reference stamp?** YAML frontmatter at the top of a
@@ -367,9 +367,9 @@ The process:
 2. **Add an entry to this file** under the appropriate section
    (existing / proposed). Document field types, required-ness,
    semantics.
-3. **Ship a bootstrap template** at `bootstrap/<thing>.md.template`
+3. **Ship a seed template** at `seed/<thing>.md.template`
    that demonstrates the model with placeholder values.
-4. **Add MANIFEST entries** — bootstrap mapping (skip-if-exists)
+4. **Add `rasa.json` entries** — `seed.files[]` mapping (skip-if-exists)
    and scaffold directory if applicable.
 5. **CHANGELOG entry** documenting the new stamp model.
 6. **(Optional) Skill integration** — a skill that reads the stamps

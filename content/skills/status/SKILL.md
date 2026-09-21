@@ -239,7 +239,7 @@ output, change the script. Don't paraphrase in the chat layer.
 - **Don't recommend actions.** "You should deploy v1.2.0" — not
   this skill's job. Report state; let the user decide.
 - **Don't editorialize PRs.** Just list them. Reviewing them is
-  `/review` or `/ultrareview`.
+  `/review` or `/code-review ultra`.
 - **Don't deep-dive any single section.** If the user wants
   details on a PR, an audit entry, or a task, they'll ask. Keep
   the snapshot a snapshot.

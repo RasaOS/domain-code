@@ -382,7 +382,7 @@ Read `CLAUDE.md` at the repo root.
   ```
 
   On approval: write a CLAUDE.md grounded in `docs/wrangle/`.
-  Use the kit's `bootstrap/CLAUDE.md.template` as the shape
+  Use the Element's `seed/CLAUDE.md.template` as the shape
   (read from the kit if available).
 
 - **`CLAUDE.md` exists and looks like the bootstrap stub**
@@ -599,7 +599,7 @@ When (and only when) the user picks specific Tier 1 items:
   `/audit`.
 - **You're designing new work** → `/plan`.
 - **You're reconciling docs that already exist** → `/update-docs`.
-- **You're reviewing a PR** → `/review` or `/ultrareview`.
+- **You're reviewing a PR** → `/review` or `/code-review ultra`.
 - **You want to actually fix things without a plan stage** →
   describe what to fix directly; don't run wrangle just to skip
   to edits.

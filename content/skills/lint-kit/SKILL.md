@@ -1,6 +1,6 @@
 ---
 name: lint-kit
-description: Lint the kit for platform-specific drift. Iterates over universal kit files (any `kit/*.md`, `kit/skills/<name>/SKILL.md`, and `bootstrap/*.template` whose basename does NOT start with a platform prefix) and reports content that should live in a platform-prefix file (`ios-`, `android-`, `web-`, `python-`, `go-`, `ruby-`, `rust-`). Wraps `bin/lint`. Triggered when the user wants to enforce the platform-prefix naming convention — e.g. "/lint-kit", "lint the kit", "check for platform drift", "any iOS stuff leaked into universal files?", "is the kit cross-platform clean?".
+description: Lint the kit for platform-specific drift. Iterates over universal kit files (any `kit/*.md`, `kit/skills/<name>/SKILL.md`, and `seed/*.template` whose basename does NOT start with a platform prefix) and reports content that should live in a platform-prefix file (`ios-`, `android-`, `web-`, `python-`, `go-`, `ruby-`, `rust-`). Wraps `bin/lint`. Triggered when the user wants to enforce the platform-prefix naming convention — e.g. "/lint-kit", "lint the kit", "check for platform drift", "any iOS stuff leaked into universal files?", "is the kit cross-platform clean?".
 ---
 
 # /lint-kit — Catch platform drift in universal kit files
@@ -22,7 +22,7 @@ findings, name the calibration, let the user decide what to act on.
   §6 Severity audit report, and reports the exit code. It does not
   edit files. The `/lint-kit fix` flow is the consent-gated edit path.
 - **Scope is the kit, only.** This skill lints `kit/*.md`,
-  `kit/skills/<name>/SKILL.md`, and `bootstrap/*.template` — and
+  `kit/skills/<name>/SKILL.md`, and `seed/*.template` — and
   only those whose names do NOT start with a platform prefix
   (`ios-`, `android-`, `web-`, `python-`, `go-`, `ruby-`, `rust-`,
   `kotlin-`, `swift-`). Project files (`.claude/`, `docs/`,
@@ -219,7 +219,7 @@ The output rendered by `bin/lint`:
   asks per finding. There is no "auto-apply all" mode and never
   will be. The cost of an unwanted edit is higher than the cost of
   one extra round-trip.
-- **Don't lint outside `kit/` and `bootstrap/`.** Project files,
+- **Don't lint outside `kit/` and `seed/`.** Project files,
   `docs/`, `tasks/`, the user's working code — out of scope. If
   the user asks to lint their project, redirect to `/audit` or
   `/scope-check`.

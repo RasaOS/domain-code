@@ -2,7 +2,7 @@
 id: TASK-017
 category: stub
 phase: P1
-status: backlog
+status: completed
 ---
 
 # TASK-017: Rename tasks/done/ to tasks/completed/
@@ -13,4 +13,14 @@ status: backlog
 
 **Notes.** Trivial, but it is the Element dogfooding its own rules — the drift is visible to anyone reading both.
 
-STATUS: STUB — full spec drafted before implementation.
+## Outcome
+
+Renamed `tasks/done/` → `tasks/completed/` (`git mv`, history preserved) and
+added the missing `tasks/blocked/`, so this repo has every state its own
+`task-rules.md` lifecycle defines: triage → backlog → active ⇄ blocked →
+completed.
+
+Verified no blast radius: shipped content references `tasks/completed` 38
+times and `tasks/done` zero times, and neither `rasa.json` nor `bin/`
+references either path — `tasks/` is this repo's own workspace, not shipped
+content.

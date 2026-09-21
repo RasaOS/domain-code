@@ -3,7 +3,7 @@
 
   "enabled": false,
 
-  "_enabled_doc": "Default off. This Element installs into existing projects, and a gate that switches itself on mid-stream is a gate people delete. Turn it on deliberately.",
+  "_enabled_doc": "Set by bin/init at install time. A NEW project (no commits, no tracked files) gets true — there is no mid-stream to disrupt, and defaulting off there means the gate is never turned on at all. An EXISTING project gets false, because a gate that switches itself on mid-stream is a gate people delete; init prints the one-line command to turn it on deliberately. Either way this file is skip-if-exists, so once it exists the setting is yours and no install rewrites it. Toggle with: .claude/skills/task-enforce/task-enforce.sh on|off",
 
   "classify": {
     "_doc": "Three classes. meta and docs are RECORDED in tasks/CHANGES.md but mint no task; code mints one. audit_anyway overrides both exemptions.",

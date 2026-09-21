@@ -129,8 +129,18 @@ so the setting binds everyone on the repo. `/task-guard` keeps its state
 in `.git/hooks/pre-commit`, which is per-machine and lost on a fresh
 clone; that is the difference.
 
-Ships `enabled: false`. This Element installs into existing projects, and
-a gate that switches itself on mid-stream is a gate people delete.
+**The default is decided per target, by `bin/init`, at install time.**
+
+- **New project** — no commits and no tracked files when the Element is
+  installed → `enabled: true`. There is no mid-stream to disrupt, and
+  defaulting off in a greenfield repo means the gate is never turned on.
+- **Existing project** → `enabled: false`, and `bin/init` prints the one-line
+  command to enable it. A gate that switches itself on mid-stream is a gate
+  people delete, and that reasoning still holds wherever it applies.
+
+The file is `skip-if-exists`, so once `.claude/task-enforcement.json` exists
+the setting is the consumer's; no later install or re-init rewrites it. Only
+a run that creates the file sets a default at all.
 
 ## See also
 

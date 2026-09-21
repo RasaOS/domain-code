@@ -36,6 +36,32 @@ if [[ "$TARGET" == "$ELEMENT_DIR" ]]; then
   exit 1
 fi
 
+# ---------- Classify the target: greenfield or brownfield ----------
+# Decided BEFORE anything is written, so this install's own files cannot
+# make a new project look like an established one.
+#
+# This drives the task-enforcement default. task-enforcement-rules.md argues
+# — correctly — that "a gate that switches itself on mid-stream is a gate
+# people delete", and that reasoning is why enforcement ships off. But it is
+# an argument about EXISTING projects. A brand-new project has no mid-stream,
+# and defaulting off there means the gate is never turned on at all.
+#
+# So: no commits yet, or no tracked files, means greenfield. Anything with
+# history is treated as brownfield, which is the cautious direction and keeps
+# the shipped rationale intact.
+TARGET_GREENFIELD=false
+if ! git -C "$TARGET" rev-parse --verify HEAD >/dev/null 2>&1; then
+  TARGET_GREENFIELD=true
+elif [[ "$(git -C "$TARGET" ls-files 2>/dev/null | wc -l | tr -d ' ')" == "0" ]]; then
+  TARGET_GREENFIELD=true
+fi
+
+# Whether the consumer already owns this file decides if we may set its
+# default at all — it is skip-if-exists, and an existing setting is theirs.
+TE_JSON="$TARGET/.claude/task-enforcement.json"
+TE_PREEXISTING=false
+[[ -f "$TE_JSON" ]] && TE_PREEXISTING=true
+
 # ---------- Read rasa.json ----------
 
 MANIFEST="$ELEMENT_DIR/rasa.json"
@@ -273,6 +299,34 @@ for entry in manifest.get('seed', {}).get('files', []):
     else:
         print(f"    ⚠ unknown seed.files[] policy: {policy} for {entry['from']}", file=sys.stderr)
 PYEOF
+fi
+
+# ---------- Set the task-enforcement default for a NEW project ----------
+# Only ever touches a file this run created. A pre-existing
+# .claude/task-enforcement.json is the consumer's own setting (the entry is
+# skip-if-exists) and is never rewritten here.
+if [[ -f "$TE_JSON" && "$TE_PREEXISTING" == false ]]; then
+  if [[ "$TARGET_GREENFIELD" == true ]]; then
+    python3 - "$TE_JSON" <<'PYEOF'
+import json, sys, collections
+p = sys.argv[1]
+d = json.load(open(p), object_pairs_hook=collections.OrderedDict)
+d['enabled'] = True
+d['_enabled_doc'] = (
+    "Enabled by bin/init because this was a NEW project at install time — no "
+    "commits and no tracked files. There is no mid-stream here to disrupt, so "
+    "the gate starts on. Installing into an EXISTING project leaves this false "
+    "instead, because a gate that switches itself on mid-stream is a gate "
+    "people delete. Toggle with: .claude/skills/task-enforce/task-enforce.sh on|off"
+)
+json.dump(d, open(p, 'w'), indent=2)
+open(p, 'a').write('\n')
+PYEOF
+    echo "  task-enforcement: ENABLED (new project — no commits at install time)"
+  else
+    echo "  task-enforcement: left OFF (existing project — turn it on deliberately)"
+    echo "    enable with: .claude/skills/task-enforce/task-enforce.sh on"
+  fi
 fi
 
 # ---------- Clone the Element source into <target>/kit/<folder>/ (the /kit stash) ----------

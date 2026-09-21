@@ -195,7 +195,7 @@ Document the source in each `purpose: secret` stamp's body. Don't commit retriev
 **Never:**
 - Commit a populated `.env` file
 - Echo a secret to stdout in CI logs (mask with `***` or `$$$REDACTED$$$`)
-- Store a secret in MANIFEST.json, CLAUDE.md, or any markdown body
+- Store a secret in `rasa.json`, CLAUDE.md, or any markdown body
 - Email or Slack a secret value (use the secret manager's share feature)
 
 ## Validation

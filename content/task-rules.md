@@ -156,6 +156,14 @@ orchestrator may drop coordination signals into this repo's
 skills like `/migration` — they describe cross-repo state this
 project needs to be aware of.
 
+> `/migration` is an **orchestrator-Element** skill, not one this
+> Element ships. `bin/check-invocations` lists it as a dangling
+> reference for that reason, and that advisory is correct and
+> expected — do not "fix" it by deleting the reference. The skill
+> lives in `rasa.module.cto`, which is not yet published as a
+> RasaOS Element. Nothing currently *writes* these files either;
+> the reader below is live, the writer is not.
+
 ### Files in scope
 
 Any file matching `.claude/active-*.md`. Examples:
