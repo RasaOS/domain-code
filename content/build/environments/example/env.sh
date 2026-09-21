@@ -39,3 +39,24 @@ export REGISTRY=""                    # e.g. myacr.azurecr.io
 # it was written; the comment claiming 10-preflight checked it was false.
 # Kept only so existing env.sh files that set it do not look broken.
 export REQUIRES_APPROVAL=false        # vestigial — see .claude/environment-rules.md
+
+# ─── WARNING: this file is SOURCED into the deploy driver's own shell ────────
+#
+# build/deploy runs `source build/environments/<env>/env.sh`. Anything assigned
+# here becomes a variable in the driver itself, not just in your deploy script.
+#
+# NEVER assign any of these:
+#
+#   SKIP_TESTS   SKIP_GATES   DRY_RUN   INTENT   ENV
+#       Assigning these silently disarms the pipeline for this environment,
+#       permanently and invisibly. SKIP_TESTS=true here once shipped a failing
+#       test to production at exit 0. The driver now refuses --skip-tests at
+#       prod class, which catches this too — but do not write the pattern.
+#
+#   BUILD_DIR    PROJECT_DIR
+#       These resolve every gate the driver invokes. Reassigning BUILD_DIR
+#       redirected class-guard to a stub and allowed a deploy into production.
+#       The driver now re-derives both after sourcing this file.
+#
+# Use this file for application configuration — APP_ENV, API_URL, region,
+# credentials sourced from your secret store. Export what your deploy.sh needs.

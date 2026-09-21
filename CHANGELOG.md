@@ -24,6 +24,87 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.49.0 — 2026-09-20
+
+### The production test gate could pass having run nothing (BREAKING for prod releases)
+
+**⚠️ BREAKING for production releases**, despite the minor bump: a prod-class
+deploy whose suite would run no tests now FAILS. Below prod class nothing
+changes — it warns and passes.
+
+A fresh `bin/init` install could complete a full production release having
+executed zero tests and exit 0. Measured end to end: `FORCE_APPROVAL=1
+./build/deploy --env=prod --intent=release` printed `Suite 'pre-deploy' has no
+tests listed. Skipping.`, then `SHIPPING to prod`, then `✓ release complete`.
+
+There were **three** ways to report green having run nothing, all reproduced:
+
+| Input | Was |
+|---|---|
+| `tests: []` — the seeded default | `Skipping.` → exit 0 |
+| `tests: [alpha]` — inline-flow YAML | parsed as **zero** tests → exit 0 |
+| suite lists `alpha`, stamps hold `alpha` + `alpha-extended` | ran the **wrong** stamp, printed `✓ pass` |
+
+The third is the worst. A *correctly spelled* entry produced a false PASS: the
+lookup was `grep -lE "^name:...${NAME}\b" | head -1`, and `\b` treats a hyphen
+as a word boundary. If you have ever read a green gate whose stamp names share
+a prefix, it may not have run what you think.
+
+#### What changed
+
+- **`build/gates/tests-required.sh`** (new) — refuses a prod-class deploy whose
+  suite would run nothing. **No bypass environment variable**, same precedent as
+  `class-guard.sh`. Placed beside class-guard in `build/deploy`, the only
+  placement that `--skip-tests`, `--skip-gates`, `--dry-run` and env-var
+  equivalents all fail to reach.
+- **`build/gates/suite-lib.sh`** (new) — one parser shared by the gate and
+  `30-test.sh`, so they cannot disagree about what "empty" means. Accepts block
+  and inline-flow YAML at any indent; refuses forms it will not guess at.
+- **`--skip-tests` is REFUSED at prod class** (exit 2). It previously shipped a
+  failing test to production at exit 0 and filed a plain ✓ in the deploys ledger.
+- **`30-test.sh` rewritten** — exact stamp lookup, ambiguity reported rather than
+  silently resolved, failing test output printed instead of sent to `/dev/null`,
+  and the stamp-not-found branch revived (it was dead code under `set -euo
+  pipefail` and exited with no diagnostic at all).
+- **Quarantine is honored for the first time.** `test-rules.md` has promised
+  skip-and-warn since before the stage could parse `status:`. A quarantined
+  member does not count as having run, so an all-quarantined suite is an empty
+  suite. `status: retired` on a listed member now fails rather than being
+  skipped — otherwise it was a permanent silent bypass.
+- **`ENV_CLASS` reconciled.** `build/deploy` used a substring test while
+  `class-guard.sh` used tokens, so `--env=preprod` printed
+  `(class: unclassified)` and bannered `(class: prod)` one line later.
+  `preprod`, `nonprod`, `myprod`, `alive-service` and `reproduction-test` were
+  being mis-escalated to production by the driver. Now token-matched, which only
+  relaxes the driver and never un-guards anything class-guard calls prod.
+- **`env.sh` can no longer hijack the gates.** It is sourced into the driver's
+  shell, so `BUILD_DIR=/tmp/evil` redirected every gate — verified to make a
+  stub class-guard allow a deploy into production. Both paths are now re-derived
+  after the source.
+
+#### Consumer-visible: your suite file is now yours
+
+`tests/suites/pre-deploy.md` moves from `directory-mirror` to `seed` +
+`skip-if-exists`. **Re-running `bin/init` previously reverted a populated
+`tests:` array to `tests: []`, silently.** It no longer does. This had to land
+in the same release, or the update delivering the gate would have manufactured
+the empty suite the gate then treats as fatal.
+
+No `prod-gate.md` is shipped, deliberately — selection is first-match-on-
+existence, so an empty one would win over your populated `pre-deploy.md` and
+*remove* production coverage.
+
+#### If this blocks your release
+
+The gate's own refusal message is the migration guide: it names the suite file,
+gives the one-line fix, and lists every active stamp you already have that is
+wired into no suite. No deprecation window and no opt-out flag — an
+`allow_empty:` escape was considered and rejected as re-creating the vacuous
+pass. The escape hatch is "write one test"; `test-rules.md` sanctions a single
+bash script in `tests/scripts/` for a repo that has none.
+
+---
+
 ## v0.48.1 — 2026-09-19
 
 ### The Element's own source URL was dead, and `bin/init` handed it to every consumer

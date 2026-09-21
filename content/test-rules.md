@@ -144,19 +144,52 @@ Suite files use plain names: `pre-deploy.md`, `prod-gate.md`, `smoke.md`. There 
 
 - **Adding a new test:** create the stamp.
 - **Moving a test:** update the `location` and `run_command` fields. Don't rename the stamp.
-- **Retiring a test:** flip `status: active` → `status: retired`. Leave the stamp in place for audit.
-- **Quarantining a flaky test:** `status: quarantined`. Suites that include it skip-and-warn rather than fail.
+- **Retiring a test:** flip `status: active` → `status: retired`. Leave the stamp in place for audit. **Remove it from any suite first** — a retired stamp still listed in a selected gate suite FAILS that suite. Treating it as skippable would make `status: retired` a permanent silent bypass.
+- **Quarantining a flaky test:** `status: quarantined`. Suites that include it skip-and-warn rather than fail. A quarantined member does **not** count as having run, so quarantining every member of a suite makes it an empty suite — which fails at prod class. Quarantine is not a way to un-gate production.
+- **An unknown or missing `status:`** causes the test to RUN, with a warning. Skipping on an unrecognized value would let a typo disarm the gate.
 
 Don't create a stamp for trivial tests (a single assertion that lives alongside obviously-correct code). Stamps are for tests you'd want to find by name later.
 
 ## Test suites and the deploy pipeline
 
-`build/stages/30-test.sh` selects a suite based on environment:
+`build/stages/30-test.sh` selects a suite based on environment **class**, not name:
 
-- `prod` deploy → uses `tests/suites/prod-gate.md` if present, else `pre-deploy.md`
+- class `prod` → `tests/suites/prod-gate.md` if present, else `pre-deploy.md`
 - everything else → `tests/suites/pre-deploy.md`
 
-The suite's `tests:` array is iterated. For each name, the stage finds the matching stamp in `tests/stamps/`, extracts `run_command`, and runs it. Any failure aborts the deploy.
+Selection is first-match-on-existence, by filename. This is why the Element ships **no** `prod-gate.md`: an empty one dropped beside a populated `pre-deploy.md` would win and remove production coverage.
+
+The suite's `tests:` list is iterated. For each name the stage resolves the stamp whose `name:` matches **exactly**, extracts `run_command`, and runs it. Two stamps sharing a name is an error, not a coin toss.
+
+### The exit rule
+
+A gate that runs no tests is not a gate. One condition, applied by both `30-test.sh` and `build/gates/tests-required.sh`:
+
+- any test **fails** → the suite fails, at every class
+- **nothing ran** and the class is `prod` → the suite fails
+- otherwise → pass
+
+"Nothing ran" covers an empty list, a list whose members are all quarantined, a `tests:` key in a form the parser will not guess at, and members whose stamps are missing or ambiguous. Below `prod` class all of these warn and pass, so dev and staging work is unaffected.
+
+`--skip-tests` is **refused** at `prod` class. To ship without running a test, remove it from the suite — an explicit, reviewable edit — rather than silencing the gate.
+
+### Suite file format
+
+Both YAML list forms are accepted, at any indent:
+
+```yaml
+tests:
+  - api-health-check
+```
+```yaml
+tests: [api-health-check, user-auth-flow]
+```
+
+A `tests:` key in any other form is a hard failure at prod class rather than a silent zero. Comment lines under the key are ignored.
+
+`suite_kind` and `runs_for` are **advisory metadata and are not read at runtime.** Suite selection is by filename and class. Do not rely on `runs_for` to keep a suite out of an environment.
+
+**Suite files are consumer-owned.** `tests/suites/pre-deploy.md` is seeded once on install and is never overwritten by an update — the membership list is your data, not the Element's.
 
 To extend: add new suites and reference them from custom stages or per-env logic.
 

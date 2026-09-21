@@ -80,8 +80,8 @@ Useful flags, pass through only when the user asked for them:
 
 | Flag | Effect |
 |---|---|
-| `--dry-run` | Runs the gates, skips every stage. The class guard still applies. |
-| `--skip-tests` | Skips stages whose name contains `test`. |
+| `--dry-run` | Skips every stage. Runs the class guard and the tests-required gate, but **not** the stage-level gates — `10-preflight` is a stage, so clean-tree and the production approval do not run. A dry-run exit 0 is not a verification. |
+| `--skip-tests` | Skips stages whose name contains `test`, below `prod` class. **Refused at `prod` class** (exit 2). |
 | `--skip-gates` | Skips the OPTIONAL gates (clean tree, tag match) on non-prod only. Never skips the class guard. |
 | `--tag=<tag>` | Overrides the computed `v<semver>-<sha>-<env>` tag. |
 

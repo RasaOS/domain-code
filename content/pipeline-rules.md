@@ -135,7 +135,7 @@ Reads `tests/suites/pre-deploy.md` (or another suite based on env), iterates the
 ./build/run-suite tests/suites/pre-deploy.md "$1"
 ```
 
-Failures abort the pipeline. Skipping is possible via `--skip-tests` (don't use for prod).
+Failures abort the pipeline. `--skip-tests` skips the stage below `prod` class and is **REFUSED at `prod` class** (exit 2) — the parenthetical "don't use for prod" was a comment, and a comment is not a gate. A suite that would run no tests also refuses at `prod` class, via `build/gates/tests-required.sh`, which has no bypass variable.
 
 ### `40-publish.sh` — push the artifact to its target
 
