@@ -46,7 +46,7 @@ Two stamp models (see `stamps.md` for the universal pattern):
 ---
 name: user-auth-flow
 kind: test
-test_kind: unit                       # unit / integration / smoke / regression / container
+test_kind: unit                       # unit / integration / smoke / regression / container / characterization
 language: swift                       # swift / typescript / python / bash / ...
 location: ios/MyAppTests/UserAuthFlowTests.swift
 run_command: xcodebuild test -scheme MyApp -only-testing:MyAppTests/UserAuthFlowTests
@@ -75,7 +75,7 @@ Auth failures are user-facing and prod-impacting. Member of `pre-deploy` suite.
 |---|---|---|---|
 | `name` | yes | string (kebab-case) | Stable identity. Matches filename slug. |
 | `kind` | yes | const `test` | Stamp discriminator. |
-| `test_kind` | yes | enum | unit / integration / smoke / regression / container |
+| `test_kind` | yes | enum | unit / integration / smoke / regression / container / characterization |
 | `language` | yes | string | Test language (swift, typescript, python, bash, etc.) |
 | `location` | yes | string | Path to test source (native location, NOT moved) |
 | `run_command` | yes | string | Shell command that runs this specific test |
@@ -232,6 +232,62 @@ status: active
 ```
 
 This is the lowest-friction way to make a project testable without forcing a framework decision.
+
+## Brownfield: pinning behavior you did not specify
+
+The default rule is **test against the spec, not the code** — assert the
+*intended* behavior, because a test written to pass whatever the code currently
+does proves nothing about whether the code is right. That rule is correct for
+feature work and it stays the default.
+
+It does not fit a repo you inherited. A ten-year-old service with no tests and
+no surviving author has no spec to test against, and an agent is about to change
+it. The only honest assertion available is *what it does today*. Refusing to
+write that leaves the code permanently ungated — and at prod class the deploy
+gate now refuses an empty suite, so "no tests" is no longer a state you can
+deploy from.
+
+So: **a characterization test is legitimate, and it is a different thing from an
+intent test.** It records observed behavior as a baseline so a later change that
+alters that behavior is visible. It makes no claim that the behavior is correct.
+
+```yaml
+---
+name: checkout-totals-baseline
+kind: test
+test_kind: characterization           # <- not unit/integration: the distinction is the point
+language: bash
+location: tests/scripts/checkout-totals-baseline.sh
+run_command: tests/scripts/checkout-totals-baseline.sh
+created: 2026-09-21
+status: active
+tags: [brownfield, baseline]
+---
+```
+
+`test_kind: characterization` is **required** on these, and is why the enum
+gained a value rather than letting them hide as `regression`. A reader — human
+or agent — must be able to tell which of your tests encode intent and which
+merely encode history. Without the label, the two become indistinguishable
+within a release or two, and then nobody can tell whether a red test means
+"this broke" or "this changed, which may be fine".
+
+**The boundaries:**
+
+- **Never write one where a spec exists.** If the task spec has a test plan,
+  implement it. Characterization is for behavior nobody wrote down.
+- **A characterization test failing is not automatically a bug.** It means
+  behavior changed. Decide, grounded, whether the change was intended — and if
+  it was, update the baseline in the same commit and say so.
+- **They are a floor, not a ceiling.** Pinning current behavior is what makes a
+  legacy surface safe to touch. It is not a substitute for testing intent once
+  intent is known.
+- **Do not pin a bug.** If the observed behavior is plainly wrong, that is a
+  finding, not a baseline. Record it and surface it rather than freezing it.
+
+`/pin-behavior` writes these. See also "Fallback: `tests/scripts/`" above — a
+brownfield repo usually needs both: a place to put a test, and permission to
+write the only kind it can honestly have.
 
 ## The `TESTS.md` registry
 

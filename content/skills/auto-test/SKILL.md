@@ -34,6 +34,18 @@ the spec, the test should fail, and that failure is the finding.
   behavior. A test written to pass whatever the code currently
   does is worthless. If a test fails, decide — grounded — whether
   it's a test bug or a code bug, and say which in the report.
+- **One exception: brownfield, where there is no spec.** In a repo
+  you inherited — no tests, no spec, no surviving author — the only
+  honest assertion available is what the code does today, and at
+  prod class the deploy gate now refuses an empty suite, so "no
+  tests" is not a state you can ship from. Write a
+  **characterization** test, stamp it `test_kind: characterization`
+  so it is never mistaken for an intent test, and say in the report
+  that you pinned behavior rather than specified it. `/pin-behavior`
+  does this. The rule above still governs everywhere a spec exists —
+  see `test-rules.md` → "Brownfield: pinning behavior you did not
+  specify" for the boundaries, including that a plainly-wrong
+  behavior is a finding, not a baseline.
 - **Run what you write.** Writing tests without running them is
   half a job. Run them; the report carries real pass/fail counts.
 - **Pick the right kind of test for the change.** Decide the test
