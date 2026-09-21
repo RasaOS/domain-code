@@ -24,6 +24,56 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.52.0 — 2026-09-21
+
+### The spec fast-path's allowlist is now checked by a program
+
+`autonomy-rules.md` Exception 2 lets `/auto-task` and `/auto-phase` merge
+spec-only PRs to `main` unattended. Its whole safety argument is one sentence:
+*"The moment any non-allowlist file is in the change set, the fast-path is off
+— no exceptions."*
+
+**Nothing checked that.** There was no script behind either skill and no
+`git diff --name-only` anywhere near them, so the sole autonomous path to
+`main` rested on the authoring model correctly applying a glob list, from
+prose, to its own change.
+
+Every other gate here is a program — `class-guard.sh`, `tests-required.sh`,
+`approval.sh`, `git-clean.sh`, `task-enforce.sh`'s PreToolUse deny. This one was
+a paragraph. And a prose allowlist can be wrong for a long time unnoticed: this
+one was silently corrupted from v0.48.0 to v0.49.0, a duplicated line that left
+it not parsing as a list.
+
+**`task-enforce.sh spec-gate`**, with no bypass variable:
+
+```bash
+task-enforce.sh spec-gate            # pre-push: the dirty tree
+task-enforce.sh spec-gate --pr <N>   # pre-merge: the PUSHED artifact
+```
+
+The `--pr` form is load-bearing — the merge acts on the PR, not the working
+tree, so what gets verified is what was actually pushed. The allowlist is now
+data in one place, so prose and enforcement cannot drift apart again.
+
+Fails closed wherever it cannot be sure: an empty change set, an unreadable PR
+and a missing `gh` are all refusals. "Cannot check" is never "nothing to find."
+
+#### What this does not change
+
+Exception 2's reasoning stands and was not relitigated. Spec files do not
+execute, the merge is reversible and leaves a PR record, and a mandatory
+reviewer on every spec filing would be the expensive step that cries wolf. The
+carve-out was sound; its precondition was unenforced.
+
+#### Honest ceiling
+
+A script cannot stop a model from typing `gh pr merge` regardless. This is a
+mechanical answer that fails closed plus a contract requiring it — a hardened
+convention, not enforcement. Real enforcement is branch protection on the
+remote: the consumer's repo setting, outside this Element.
+
+---
+
 ## v0.51.0 — 2026-09-20
 
 ### /peer-review reads the PR again, and no longer forms its own verdict
