@@ -75,6 +75,14 @@ rule so it is reviewable; the per-skill SKILL.md cites this rule.
   accepted PR. The skill still respects branch protection — if
   the remote refuses the merge, the approval stays and the PR
   remains open. See `kit/skills/peer-review/SKILL.md`.
+  **As of v0.51.0 the accept is conditional**: `/peer-review`
+  fetches the PR from the remote and hands the diff to a
+  context-isolated `auditor` subagent, and a `CRITICAL` finding
+  rejects the PR instead of merging it. That narrows this
+  carve-out rather than widening it — the grant above is for an
+  *accepted* PR, and declining to accept needs no authorization.
+  The reject is a verdict, never a question: "invocation is
+  consent" forbids asking, not stopping.
 - **`/auto-task` and `/auto-phase` — spec-file fast-path.** May
   auto-merge a PR to `main` *iff* every file in the PR matches
   the spec-file allowlist (`tasks/**/*.md`, `tasks/PHASES.md`,

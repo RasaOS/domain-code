@@ -36,6 +36,14 @@ not.
   `/self-heal`'s job). A change that alters behavior — even
   "obviously for the better" — is out of scope and gets flagged
   in the report, not executed.
+- **An empty test suite does not prove preservation.** "The
+  green/red profile is unchanged" is trivially true when the
+  profile is empty, and a sweep over an untested surface that
+  claims to be behavior-preserving is claiming something it did
+  not check. If the target surface has no covering test, either
+  pin it first with `/pin-behavior` or report the surface as
+  unverifiable and leave it alone. Do not report an unchecked
+  claim as a verified one.
 - **Obvious wins only.** The bar is "the codebase's own rules,
   conventions, or tooling can verify the win." A judgment call
   on architecture or design is not obvious — it's a

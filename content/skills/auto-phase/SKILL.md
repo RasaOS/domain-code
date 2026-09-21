@@ -72,6 +72,23 @@ for the whole phase.
      merge via `gh pr merge --squash --delete-branch`. If branch
      protection refuses the merge, leave the PR open and report
      it.
+
+     **Run the gate before you push, and again before you merge.**
+     The allowlist is enforced by a program, not by your reading of
+     it:
+
+     ```bash
+     .claude/skills/task-enforce/task-enforce.sh spec-gate            # pre-push
+     .claude/skills/task-enforce/task-enforce.sh spec-gate --pr <N>   # pre-merge
+     ```
+
+     The `--pr` form is the load-bearing one: it reads the file list
+     from the **pushed artifact**, not from local state, because the
+     merge acts on the PR and not on your working tree. A phase
+     fast-path is a single PR carrying every new spec, so one stray
+     file disqualifies the whole batch. A non-zero exit means the
+     fast-path does not apply — leave the specs uncommitted and say
+     so in the autonomy report. There is no flag that skips it.
    - If any non-spec file is dirty: skip the fast-path, leave
      every spec uncommitted, and note why in the autonomy report.
 6. **Render one autonomy report** covering the whole phase — specs

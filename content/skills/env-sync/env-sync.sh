@@ -179,6 +179,17 @@ record_transfer() {
     n=$(( n + 1 )); id="ENV-${stamp}-${name}-${n}"
     [ "$n" -lt 1000 ] || return 0
   done
+  # `rev-parse` prints to stdout AND exits non-zero in a commit-less repo, so
+  # `$(cmd || echo unknown)` appends a second line and corrupts the record.
+  # `--verify --quiet` prints nothing and exits 1 cleanly — the same idiom
+  # bin/init uses for ELEMENT_SHA (773d89b), kept identical on purpose so there
+  # is one lesson in this repo and not two.
+  local _es_sha _es_branch
+  _es_sha="$(git -C "$ROOT" rev-parse --verify --quiet --short HEAD 2>/dev/null || true)"
+  _es_branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  [ -n "$_es_sha" ] || _es_sha="unknown"
+  { [ -n "$_es_branch" ] && [ "$_es_branch" != "HEAD" ]; } || _es_branch="unknown"
+
   {
     echo "---"
     echo "id: $id"
@@ -188,8 +199,8 @@ record_transfer() {
     echo "tag: $dig"
     echo "direction: $direction"
     echo "peer_host: $host"
-    echo "sha: $(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-    echo "branch: $(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+    echo "sha: $_es_sha"
+    echo "branch: $_es_branch"
     echo "user: $(rasa_actor)"
     echo "host: $(hostname -s 2>/dev/null || echo unknown)"
     echo "started: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"

@@ -150,6 +150,16 @@ The carve-out:
 - **Never code.** This carve-out exists *because* spec files are
   not code. The moment any non-allowlist file is in the change
   set, the fast-path is off — no exceptions.
+- **The allowlist is checked by a program, not by reading.**
+  `task-enforce.sh spec-gate` verifies the change set, and
+  `spec-gate --pr <N>` verifies the **pushed artifact** before the
+  merge. No bypass variable, by the `class-guard.sh` precedent.
+  Until v0.52.0 this precondition was prose only: there was no
+  script behind either skill and no `git diff --name-only` anywhere
+  near them, so the sole autonomous path to `main` rested on the
+  authoring model correctly applying a glob list to its own change.
+  The allowlist text was itself silently corrupted from v0.48.0 to
+  v0.49.0 for exactly that reason — nothing read it.
 
 Rationale: spec content is the team's plan, not the team's
 runtime. Auto-merging a spec is the same review-tradeoff as
@@ -229,6 +239,20 @@ Render this in chat at the end of the run:
 > **Outcome.** <completed | stopped at a hard gate>
 > **Deliverable.** <what was produced — file paths, or "—">
 
+## Evidence
+
+Every claim the goal condition rests on, shown rather than asserted.
+Verbatim command, its exit code, and enough output to read the result.
+
+```
+$ <command>
+<the last few lines of real output>
+exit <N>
+```
+
+*(If the run made no verifiable claim: "No verifiable claim — this run
+produced <X> and asserted nothing about its behavior.")*
+
 ## Decisions made
 
 Calls the skill made on your behalf. Re-run with a correction to
@@ -291,6 +315,20 @@ acceptance criterion in the spec holds and the build exits 0"
   conversation. Write conditions Claude's own output demonstrates:
   a build exit code, a test summary, a file count that actually
   appears in the transcript.
+- **Which is why the skill must SURFACE that output, not describe
+  it.** The operator's half of this is writing a checkable
+  condition; the skill's half is putting the check in the
+  transcript. "All tests pass" is a claim, and the evaluator has no
+  way to distinguish a true one from a false one — it cannot open
+  the repo and look. `$ npm test` followed by real output and
+  `exit 0` is evidence. The autonomy report's **Evidence** section
+  is where that goes, and it is the only lever this Element has
+  here: `/goal` is a Claude Code harness command, so its evaluator
+  cannot be given tools from inside an Element. What can be changed
+  is whether the transcript it reads contains proof or prose.
+- **Evidence belongs in the run record too.** The transcript is
+  gone when the session ends; `tasks/runs/<RUN-id>.md` is not. A
+  claim worth putting in front of the evaluator is worth keeping.
 - **Encode the hard gates as an escape clause.** `/goal` loops
   relentlessly; the hard gates above require an `auto-*` skill to
   *stop*. A loop with no escape clause will spin against a gate it
