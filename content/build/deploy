@@ -200,6 +200,37 @@ esac
 # variable: it is the one check the deploy/release split exists to make.
 "$BUILD_DIR/gates/class-guard.sh" "$ENV" "$INTENT"
 
+# Same contract, same placement, for the same reason: a gate suite that runs no
+# tests is not a gate. Measured before this existed — a fresh install shipped a
+# full production release having executed zero tests and exited 0.
+#
+# This is the only placement nothing bypasses. In 30-test.sh both --skip-tests
+# and --dry-run skip the stage before it runs; in 10-preflight.sh --dry-run
+# skips it. Here, --skip-tests, --skip-gates, --dry-run, and SKIP_TESTS /
+# SKIP_GATES / DRY_RUN set in the environment or assigned by env.sh all still
+# run it. There is no bypass variable, by design.
+"$BUILD_DIR/gates/tests-required.sh" "$ENV"
+
+# --skip-tests is REFUSED at prod class rather than honored. Measured before
+# this: with a deliberately failing test wired into the suite, --skip-tests at
+# prod gave exit 0, ran no tests, SHIPPED, and filed a plain ✓ in the deploys
+# ledger. This also closes the env.sh vector — env.sh is sourced earlier and
+# could set SKIP_TESTS=true, and ENV_CLASS is resolved after that source, so
+# the same refusal catches both. Mirrors the guard 10-preflight.sh already
+# applies to --skip-gates. Below prod class the flag still works.
+if [[ "$SKIP_TESTS" == "true" && "$ENV_CLASS" == "prod" ]]; then
+  {
+    echo "✗ --skip-tests: REFUSED — '$ENV' is class prod."
+    echo ""
+    echo "  Skipping tests on the way to production is the failure this"
+    echo "  pipeline exists to prevent. Below prod class the flag still works."
+    echo ""
+    echo "  To ship without running a test, remove it from the suite — an"
+    echo "  explicit, reviewable edit — rather than silencing the gate."
+  } >&2
+  exit 2
+fi
+
 # ─── Ship log ──────────────────────────────────────────────────────────────
 # Opened AFTER the guard so a refused run leaves no record — a refusal is
 # not a deploy. Closed in every exit path below.
@@ -231,7 +262,7 @@ echo "  Tag:  $DEPLOY_TAG"
 echo "  User: $DEPLOY_USER"
 echo "  Time: $DEPLOY_TIMESTAMP"
 $DRY_RUN  && echo "  Mode: DRY RUN (no execution)"
-$SKIP_TESTS && echo "  Tests: SKIPPED"
+$SKIP_TESTS && echo "  Tests: SKIPPED (refused at prod class)"
 $SKIP_GATES && echo "  Gates: SKIPPED (optional gates only — class-guard and prod approval still run)"
 echo "════════════════════════════════════════════════════════════"
 
@@ -251,7 +282,8 @@ IFS=$'\n' STAGES=($(sort <<<"${STAGES[*]}")); unset IFS
 for stage in "${STAGES[@]}"; do
   STAGE_NAME=$(basename "$stage" .sh)
 
-  # --skip-tests skips any stage whose name contains "test"
+  # --skip-tests skips any stage whose name contains "test".
+  # Refused outright at prod class above, so this only ever runs below it.
   if [[ "$SKIP_TESTS" == "true" && "$STAGE_NAME" == *test* ]]; then
     echo "▷ $STAGE_NAME (skipped: --skip-tests)"
     continue
