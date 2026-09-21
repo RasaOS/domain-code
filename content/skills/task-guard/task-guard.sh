@@ -166,17 +166,34 @@ create_stub() {
   mkdir -p "$root/tasks/active"
   path="$root/tasks/active/${id}-auto-${slug}.md"
   {
-    printf '# %s — auto-created: %s\n\n' "$id" "$slug"
+    # Real frontmatter, per stamps.md "Stamp: task". This used to emit only
+    # bold-markdown body lines (**Status.** / **Created.** / **Author.**),
+    # which made every task-guard stub invisible to the machine: the two
+    # stub-counters grep for the literal `STATUS: STUB` and got `**Status.**`,
+    # and release.sh's title parser got nothing at all.
+    printf -- '---\n'
+    printf 'id: %s\n' "$id"
+    printf 'category: stub\n'
+    printf 'phase: null\n'
+    # status must equal the directory, and this files to tasks/active/.
+    printf 'status: active\n'
+    printf 'owner: %s\n' "$(actor)"
+    printf 'blocked_by:\n'
+    printf 'outcome: unrecorded\n'
+    printf 'filed: %s\n' "$(date -u '+%Y-%m-%d %H:%M UTC')"
+    printf 'origin: auto-guard\n'
+    printf -- '---\n\n'
+    # Colon H1: release.sh's _title_for accepts the em-dash form now too, but
+    # the colon form is what task-enforce.sh emits and what RELEASES.md expects.
+    printf '# %s: auto-created — %s\n\n' "$id" "$slug"
     printf '> ⚠️ Auto-created by /task-guard at commit time. A code or\n'
     printf '> configuration change was committed with no active task.\n'
     printf '> This stub exists so the change keeps an audit trail.\n\n'
-    printf '**Status.** STUB — not spec'"'"'d.\n\n'
+    printf '> STATUS: STUB — not spec'"'"'d.\n\n'
     printf '**Why not spec'"'"'d.** The change was made directly — a quick\n'
     printf 'fix or hotfix — without filing a task first. /task-guard\n'
     printf 'created this retroactively so the change ledger stays\n'
     printf 'complete.\n\n'
-    printf '**Created.** %s\n\n' "$(now_stamp)"
-    printf '**Author.** %s\n\n' "$(actor)"
     printf '**Files touched in the triggering commit.**\n'
     for file in "$@"; do printf -- '- `%s`\n' "$file"; done
     printf '\n## Next step\n\n'

@@ -242,14 +242,30 @@ all of these in one pass, then surface a summary diff:
    next available `TASK-NNN`. Stub format per the kit's task
    rules:
    ```markdown
-   # TASK-NNN — <Title>
+   ---
+   id: TASK-NNN
+   category: stub
+   phase: <phase-id>
+   status: backlog
+   owner: unassigned
+   blocked_by:
+   outcome: unrecorded
+   filed: <YYYY-MM-DD HH:MM UTC>
+   origin: manual
+   ---
 
-   **STATUS**: STUB — full spec drafted before implementation
+   # TASK-NNN: <Title>
+
+   > STATUS: STUB — full spec drafted before implementation
 
    <One-line user story.>
 
    <One-line "why".>
    ```
+
+   The frontmatter is not optional. `/mvp` is the first skill a greenfield
+   repo runs, so a frontmatter-free stub here makes *untracked* the default
+   starting state of every new project. See `stamps.md` → `Stamp: task`.
 
 5. **`CLAUDE.md` updates (with consent)** — if the MVP implies
    project-specific rules (e.g. "this project uses Realm and

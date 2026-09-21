@@ -232,14 +232,29 @@ File a stub task into the prototype's backlog.
 3. **Write stub** at
    `tasks/proto/<slug>/backlog/TASK-NNN-<slug>.md`:
    ```markdown
+   ---
+   id: TASK-NNN
+   category: stub
+   phase: Phase 1: <prototype slug> prototype
+   status: backlog
+   owner: unassigned
+   blocked_by:
+   outcome: unrecorded
+   filed: <YYYY-MM-DD HH:MM UTC>
+   origin: manual
+   ---
+
    # TASK-NNN: <title>
 
-   **Phase**: Phase 1: <prototype slug> prototype
-   **Status**: STUB — full spec drafted before implementation
+   > STATUS: STUB — full spec drafted before implementation
 
    <one-line user story or "TODO: user story">
    <one-line why or "TODO: why">
    ```
+
+   Prototype tasks live under their own `tasks/proto/<slug>/` tree, so they
+   are counted separately from the main backlog — but they carry the same
+   frontmatter, so the same readers and counters work on them.
 4. **Append to ROADMAP.** Add the task line under the phase's
    bullet list in `tasks/proto/<slug>/ROADMAP.md`.
 5. Render a §25 INFO alert with the file path:
