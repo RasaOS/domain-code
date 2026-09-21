@@ -40,6 +40,10 @@ excuse for sloppy work — `craft-rules.md` applies in full.
   build / verification (per `CLAUDE.md` or `/build`). A run that
   ends with a failing build is not done — fix it, or if it can't
   be fixed, that's a hard blocker: stop and report.
+  **Show the result, do not summarize it.** The verbatim command,
+  its exit code and real output go in the report's Evidence
+  section. Under `/goal` the evaluator reads only the transcript,
+  so "the build is green" is a claim it has no way to check.
 - **Hard gates stop the run.** A locked `/contract`, a gated file,
   anything destructive — stop and surface per `autonomy-rules.md`.
   Never auto-commit, never merge, never deploy.
@@ -58,7 +62,8 @@ excuse for sloppy work — `craft-rules.md` applies in full.
 4. **Verify.** Run the build / verification. Fix what breaks. If a
    genuine blocker remains, stop per the hard-gate rule.
 5. **Render the autonomy report** — files changed, the
-   verification result, every assumption, any hard gate hit.
+   verification result **as real command output in the Evidence
+   section**, every assumption, any hard gate hit.
 
 ## When NOT to use this skill
 

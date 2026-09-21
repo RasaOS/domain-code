@@ -47,7 +47,12 @@ the spec, the test should fail, and that failure is the finding.
   specify" for the boundaries, including that a plainly-wrong
   behavior is a finding, not a baseline.
 - **Run what you write.** Writing tests without running them is
-  half a job. Run them; the report carries real pass/fail counts.
+  half a job. Run them, and put the **verbatim command, its exit
+  code and real output** in the report's Evidence section — not a
+  summary of them. Under `/goal` the evaluator reads only the
+  transcript and cannot open the repo to check, so "all tests pass"
+  and a genuine green run are indistinguishable to it unless the
+  output is there.
 - **Pick the right kind of test for the change.** Decide the test
   *type* from what the diff touches and the project's existing
   conventions, not from a default. See "Test type selection"
