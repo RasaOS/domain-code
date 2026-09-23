@@ -17,6 +17,12 @@
 
 set -u
 
+# The harness itself works on bytes: BSD grep in a UTF-8 locale will not
+# match a line that holds an invalid byte, even with -a, so a check could
+# fail while the code under test was right. Cases that are about locale set
+# LC_ALL explicitly on the command they run.
+export LC_ALL=C
+
 here="$(cd "$(dirname "$0")" && pwd -P)"
 SRC="${1:-$here/../content/skills/contract/contract.sh}"
 [ -f "$SRC" ] || { echo "test-contract: no contract.sh at $SRC" >&2; exit 2; }
