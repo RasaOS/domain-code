@@ -71,6 +71,12 @@ is this soft.
    to match the rule it ships
 7. `TASK-055` — The `bin/lint` release gate is red on `main` (14
    pre-existing findings); found while verifying TASK-013
+8. `TASK-056` — A `$(cmd || echo unknown)` fallback corrupted two ledgers
+   in a commit-less repo
+9. `TASK-060` — The contract lock fails open on bytes it did not write
+   (a BOM, CRLF, a deleted or garbled `is_locked` key)
+10. `TASK-061` — Tag v0.51.0 and v0.52.0, backfill the CHANGELOG, and
+    validate `rasa.json` against the schema in CI
 
 ## P2 — The run record
 
@@ -91,6 +97,8 @@ program, and unblocks four of the others.
    instead of only rendering to chat
 4. `TASK-021` — `rasa.module.telemetry`: roll per-repo run lines into a
    fleet view
+5. `TASK-057` — `/wrangle`'s remediation plan is filed into `tasks/`, not
+   only rendered to chat
 
 ## P3 — Verification independence
 
@@ -103,14 +111,16 @@ documented design: it "runs no tools and reads no files".
 
 1. `TASK-022` — Route `/peer-review` judgment through the `auditor`
    subagent; record author-vs-reviewer on the PR
-2. `TASK-023` — Give the `/goal` evaluator ground truth — tools and file
-   access, not just the transcript
+2. `TASK-023` — Put falsifiable evidence into the transcript the `/goal`
+   evaluator reads (re-scoped: the evaluator cannot be given tools or files)
 3. `TASK-024` — Coverage-floor gate: refuse autonomous change to a
    surface with no executable behavioral evidence
 4. `TASK-025` — Brownfield carve-out in `test-rules.md` sanctioning
    characterization tests, plus a `/pin-behavior` skill to write them
 5. `TASK-026` — `autonomy_tier` on `rasa.lock.json`, read by
    `autonomy-rules.md`
+6. `TASK-058` — The spec fast-path's allowlist is checked by a program
+   (`spec-gate`), not by a model reading prose
 
 ## P4 — The production loop
 

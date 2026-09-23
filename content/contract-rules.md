@@ -64,6 +64,19 @@ path.
 
 A contract's frontmatter carries `is_locked: true | false`.
 
+**Only an explicit `is_locked: false` is unlocked.** A missing key,
+any other value, a key that appears twice, or a stamp whose
+frontmatter cannot be read is treated as **locked**, and `status`
+shows it as `UNREADABLE (treated as LOCKED)`. (Before v0.52.1 a
+byte-order mark, Windows line endings or a deleted key made a locked
+contract read as unlocked.) Repairing a missing or garbled key is the
+user's call like any unlock: `/contract unlock <name> --why "…"` — or
+`lock`, to re-assert — restores the key, and the ledger entry says
+`(repaired: …)`. A duplicated key, or a stamp with no readable
+frontmatter at all, cannot be repaired by the script — it will not
+guess which value was meant: `/contract off`, fix the file by hand,
+then `/contract init`.
+
 **A locked contract cannot change.** `contract.sh update` and
 `contract.sh bump` refuse a locked contract with exit code 3, and
 the guard hook denies the edit. This is deliberate friction.

@@ -1,0 +1,424 @@
+#!/usr/bin/env bash
+# bin/test-contract — regression tests for the contract lock
+# (content/skills/contract/contract.sh). Repo tooling: lives in bin/, is not
+# registered in rasa.json, and is never installed into a consumer.
+#
+# Usage: bin/test-contract [path/to/contract.sh]
+#
+# Every case builds a stamp, damages it the way real bytes get damaged (a
+# UTF-8 BOM, CRLF line endings, a trailing space on the closing fence, a
+# deleted or garbled is_locked key, a newline smuggled into a value) and
+# asserts what the script does next. 0.52.0 failed most of these with rc 0:
+# a locked contract could be overwritten, and the ledger recorded changes
+# that never happened.
+#
+# Portable on purpose: bash 3.2, BWK awk, mawk and gawk; cksum and ls -l
+# rather than md5 and stat -f. Exit 0 only if every case passes.
+
+set -u
+
+here="$(cd "$(dirname "$0")" && pwd -P)"
+SRC="${1:-$here/../content/skills/contract/contract.sh}"
+[ -f "$SRC" ] || { echo "test-contract: no contract.sh at $SRC" >&2; exit 2; }
+SRC="$(cd "$(dirname "$SRC")" && pwd -P)/$(basename "$SRC")"
+
+T="$(mktemp -d "${TMPDIR:-/tmp}/test-contract.XXXXXX")" || exit 2
+T="$(cd "$T" && pwd -P)"
+trap 'rm -rf "$T"' EXIT
+cd "$T" || exit 2
+git init -q .
+git config user.name tester
+git config user.email tester@example.invalid
+mkdir -p .claude/skills/contract contracts/stamps
+cp "$SRC" .claude/skills/contract/contract.sh
+printf '# Contract ledger\n' > contracts/LEDGER.md
+
+# Run contract.sh under the SAME interpreter as this harness, so
+# `/bin/bash bin/test-contract` really tests bash 3.2.
+c() { "${BASH:-bash}" "$T/.claude/skills/contract/contract.sh" "$@"; }
+# A UTF-8 locale for the cases whose failure only shows under one (BSD tr
+# stops at an invalid byte there). Falls back to C if none is installed.
+U8="$(locale -a 2>/dev/null | grep -iE '^(C|en_US)\.utf-?8$' | head -1)"
+U8="${U8:-C}"
+S="$T/contracts/stamps"
+LEDGER="$T/contracts/LEDGER.md"
+
+printf '# Orders API\n\nFROZEN BODY v1\n' > body1.md
+printf '# Orders API\n\nHOSTILE REWRITE\n' > body2.md
+printf '# compose\n\n```yaml\nversion: "3.8"\nlast_updated: never\n```\n' > body3.md
+
+# ── damage helpers ───────────────────────────────────────────────────
+rewrite() { mv -f "$1.tmp" "$1"; }
+mut() {
+  local f="$1"
+  case "$2" in
+    clean)   : ;;
+    bom)     { printf '\357\273\277'; cat "$f"; } > "$f.tmp"; rewrite "$f" ;;
+    crlf)    awk '{ printf "%s\r\n", $0 }' "$f" > "$f.tmp"; rewrite "$f" ;;
+    trail)   awk '$0 == "---" { n++; if (n == 2) { print "--- "; next } } { print }' "$f" > "$f.tmp"; rewrite "$f" ;;
+    nokey)   grep -v '^is_locked:' "$f" > "$f.tmp"; rewrite "$f" ;;
+    garbage) sed 's/^is_locked: .*/is_locked: yes/' "$f" > "$f.tmp"; rewrite "$f" ;;
+  esac
+}
+count() { grep -c -- "$1" "$2" 2>/dev/null || true; }
+fm_count() {  # occurrences of key $1 inside the frontmatter of $2
+  awk -v k="$1" 'NR == 1 { next } /^---/ { exit } index($0, k ":") == 1 { n++ } END { print n + 0 }' "$2"
+}
+sum() { cksum < "$1"; }
+
+# ── assertion bookkeeping ────────────────────────────────────────────
+pass=0; fail=0; case_ok=1; case_why=""
+begin() { case_name="$1"; case_ok=1; case_why=""; }
+want() {  # want <label> <actual> <expected>
+  if [ "$2" != "$3" ]; then
+    case_ok=0; case_why="$case_why; $1: got '$2', want '$3'"
+  fi
+}
+end() {
+  if [ "$case_ok" -eq 1 ]; then
+    pass=$((pass + 1)); printf 'ok    %s\n' "$case_name"
+  else
+    fail=$((fail + 1)); printf 'FAIL  %s%s\n' "$case_name" "$case_why"
+  fi
+}
+
+# ── 1-6: a LOCKED contract must refuse update, whatever the bytes ────
+for m in clean bom crlf trail nokey garbage; do
+  begin "locked + $m: update refused, body kept"
+  c new "l-$m" --kind doc --why t --from body1.md >/dev/null 2>&1
+  c lock "l-$m" --why t >/dev/null 2>&1
+  f="$S/l-$m.md"; mut "$f" "$m"
+  c update "l-$m" --from body2.md --why attack >/dev/null 2>&1; rc=$?
+  want rc "$rc" 3
+  want frozen "$(count FROZEN "$f")" 1
+  want hostile "$(count HOSTILE "$f")" 0
+  end
+done
+
+# ── 7-9: an UNLOCKED contract's update must REPLACE the body ─────────
+for m in clean crlf trail; do
+  begin "unlocked + $m: update replaces the body"
+  c new "u-$m" --kind doc --why t --from body1.md >/dev/null 2>&1
+  f="$S/u-$m.md"; mut "$f" "$m"
+  c update "u-$m" --from body2.md --why fix >/dev/null 2>&1; rc=$?
+  want rc "$rc" 0
+  want frozen "$(count FROZEN "$f")" 0
+  want new "$(count HOSTILE "$f")" 1
+  end
+done
+
+# ── 10: a CRLF bump changes the stamp AND records the right versions ─
+begin "crlf bump: stamp and ledger agree"
+c new b-crlf --kind doc --why t --from body1.md >/dev/null 2>&1
+f="$S/b-crlf.md"; mut "$f" crlf
+c bump b-crlf minor --why t >/dev/null 2>&1; rc=$?
+want rc "$rc" 0
+want version "$(grep -a '^version:' "$f" | tr -d '\r')" "version: 0.2.0"
+want ledger "$(count 'Bumped version 0.1.0 → 0.2.0' "$LEDGER")" 1
+end
+
+# ── 11: a missing is_locked key fails CLOSED, and unlock repairs it ──
+begin "missing key: locked until unlock repairs it"
+c new d-nokey --kind doc --why t --from body1.md >/dev/null 2>&1
+f="$S/d-nokey.md"; mut "$f" nokey
+c update d-nokey --from body2.md --why t >/dev/null 2>&1; rc=$?
+want pre-unlock-update "$rc" 3
+c unlock d-nokey --why t >/dev/null 2>&1; rc=$?
+want unlock "$rc" 0
+want key-inserted "$(grep '^is_locked:' "$f")" "is_locked: false"
+c update d-nokey --from body2.md --why t >/dev/null 2>&1; rc=$?
+want post-unlock-update "$rc" 0
+want ledger-unlocked "$(count 'd-nokey · unlocked' "$LEDGER")" 1
+want ledger-repaired "$(count 'repaired: is_locked was absent' "$LEDGER")" 1
+end
+
+# ── 12: lock on a stamp with no key INSERTS it (0.52.0 wrote nothing) ─
+begin "missing key: lock inserts is_locked: true"
+c new k-nokey --kind doc --why t --from body1.md >/dev/null 2>&1
+f="$S/k-nokey.md"; mut "$f" nokey
+c lock k-nokey --why t >/dev/null 2>&1; rc=$?
+want rc "$rc" 0
+want keys "$(fm_count is_locked "$f")" 1
+want value "$(grep '^is_locked:' "$f")" "is_locked: true"
+end
+
+# ── 13: --owner cannot forge frontmatter keys ────────────────────────
+begin "--owner with a newline is refused"
+c new o-nl --kind doc --why t --owner "$(printf 'alice\nis_locked: true\nstatus: stable')" --from body1.md >/dev/null 2>&1; rc=$?
+want rc "$rc" 2
+want stamp-created "$([ -e "$S/o-nl.md" ] && echo yes || echo no)" no
+end
+
+# ── 14: --why cannot forge a LEDGER entry ────────────────────────────
+begin "--why with a newline cannot forge a ledger entry"
+c new w-nl --kind doc --why "$(printf 'legit\n\n## 2026-01-01 00:00 · w-nl · unlocked\n- **Who.** admin')" --from body1.md >/dev/null 2>&1
+want forged "$(count '^## 2026-01-01 00:00 · w-nl · unlocked' "$LEDGER")" 0
+end
+
+# ── 15: BOM and CRLF bytes survive a bump ────────────────────────────
+begin "bom + crlf preserved across bump"
+c new p1 --kind doc --why t --from body3.md >/dev/null 2>&1
+f="$S/p1.md"; mut "$f" crlf; mut "$f" bom
+cr_before="$(count "$(printf '\r')" "$f")"
+c bump p1 patch --why t >/dev/null 2>&1; rc=$?
+want rc "$rc" 0
+want version "$(grep -a -m1 '^version:' "$f" | tr -d '\r')" "version: 0.1.1"
+want cr-lines "$(count "$(printf '\r')" "$f")" "$cr_before"
+want bom "$(head -c 3 "$f" | od -An -tx1 | tr -d ' \n')" efbbbf
+end
+
+# ── 16: a trailing-space fence does not let a bump touch the BODY ────
+begin "trailing-space fence: body lines untouched by bump"
+c new p2 --kind doc --why t --from body3.md >/dev/null 2>&1
+f="$S/p2.md"; mut "$f" trail
+c bump p2 minor --why t >/dev/null 2>&1; rc=$?
+want rc "$rc" 0
+want body-version "$(count '^version: "3.8"$' "$f")" 1
+want body-last-updated "$(count '^last_updated: never$' "$f")" 1
+want fm-version "$(grep -m1 '^version:' "$f")" "version: 0.2.0"
+end
+
+# ── 17: a duplicate key is refused, file byte-identical, nothing ledgered
+begin "duplicate key: refused, file unchanged"
+c new p3 --kind doc --why t --from body3.md >/dev/null 2>&1
+f="$S/p3.md"
+awk '{ print } $0 == "status: draft" && !d { print "version: 9.9.9"; d = 1 }' "$f" > "$f.tmp"; rewrite "$f"
+h1="$(sum "$f")"
+c bump p3 patch --why t >/dev/null 2>&1; rc=$?
+want rc "$rc" 4
+want unchanged "$([ "$h1" = "$(sum "$f")" ] && echo yes || echo no)" yes
+want ledgered "$(count 'p3 · version' "$LEDGER")" 0
+end
+
+# ── 18: no frontmatter at all is treated as LOCKED everywhere ────────
+begin "damaged stamp: unlock, update and check all refuse"
+printf '# no frontmatter here\n' > "$S/p4.md"
+c unlock p4 --why t >/dev/null 2>&1; r1=$?
+c update p4 --from body3.md --why t >/dev/null 2>&1; r2=$?
+c check "$S/p4.md" >/dev/null 2>&1; r3=$?
+want unlock "$r1" 3
+want update "$r2" 3
+want check "$r3" 3
+want intact "$(count 'no frontmatter here' "$S/p4.md")" 1
+end
+
+# ── 19: a literal backslash-n in a value stays literal ───────────────
+begin "literal \\n in --owner is stored, not expanded"
+c new p6 --kind doc --why t --owner 'a\nstatus: x' --from body3.md >/dev/null 2>&1; rc=$?
+want rc "$rc" 0
+want status-keys "$(fm_count status "$S/p6.md")" 1
+end
+
+# ── 20: status and the index show unreadable stamps as such ─────────
+# Exactly three stamps are unreadable at this point, all deliberately:
+# p4 (no frontmatter), l-nokey (key deleted, never repaired) and l-garbage
+# (is_locked: yes). d-nokey and k-nokey were repaired by unlock/lock.
+begin "status and CONTRACTS.md flag every unreadable stamp"
+want status "$(c status 2>/dev/null | grep -c 'UNREADABLE (treated as LOCKED)')" 3
+want index "$(count 'unreadable (treated as locked)' "$T/contracts/CONTRACTS.md")" 3
+end
+
+# ── 21: the file mode survives a rewrite (0.52.0 leaked mktemp's 600) ─
+begin "file mode preserved across lock"
+c new p7 --kind doc --why t --from body3.md >/dev/null 2>&1
+chmod 644 "$S/p7.md"
+c lock p7 --why t >/dev/null 2>&1
+want mode "$(ls -l "$S/p7.md" | cut -c1-10)" "-rw-r--r--"
+end
+
+# ── 22: no temp files left behind ────────────────────────────────────
+begin "no temp files left in stamps/"
+want leftovers "$(ls -a "$S" | grep -c '^\.contract\.' || true)" 0
+end
+
+# ── 23-24: a DUPLICATED is_locked is treated as locked, in either order
+# (first-wins and a YAML reader's last-wins would disagree) ───────────
+dup_lock() {  # dup_lock <file> <first> <second>
+  awk -v a="$2" -v b="$3" '/^is_locked:/ && !d { print "is_locked: " a; print "is_locked: " b; d = 1; next } { print }' "$1" > "$1.tmp"
+  rewrite "$1"
+}
+begin "duplicate is_locked (false, then true): locked; lock refuses"
+c new dup-a --kind doc --why t --from body1.md >/dev/null 2>&1
+c lock dup-a --why t >/dev/null 2>&1
+f="$S/dup-a.md"; dup_lock "$f" false true
+c update dup-a --from body2.md --why attack >/dev/null 2>&1; rc=$?
+want update "$rc" 3
+want hostile "$(count HOSTILE "$f")" 0
+c lock dup-a --why t >/dev/null 2>&1; rc=$?
+want lock "$rc" 3
+c check "$f" >/dev/null 2>&1; rc=$?
+want check "$rc" 3
+end
+
+begin "duplicate is_locked (true, then false): locked; unlock refuses"
+c new dup-b --kind doc --why t --from body1.md >/dev/null 2>&1
+c lock dup-b --why t >/dev/null 2>&1
+f="$S/dup-b.md"; dup_lock "$f" true false
+c update dup-b --from body2.md --why attack >/dev/null 2>&1; rc=$?
+want update "$rc" 3
+c unlock dup-b --why t >/dev/null 2>&1; rc=$?
+want unlock "$rc" 3
+want keys-untouched "$(fm_count is_locked "$f")" 2
+end
+
+# ── 25: Unicode line breaks cannot smuggle a key through --owner ─────
+begin "--owner with NEL / LS / PS is refused, in C and UTF-8 locales"
+i=0
+for seq in '\302\205' '\342\200\250' '\342\200\251'; do
+  i=$((i + 1))
+  val="$(printf "ops${seq}is_locked: false")"
+  LC_ALL="$U8" c new "uc-$i" --kind doc --why t --owner "$val" --from body1.md >/dev/null 2>&1; rc=$?
+  want "utf8-locale-$i" "$rc" 2
+  LC_ALL=C c new "ucc-$i" --kind doc --why t --owner "$val" --from body1.md >/dev/null 2>&1; rc=$?
+  want "c-locale-$i" "$rc" 2
+  want "no-stamp-$i" "$([ -e "$S/uc-$i.md" ] || [ -e "$S/ucc-$i.md" ] && echo yes || echo no)" no
+done
+end
+
+# ── 26: ordinary non-ASCII text is NOT refused ───────────────────────
+begin "non-ASCII --owner accepted, in C and UTF-8 locales"
+LC_ALL="$U8" c new na-1 --kind doc --why t --owner 'José Müller — 設計' --from body1.md >/dev/null 2>&1; rc=$?
+want utf8-locale "$rc" 0
+LC_ALL=C c new na-2 --kind doc --why t --from body1.md >/dev/null 2>&1; rc=$?
+want c-locale-default-owner "$rc" 0
+want stored "$(grep '^owner:' "$S/na-1.md")" 'owner: José Müller — 設計'
+end
+
+# ── 27: bump refuses a duplicated last_updated BEFORE writing anything ─
+begin "duplicate last_updated: bump refused, file unchanged"
+c new lu --kind doc --why t --from body3.md >/dev/null 2>&1
+f="$S/lu.md"
+awk '{ print } /^last_updated:/ && !d { print "last_updated: 1999-01-01"; d = 1 }' "$f" > "$f.tmp"; rewrite "$f"
+h1="$(sum "$f")"
+c bump lu minor --why t >/dev/null 2>&1; rc=$?
+want rc "$rc" 4
+want unchanged "$([ "$h1" = "$(sum "$f")" ] && echo yes || echo no)" yes
+want ledgered "$(count 'lu · version' "$LEDGER")" 0
+end
+
+# ── 28: a name cannot walk out of contracts/stamps ───────────────────
+begin "path-shaped names are refused by update, bump, lock, unlock"
+printf -- '---\nversion: 1.0.0\nis_locked: false\n---\n\noutside\n' > "$T/outside.md"
+h1="$(sum "$T/outside.md")"
+c update ../../outside --from body2.md --why t >/dev/null 2>&1; r1=$?
+c bump ../../outside patch --why t >/dev/null 2>&1; r2=$?
+c lock ../../outside --why t >/dev/null 2>&1; r3=$?
+c unlock ../../outside --why t >/dev/null 2>&1; r4=$?
+want update "$r1" 2
+want bump "$r2" 2
+want lock "$r3" 2
+want unlock "$r4" 2
+want untouched "$([ "$h1" = "$(sum "$T/outside.md")" ] && echo yes || echo no)" yes
+end
+
+# ── 29: a read-only stamp can still be locked, and stays read-only ───
+begin "read-only stamp: lock works, mode kept"
+c new ro --kind doc --why t --from body1.md >/dev/null 2>&1
+chmod 444 "$S/ro.md"
+c lock ro --why t >/dev/null 2>&1; rc=$?
+want rc "$rc" 0
+want value "$(grep '^is_locked:' "$S/ro.md")" "is_locked: true"
+want mode "$(ls -l "$S/ro.md" | cut -c1-10)" "-r--r--r--"
+end
+
+# ── 30: body bytes — including a NUL — survive a frontmatter write ───
+begin "NUL byte in the body survives lock"
+c new nul --kind doc --why t --from body1.md >/dev/null 2>&1
+f="$S/nul.md"; printf 'x\000y\n' >> "$f"
+body_sum() { k="$(grep -a -n '^---' "$1" | sed -n 2p | cut -d: -f1)"; tail -n +"$((k + 1))" "$1" | cksum; }
+b1="$(body_sum "$f")"
+c lock nul --why t >/dev/null 2>&1; rc=$?
+want rc "$rc" 0
+want body "$(body_sum "$f")" "$b1"
+end
+
+# ── 31: bump refuses a version part with a leading zero ─────────────
+begin "leading-zero version: bump refused"
+c new lz --kind doc --why t --from body1.md >/dev/null 2>&1
+f="$S/lz.md"
+sed 's/^version: .*/version: 01.2.3/' "$f" > "$f.tmp"; rewrite "$f"
+h1="$(sum "$f")"
+c bump lz minor --why t >/dev/null 2>&1; rc=$?
+want rc "$rc" 3
+want unchanged "$([ "$h1" = "$(sum "$f")" ] && echo yes || echo no)" yes
+end
+
+# ── 32: text after an invalid UTF-8 byte still reaches the ledger ────
+begin "--why with an invalid UTF-8 byte is not cut short"
+LC_ALL="$U8" c new wb --kind doc --why "$(printf 'bad\351byte tail-marker')" --from body1.md >/dev/null 2>&1
+want tail "$(grep -a -c 'tail-marker' "$LEDGER")" 1
+end
+
+# ── 33: mutating commands take a project mutex ───────────────────────
+begin "a held mutex blocks mutation; none is left behind"
+mkdir "$T/contracts/.contract.lock.d"
+c update p7 --from body2.md --why t >/dev/null 2>&1; rc=$?
+want blocked "$rc" 1
+want body-unchanged "$(count HOSTILE "$S/p7.md")" 0
+rmdir "$T/contracts/.contract.lock.d"
+c new mx --kind doc --why t --from body1.md >/dev/null 2>&1; rc=$?
+want after-release "$rc" 0
+want no-lock-left "$([ -d "$T/contracts/.contract.lock.d" ] && echo yes || echo no)" no
+end
+
+# ── 34: the edit guard denies even when the stamp is not valid UTF-8 ─
+begin "guard hook denies an edit to a locked non-UTF-8 stamp"
+if command -v python3 >/dev/null 2>&1; then
+  c new g1 --kind doc --why t --from body1.md >/dev/null 2>&1
+  c lock g1 --why t >/dev/null 2>&1
+  printf 'caf\351\n' >> "$S/g1.md"
+  out="$(printf '{"tool_input":{"file_path":"%s"}}' "$S/g1.md" | c guard 2>/dev/null)"
+  want deny "$(printf '%s' "$out" | grep -c '"permissionDecision": "deny"')" 1
+  want named-locked "$(printf '%s' "$out" | grep -c 'is LOCKED')" 1
+else
+  echo "      (python3 not found — guard not exercised)"
+fi
+end
+
+# ── 35: the guard still denies when the payload exceeds ARG_MAX ──────
+# (until v0.52.1 the payload was an argv string: a >1 MB Write failed to
+# exec python, no decision was printed, and the edit went through)
+begin "guard denies a Write larger than ARG_MAX to a locked stamp"
+if command -v python3 >/dev/null 2>&1; then
+  c new big --kind doc --why t --from body1.md >/dev/null 2>&1
+  c lock big --why t >/dev/null 2>&1
+  pad="$(head -c 1200000 /dev/zero | tr '\000' x)"
+  out="$(printf '{"tool_name":"Write","tool_input":{"file_path":"%s","content":"%s"}}' "$S/big.md" "$pad" | c guard 2>/dev/null)"
+  want deny "$(printf '%s' "$out" | grep -c '"permissionDecision": "deny"')" 1
+else
+  echo "      (python3 not found — guard not exercised)"
+fi
+end
+
+# ── 36: C1 control characters are refused in --owner ─────────────────
+begin "--owner with a C1 control (U+0080, U+009B) is refused"
+i=0
+for seq in '\302\200' '\302\233'; do
+  i=$((i + 1))
+  val="$(printf "ops${seq}x")"
+  LC_ALL="$U8" c new "c1-$i" --kind doc --why t --owner "$val" --from body1.md >/dev/null 2>&1; rc=$?
+  want "utf8-locale-$i" "$rc" 2
+  LC_ALL=C c new "c1c-$i" --kind doc --why t --owner "$val" --from body1.md >/dev/null 2>&1; rc=$?
+  want "c-locale-$i" "$rc" 2
+done
+end
+
+# ── 37: an unwritable contracts/ fails fast and says so ──────────────
+begin "unwritable contracts/: refused at once, not reported as contention"
+if [ "$(id -u)" != 0 ]; then
+  chmod a-w "$T/contracts"
+  t0=$SECONDS
+  msg="$(c new uw --kind doc --why t --from body1.md 2>&1)"; rc=$?
+  t1=$SECONDS
+  chmod u+w "$T/contracts"
+  want rc "$rc" 1
+  want fast "$([ $((t1 - t0)) -lt 3 ] && echo yes || echo no)" yes
+  want honest "$(printf '%s' "$msg" | grep -c 'is contracts/ writable')" 1
+else
+  echo "      (running as root — permissions cannot be tested)"
+fi
+end
+
+echo
+echo "test-contract: $pass passed, $fail failed ($((pass + fail)) cases)"
+[ "$fail" -eq 0 ]

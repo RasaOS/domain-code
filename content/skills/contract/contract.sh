@@ -72,6 +72,7 @@ EXIT CODES:
   1  operational error (missing file, no python3, write failure)
   2  usage error (bad flag, missing argument, bad value)
   3  refused (contract locked, name collision, precondition unmet)
+  4  refused: a frontmatter key appears more than once — repair by hand
 EOF
 }
 
@@ -132,55 +133,280 @@ valid_name() {
   esac
 }
 
-# Read a frontmatter value: fm_get <file> <key>.
+# ── frontmatter (0.52.1) ─────────────────────────────────────────
+# The Element-wide frontmatter contract lands in 0.53.0; until then these
+# helpers hold the same rules locally:
+#   * a UTF-8 BOM on line 1 and a CR at the end of any line are ignored
+#     when MATCHING, and preserved byte-for-byte when writing;
+#   * a fence is `---` followed only by blanks; the opening fence is line 1;
+#   * the first occurrence of a key wins, and a writer refuses a duplicate;
+#   * values reach awk through ENVIRON, never `awk -v` (which expands
+#     backslash escapes, so a literal \n became a real newline);
+#   * a write goes to a temp file in the same directory, is checked, then
+#     renamed — and is read back before anything is ledgered.
+FM_BOM="$(printf '\357\273\277')"; export FM_BOM
+
+# The awk preamble every reader/writer shares: `line` is $0 normalised for
+# matching; `raw` is what gets printed; `cr` is this line's own EOL marker.
+FM_AWK_NORM='
+  { raw = $0; line = $0
+    if (NR == 1 && substr(line, 1, 3) == ENVIRON["FM_BOM"]) line = substr(line, 4)
+    cr = ""; if (line ~ /\r$/) { cr = "\r"; sub(/\r$/, "", line) } }
+  function is_fence(l) { return l ~ /^---[ \t]*$/ }
+  function key_of(l,   k, r) {
+    k = ENVIRON["FM_K"]
+    if (substr(l, 1, length(k)) != k) return 0
+    r = substr(l, length(k) + 1)
+    return (r ~ /^[ \t]*:/)
+  }
+'
+
+# fm_value_ok <value> — a value may not introduce a line or carry controls.
+# Checked bytewise (C locale), so the verdict does not depend on the
+# caller's locale. Refused besides C0 controls and DEL: the C1 controls
+# U+0080–U+009F (which include NEL, a line break to a YAML 1.1 reader) and
+# the Unicode line/paragraph separators U+2028 and U+2029. Ordinary non-ASCII
+# text — é, —, CJK — passes.
+fm_value_ok() {
+  local LC_ALL=C
+  case "$1" in
+    *[[:cntrl:]]*|*$'\302'[$'\200'-$'\237']*|*$'\342\200\250'*|*$'\342\200\251'*) return 1 ;;
+  esac
+  return 0
+}
+
+# fm_clean <text> — for free text written to the LEDGER (--why): collapse
+# line breaks (including NEL/LS/PS) and tabs to one space, drop other control
+# characters. Bytewise throughout, so text after an invalid UTF-8 byte is
+# kept rather than silently cut.
+fm_clean() {
+  local nel ls ps
+  nel="$(printf '\302\205')"; ls="$(printf '\342\200\250')"; ps="$(printf '\342\200\251')"
+  printf '%s' "$1" | LC_ALL=C tr '\r\n\t' '   ' | LC_ALL=C tr -d '\000-\037\177' \
+    | LC_ALL=C sed "s/$nel/ /g; s/$ls/ /g; s/$ps/ /g; s/  */ /g; s/^ //; s/ \$//"
+}
+
+# fm_get <file> <key> — echo the value. rc 0 found (value may be empty),
+# rc 1 key absent, rc 3 no frontmatter or an unterminated block. The first
+# occurrence wins; with FM_STRICT=1 a key that appears twice is rc 4 instead
+# — used for is_locked, where first-wins and a YAML reader's last-wins would
+# disagree about the same bytes.
 fm_get() {
-  local file="$1" key="$2"
-  awk -v k="$key" '
-    NR==1 && $0=="---" { infm=1; next }
-    infm && $0=="---"  { exit }
-    infm {
-      if ($0 ~ "^"k":[[:space:]]*") {
-        sub("^"k":[[:space:]]*", "")
-        print
-        exit
-      }
+  FM_K="$2" LC_ALL=C awk "$FM_AWK_NORM"'
+    NR == 1 { if (!is_fence(line)) exit; open = 1; next }
+    open && is_fence(line) { closed = 1; exit }
+    open && key_of(line) {
+      if (found++) next
+      v = line; sub(/^[^:]*:[ \t]*/, "", v); sub(/[ \t]+$/, "", v)
+      val = v
     }
-  ' "$file"
+    END {
+      if (!closed) exit 3
+      if (!found)  exit 1
+      if (found > 1 && ENVIRON["FM_STRICT"] == "1") exit 4
+      print val
+    }
+  ' "$1"
 }
 
-# Rewrite a frontmatter value in place: fm_set <file> <key> <value>.
-# Only touches lines inside the frontmatter block.
+# fm_set <file> <key> <value> — UPSERT one key. Rewrites the key in place,
+# or INSERTS it before the closing fence when absent (0.52.0 had no insert
+# branch: setting a missing key exited 0 and wrote nothing — which is how
+# `lock` ledgered a lock that never happened). Refuses: a value with control
+# characters (rc 2), no/unterminated frontmatter (rc 3), a key that already
+# appears twice (rc 4). Reads the value back before returning 0.
 fm_set() {
-  local file="$1" key="$2" val="$3" tmp
-  tmp="$(mktemp)"
-  awk -v k="$key" -v v="$val" '
-    NR==1 && $0=="---" { infm=1; print; next }
-    infm && $0=="---"  { infm=0; print; next }
-    infm && $0 ~ "^"k":" { print k": "v; next }
-    { print }
-  ' "$file" > "$tmp" && mv "$tmp" "$file"
+  local file="$1" key="$2" val="$3" dir tmp nrf k ro rc=0
+  val="$(printf '%s' "$val" | sed 's/^[ 	]*//; s/[ 	]*$//')"
+  fm_value_ok "$val" || {
+    echo "error: refusing to write '$key' — the value contains a control character or line break" >&2
+    return 2; }
+  dir="$(dirname "$file")"
+  tmp="$(mktemp "$dir/.contract.XXXXXX")" || return 1
+  CONTRACT_TMP="$tmp"                                # removed by the trap on interrupt
+  nrf="$tmp.nr"
+  ro=""; [ "$(ls -ld "$file" | cut -c3)" = "-" ] && ro=1   # owner write bit, not access
+  cp -p "$file" "$tmp" 2>/dev/null || true          # carry the file mode
+  chmod u+w "$tmp" 2>/dev/null || true               # …but stay writable to us
+  # awk rewrites the frontmatter only and stops at the closing fence; the
+  # body is then copied byte-for-byte by tail. (Streaming the body through
+  # awk lost everything after a NUL byte on BWK awk.)
+  FM_K="$key" FM_V="$val" FM_NRF="$nrf" LC_ALL=C awk "$FM_AWK_NORM"'
+    NR == 1 { if (!is_fence(line)) { bad = 3; exit } ; open = 1; print raw; next }
+    open && is_fence(line) {
+      if (!done) print ENVIRON["FM_K"] ": " ENVIRON["FM_V"] cr
+      print raw; f = ENVIRON["FM_NRF"]; print NR > f; closed = 1; exit
+    }
+    open && key_of(line) {
+      if (++n > 1) { bad = 4; exit }
+      print ENVIRON["FM_K"] ": " ENVIRON["FM_V"] cr; done = 1; next
+    }
+    { print raw }
+    END { if (bad) exit bad; if (!closed) exit 3 }
+  ' "$file" > "$tmp" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    k="$(cat "$nrf" 2>/dev/null)"
+    case "$k" in ''|*[!0-9]*) rc=1 ;; esac
+  fi
+  [ "$rc" -eq 0 ] && { tail -n +"$((k + 1))" "$file" >> "$tmp" || rc=1; }
+  rm -f "$nrf"
+  if [ "$rc" -ne 0 ]; then
+    rm -f "$tmp"; CONTRACT_TMP=""
+    case "$rc" in
+      3) echo "error: $file has no readable frontmatter block — refusing to write '$key'" >&2 ;;
+      4) echo "error: $file declares '$key' more than once — refusing to guess; repair by hand" >&2 ;;
+      *) echo "error: rewriting $file failed (rc=$rc) — file unchanged" >&2 ;;
+    esac
+    return "$rc"
+  fi
+  [ -z "$ro" ] || chmod u-w "$tmp" 2>/dev/null || true   # restore read-only
+  mv -f "$tmp" "$file" || { rm -f "$tmp"; CONTRACT_TMP=""; return 1; }
+  CONTRACT_TMP=""
+  local got=""; got="$(fm_get "$file" "$key")" || true
+  [ "$got" = "$val" ] || {
+    echo "error: wrote '$key' to $file but read back '$got'" >&2; return 1; }
 }
 
-# Replace a stamp body (everything after the frontmatter) from a file.
-body_replace() {
-  local file="$1" bodyfile="$2" tmp
-  tmp="$(mktemp)"
-  awk '
-    NR==1 && $0=="---" { fm=1; print; next }
-    fm==1 && $0=="---" { print; exit }
-    { print }
-  ' "$file" > "$tmp"
-  printf '\n' >> "$tmp"
-  cat "$bodyfile" >> "$tmp"
-  mv "$tmp" "$file"
+# stamp_rewrite <file> <bodyfile> — replace everything after the closing
+# fence with <bodyfile>, and stamp last_updated, in ONE rename. 0.52.0 copied
+# the whole file when it could not find the fences (CRLF, a trailing space on
+# the fence) and then APPENDED the new body: rc 0, old and new body both kept.
+stamp_rewrite() {
+  local file="$1" bodyfile="$2" dir tmp ro rc=0
+  dir="$(dirname "$file")"
+  tmp="$(mktemp "$dir/.contract.XXXXXX")" || return 1
+  CONTRACT_TMP="$tmp"
+  ro=""; [ "$(ls -ld "$file" | cut -c3)" = "-" ] && ro=1
+  cp -p "$file" "$tmp" 2>/dev/null || true
+  chmod u+w "$tmp" 2>/dev/null || true
+  FM_K="last_updated" FM_V="$(now_date)" LC_ALL=C awk "$FM_AWK_NORM"'
+    NR == 1 { if (!is_fence(line)) { bad = 3; exit } ; open = 1; print raw; next }
+    open && is_fence(line) {
+      if (!done) print ENVIRON["FM_K"] ": " ENVIRON["FM_V"] cr
+      print raw; printf "%s\n", cr; closed = 1; exit
+    }
+    open && key_of(line) {
+      if (++n > 1) { bad = 4; exit }
+      print ENVIRON["FM_K"] ": " ENVIRON["FM_V"] cr; done = 1; next
+    }
+    { print raw }
+    END { if (bad) exit bad; if (!closed) exit 3 }
+  ' "$file" > "$tmp" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    rm -f "$tmp"; CONTRACT_TMP=""
+    case "$rc" in
+      3) echo "error: $file has no readable frontmatter block — body NOT replaced" >&2 ;;
+      4) echo "error: $file declares 'last_updated' more than once — body NOT replaced; repair by hand" >&2 ;;
+      *) echo "error: rewriting $file failed (rc=$rc) — body NOT replaced" >&2; return 1 ;;
+    esac
+    return "$rc"
+  fi
+  cat "$bodyfile" >> "$tmp" || { rm -f "$tmp"; CONTRACT_TMP=""; return 1; }
+  [ -z "$ro" ] || chmod u-w "$tmp" 2>/dev/null || true   # restore read-only
+  mv -f "$tmp" "$file" || { rm -f "$tmp"; CONTRACT_TMP=""; return 1; }
+  CONTRACT_TMP=""
 }
 
+# lock_state <name> — locked | unlocked | missing | invalid | duplicate |
+# damaged | none.
+#   missing    the frontmatter is readable but has no is_locked key
+#   invalid    is_locked holds something other than true/false
+#   duplicate  is_locked appears more than once (readers could disagree)
+#   damaged    no readable frontmatter block at all
+lock_state() {
+  local file val rc=0
+  file="$(stamp_path "$1")"
+  [ -f "$file" ] || { echo none; return 0; }
+  val="$(FM_STRICT=1 fm_get "$file" is_locked)" || rc=$?
+  case "$rc" in
+    0) ;;
+    1) echo missing; return 0 ;;
+    4) echo duplicate; return 0 ;;
+    *) echo damaged; return 0 ;;
+  esac
+  case "$val" in
+    true)  echo locked ;;
+    false) echo unlocked ;;
+    *)     echo invalid ;;
+  esac
+}
+
+# A lock that cannot be read is treated as LOCKED. Only an explicit
+# `is_locked: false` is unlocked. 0.52.0 compared `= "true"`, so a BOM, CRLF,
+# a missing key or a value like `yes` all read as UNLOCKED and `update`
+# overwrote a frozen contract with rc 0.
 is_locked() {
-  local file; file="$(stamp_path "$1")"
-  [ -f "$file" ] && [ "$(fm_get "$file" is_locked)" = "true" ]
+  local st; st="$(lock_state "$1")"
+  case "$st" in
+    unlocked|none) return 1 ;;
+    locked) return 0 ;;
+    missing|invalid)
+      echo "⚠ contract '$1': lock state is '$st' — treating it as LOCKED." >&2
+      echo "  To repair: /contract unlock $1 --why \"<reason>\"  (or: lock, to re-assert)" >&2
+      return 0 ;;
+    *)
+      echo "⚠ contract '$1': lock state is '$st' — treating it as LOCKED." >&2
+      echo "  Repair by hand: /contract off, fix the frontmatter, /contract init (see contract-rules.md)." >&2
+      return 0 ;;
+  esac
+}
+
+lock_label() {
+  case "$(lock_state "$1")" in
+    locked)   printf '🔒 locked' ;;
+    unlocked) printf 'unlocked' ;;
+    *)        printf '⚠ unreadable (treated as locked)' ;;
+  esac
 }
 
 contract_exists() { [ -f "$(stamp_path "$1")" ]; }
+
+# Every verb that takes a <name> builds a path from it, so a name like
+# `../../x` must never reach stamp_path (0.52.0 validated only in `new`).
+require_name() {
+  valid_name "$1" || {
+    echo "error: contract name must be kebab-case (lowercase, digits, hyphens)" >&2
+    return 2; }
+}
+
+# contract_mutex — one mutating /contract command at a time per project.
+# Without it, an `update` racing a `lock` could rename the pre-lock
+# frontmatter over the locked stamp: the ledger said "locked", the stamp was
+# not. mkdir is atomic and needs no flock (which stock macOS lacks).
+CONTRACT_MUTEX=""
+CONTRACT_TMP=""   # the in-flight temp file, removed if the run is interrupted
+
+# contract_cleanup — never fails, so it can never rewrite the exit status
+# of the verb it runs after (set -e applies inside traps too).
+contract_cleanup() {
+  if [ -n "$CONTRACT_TMP" ]; then rm -f "$CONTRACT_TMP" "$CONTRACT_TMP.nr" 2>/dev/null || true; fi
+  if [ -n "$CONTRACT_MUTEX" ]; then rmdir "$CONTRACT_MUTEX" 2>/dev/null || true; fi
+  CONTRACT_TMP=""; CONTRACT_MUTEX=""
+}
+
+contract_mutex() {
+  local cdir d i=0
+  cdir="$(contracts_dir 2>/dev/null)" || return 0
+  [ -d "$cdir/stamps" ] || return 0      # not initialized — the verb reports it
+  d="$cdir/.contract.lock.d"
+  until mkdir "$d" 2>/dev/null; do
+    if [ ! -d "$d" ]; then               # not contention: cannot create at all
+      echo "error: cannot create the /contract lock $d — is contracts/ writable?" >&2
+      return 1
+    fi
+    i=$((i + 1))
+    if [ "$i" -ge 50 ]; then
+      echo "error: another /contract command is running (lock: $d)." >&2
+      echo "  If none is, a crashed run left it behind — remove it: rmdir \"$d\"" >&2
+      return 1
+    fi
+    sleep 0.1 2>/dev/null || sleep 1
+  done
+  CONTRACT_MUTEX="$d"
+  trap 'contract_cleanup' EXIT
+  trap 'contract_cleanup; trap - EXIT; exit 130' INT
+  trap 'contract_cleanup; trap - EXIT; exit 143' TERM
+}
 
 # Bump a semver string: bump_semver <x.y.z> <major|minor|patch>.
 bump_semver() {
@@ -200,11 +426,14 @@ bump_semver() {
 ledger_append() {
   local name="$1" action="$2" what="$3" why="$4"
   local ledger; ledger="$(contracts_dir)/LEDGER.md"
+  # Every field is collapsed to one line: a newline in --why (or in a git
+  # user.name) used to append a forged `## … · unlocked` entry to an
+  # append-only ledger.
   {
     printf '\n## %s · %s · %s\n' "$(now_stamp)" "$name" "$action"
-    printf -- '- **Who.** %s\n'  "$(actor)"
-    printf -- '- **What.** %s\n' "$what"
-    printf -- '- **Why.** %s\n'  "$why"
+    printf -- '- **Who.** %s\n'  "$(fm_clean "$(actor)")"
+    printf -- '- **What.** %s\n' "$(fm_clean "$what")"
+    printf -- '- **Why.** %s\n'  "$(fm_clean "$why")"
   } >> "$ledger"
 }
 
@@ -215,15 +444,11 @@ regen_index() {
   index="$cdir/CONTRACTS.md"
   for f in "$cdir"/stamps/*.md; do
     [ -e "$f" ] || continue
-    name="$(fm_get "$f" name)"
-    kind="$(fm_get "$f" kind)"
-    ver="$(fm_get "$f" version)"
-    status="$(fm_get "$f" status)"
-    if [ "$(fm_get "$f" is_locked)" = "true" ]; then
-      locked="🔒 locked"
-    else
-      locked="unlocked"
-    fi
+    name="$(fm_get "$f" name || true)"
+    kind="$(fm_get "$f" kind || true)"
+    ver="$(fm_get "$f" version || true)"
+    status="$(fm_get "$f" status || true)"
+    locked="$(lock_label "$(basename "$f" .md)")"
     rows+="| $name | $kind | $ver | $status | $locked |"$'\n'
   done
   [ -n "$rows" ] || rows="| _(none yet)_ | | | | |"$'\n'
@@ -321,12 +546,16 @@ cmd_status() {
     [ -e "$f" ] || continue
     count=$((count + 1))
     local lk="—"
-    [ "$(fm_get "$f" is_locked)" = "true" ] && lk="LOCKED"
+    case "$(lock_state "$(basename "$f" .md)")" in
+      unlocked) lk="—" ;;
+      locked)   lk="LOCKED" ;;
+      *)        lk="UNREADABLE (treated as LOCKED)" ;;
+    esac
     printf '  %-22s %-9s %-9s %-10s %s\n' \
-      "$(fm_get "$f" name)" \
-      "$(fm_get "$f" kind)" \
-      "$(fm_get "$f" version)" \
-      "$(fm_get "$f" status)" \
+      "$(fm_get "$f" name || true)" \
+      "$(fm_get "$f" kind || true)" \
+      "$(fm_get "$f" version || true)" \
+      "$(fm_get "$f" status || true)" \
       "$lk"
   done
   [ "$count" -eq 0 ] && echo "  (no contracts yet)"
@@ -385,6 +614,9 @@ cmd_new() {
   file="$(stamp_path "$name")"
   today="$(now_date)"
   owner="${F_OWNER:-—}"
+  fm_value_ok "$owner" || {
+    echo "error: --owner may not contain a newline or control character" >&2
+    return 2; }
 
   {
     echo "---"
@@ -421,6 +653,7 @@ cmd_update() {
   local name="${1:-}"; shift || true
   parse_flags "$@" || return 2
   require_init || return 1
+  require_name "$name" || return 2
 
   contract_exists "$name" || {
     echo "error: no contract named '$name'" >&2; return 1; }
@@ -440,8 +673,7 @@ EOF
   fi
 
   local file; file="$(stamp_path "$name")"
-  body_replace "$file" "$F_FROM"
-  fm_set "$file" last_updated "$(now_date)"
+  stamp_rewrite "$file" "$F_FROM" || return $?
   ledger_append "$name" "updated" \
     "Replaced the body of '$name'." "$F_WHY"
   regen_index
@@ -453,6 +685,7 @@ cmd_bump() {
   local name="${1:-}" level="${2:-}"; shift 2 2>/dev/null || shift $#
   parse_flags "$@" || return 2
   require_init || return 1
+  require_name "$name" || return 2
 
   contract_exists "$name" || {
     echo "error: no contract named '$name'" >&2; return 1; }
@@ -467,12 +700,40 @@ cmd_bump() {
     return 3
   fi
 
-  local file old new
+  local file old new k krc part
   file="$(stamp_path "$name")"
-  old="$(fm_get "$file" version)"
+  # Both keys this verb writes must appear at most once BEFORE anything is
+  # written: a duplicate found by the second write used to leave the first
+  # applied and nothing ledgered, so every retry bumped again.
+  for k in version last_updated; do
+    krc=0; FM_STRICT=1 fm_get "$file" "$k" >/dev/null || krc=$?
+    case "$krc" in
+      3) echo "✗ contract: '$name' has no readable frontmatter — refusing to bump." >&2; return 3 ;;
+      4) echo "✗ contract: '$name' declares '$k' more than once — refusing to bump; repair by hand." >&2; return 4 ;;
+    esac
+  done
+  old="$(fm_get "$file" version)" || old=""
+  case "$old" in
+    *[!0-9.]*|""|.*|*.|*..*) old="" ;;
+  esac
+  if [ -n "$old" ] && [ "$(printf '%s' "$old" | tr -cd . | wc -c | tr -d ' ')" = 2 ]; then
+    # No leading zeros (bash would read 010 as octal) and no part so long
+    # that the arithmetic overflows.
+    for part in $(printf '%s' "$old" | tr . ' '); do
+      case "$part" in 0?*) old="" ;; esac
+      [ "${#part}" -le 9 ] || old=""
+    done
+  else
+    old=""
+  fi
+  if [ -z "$old" ]; then
+    echo "✗ contract: '$name' has no readable x.y.z version — refusing to bump." >&2
+    echo "  0.52.0 bumped from an empty read and ledgered a change that never happened." >&2
+    return 3
+  fi
   new="$(bump_semver "$old" "$level")"
-  fm_set "$file" version "$new"
-  fm_set "$file" last_updated "$(now_date)"
+  fm_set "$file" version "$new" || return $?
+  fm_set "$file" last_updated "$(now_date)" || return $?
   ledger_append "$name" "version" \
     "Bumped version $old → $new ($level)." "$F_WHY"
   regen_index
@@ -484,20 +745,28 @@ cmd_lock() {
   local name="${1:-}"; shift || true
   parse_flags "$@" || return 2
   require_init || return 1
+  require_name "$name" || return 2
 
   contract_exists "$name" || {
     echo "error: no contract named '$name'" >&2; return 1; }
   [ -n "$F_WHY" ] || { echo "error: --why <reason> is required" >&2; return 2; }
 
-  if is_locked "$name"; then
-    echo "contract: '$name' is already locked — no change."
-    return 0
-  fi
+  local st note=""; st="$(lock_state "$name")"
+  case "$st" in
+    locked)  echo "contract: '$name' is already locked — no change."; return 0 ;;
+    damaged) echo "✗ contract: '$name' has no readable frontmatter — cannot lock; repair by hand (see contract-rules.md)." >&2
+             return 3 ;;
+    duplicate) echo "✗ contract: '$name' declares is_locked more than once — treated as LOCKED; repair by hand (see contract-rules.md)." >&2
+             return 3 ;;
+    missing) note=" (repaired: is_locked was absent)" ;;
+    invalid) note=" (repaired: is_locked was '$(fm_get "$(stamp_path "$name")" is_locked || true)')" ;;
+  esac
   local file ver; file="$(stamp_path "$name")"
-  ver="$(fm_get "$file" version)"
-  fm_set "$file" is_locked true
+  ver="$(fm_get "$file" version || true)"
+  fm_set "$file" is_locked true || return $?
+  [ "$(lock_state "$name")" = locked ] || { echo "error: lock did not take" >&2; return 1; }
   ledger_append "$name" "locked" \
-    "Locked '$name' at v$ver." "$F_WHY"
+    "Locked '$name' at v$ver$note." "$F_WHY"
   regen_index
   echo "contract: 🔒 LOCKED '$name' (v$ver). Changes blocked until unlocked."
 }
@@ -506,20 +775,28 @@ cmd_unlock() {
   local name="${1:-}"; shift || true
   parse_flags "$@" || return 2
   require_init || return 1
+  require_name "$name" || return 2
 
   contract_exists "$name" || {
     echo "error: no contract named '$name'" >&2; return 1; }
   [ -n "$F_WHY" ] || { echo "error: --why <reason> is required" >&2; return 2; }
 
-  if ! is_locked "$name"; then
-    echo "contract: '$name' is already unlocked — no change."
-    return 0
-  fi
+  local st note=""; st="$(lock_state "$name")"
+  case "$st" in
+    unlocked) echo "contract: '$name' is already unlocked — no change."; return 0 ;;
+    damaged)  echo "✗ contract: '$name' has no readable frontmatter — cannot unlock safely; repair by hand (see contract-rules.md)." >&2
+              return 3 ;;
+    duplicate) echo "✗ contract: '$name' declares is_locked more than once — treated as LOCKED; repair by hand (see contract-rules.md)." >&2
+              return 3 ;;
+    missing)  note=" (repaired: is_locked was absent)" ;;
+    invalid)  note=" (repaired: is_locked was '$(fm_get "$(stamp_path "$name")" is_locked || true)')" ;;
+  esac
   local file ver; file="$(stamp_path "$name")"
-  ver="$(fm_get "$file" version)"
-  fm_set "$file" is_locked false
+  ver="$(fm_get "$file" version || true)"
+  fm_set "$file" is_locked false || return $?
+  [ "$(lock_state "$name")" = unlocked ] || { echo "error: unlock did not take" >&2; return 1; }
   ledger_append "$name" "unlocked" \
-    "Unlocked '$name' (v$ver)." "$F_WHY"
+    "Unlocked '$name' (v$ver)$note." "$F_WHY"
   regen_index
   echo "contract: 🔓 unlocked '$name' (v$ver). Changes permitted."
 }
@@ -559,23 +836,25 @@ cmd_check() {
 
 # ── guard (PreToolUse hook handler) ──────────────────────────────
 cmd_guard() {
-  # Hook-safe: on any uncertainty, allow (exit 0). The script-level
-  # lock check is the hard guarantee; this hook catches the common
-  # case — an agent reaching for Edit/Write on a contract file.
+  # Hook-safe: an unparseable payload, or a path outside contracts/, is
+  # allowed (exit 0). The script-level lock check is the hard guarantee;
+  # this hook catches the common case — an agent reaching for Edit/Write on
+  # a contract file. Once a payload points under contracts/, every failure —
+  # including python failing to start — must still DENY.
   local root; root="$(repo_root 2>/dev/null)" || exit 0
   command -v python3 >/dev/null 2>&1 || exit 0
 
-  # Read the PreToolUse payload from stdin here — the heredoc below
-  # is python's program, so it can't also be python's stdin. Pass
-  # the payload as an argv string instead.
-  local payload; payload="$(cat)"
-
-  python3 - "$root" "$payload" <<'PY'
+  # The payload travels on python's STDIN, never in argv: until v0.52.1 it
+  # was an argv string, and a Write of more than ARG_MAX (~1 MB on macOS,
+  # 128 KiB per argument on Linux) failed to exec python — no decision was
+  # printed, and the edit went through. The program itself is small.
+  local prog payload out prc=0
+  IFS= read -r -d '' prog <<'PY' || true
 import json, os, re, sys
 
 root = os.path.realpath(sys.argv[1])
 try:
-    data = json.loads(sys.argv[2])
+    data = json.loads(sys.stdin.read())
 except Exception:
     sys.exit(0)  # unparseable — allow, don't break the session
 
@@ -596,13 +875,17 @@ stamps = os.path.join(root, "contracts", "stamps") + os.sep
 locked_name = None
 if ap.startswith(stamps) and ap.endswith(".md"):
     name = os.path.basename(ap)[:-3]
+    # Any failure to read the stamp must still reach the deny below: until
+    # v0.52.1 a stamp that was not valid UTF-8 raised UnicodeDecodeError,
+    # the hook crashed without printing a decision, and the edit went
+    # through. The deny itself never depended on this read.
     try:
-        with open(ap, encoding="utf-8") as fh:
+        with open(ap, encoding="utf-8", errors="replace") as fh:
             txt = fh.read()
         m = re.search(r"^is_locked:\s*(\S+)", txt, re.M)
         if m and m.group(1).strip() == "true":
             locked_name = name
-    except FileNotFoundError:
+    except Exception:
         pass
 
 if locked_name:
@@ -627,6 +910,19 @@ print(json.dumps({"hookSpecificOutput": {
     "permissionDecisionReason": reason,
 }}))
 PY
+
+  payload="$(cat)"
+  out="$(printf '%s' "$payload" | python3 -c "$prog" "$root" 2>/dev/null)" || prc=$?
+  if [ "$prc" -eq 0 ]; then
+    [ -z "$out" ] || printf '%s\n' "$out"
+    exit 0
+  fi
+  # python could not decide. Fail CLOSED for anything that names contracts/.
+  case "$payload" in
+    *contracts/*)
+      printf '%s\n' '{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "The contract guard could not evaluate this edit of a path under contracts/, so it is denied. Files under contracts/ are managed through /contract: use /contract new|update|bump|lock|unlock with --from."}}'
+      ;;
+  esac
   exit 0
 }
 
@@ -638,6 +934,10 @@ main() {
   case "$action" in
     -h|--help|help|"") usage; return 0 ;;
     guard) cmd_guard ;;  # reads stdin; no repo-root preamble noise
+  esac
+
+  case "$action" in
+    new|update|bump|lock|unlock) contract_mutex || return 1 ;;
   esac
 
   case "$action" in
