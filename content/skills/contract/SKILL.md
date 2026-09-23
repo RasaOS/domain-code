@@ -75,7 +75,8 @@ bash <skill-dir>/contract.sh init
 
 bash <skill-dir>/contract.sh status
     List every contract (name, kind, version, status, lock) and
-    whether the guard hook is installed.
+    whether the guard hook is installed. A lock that cannot be read
+    shows as UNREADABLE (treated as LOCKED).
 
 bash <skill-dir>/contract.sh new <name> --kind <schema|endpoint|doc>
         --why <reason> [--from <body-file>] [--owner <name>]
@@ -88,10 +89,12 @@ bash <skill-dir>/contract.sh bump <name> <major|minor|patch> --why <reason>
     Bump the version. Refused if locked.
 
 bash <skill-dir>/contract.sh lock <name> --why <reason>
-    Freeze the contract. Refused changes until unlocked.
+    Freeze the contract. Refused changes until unlocked. Restores a
+    missing or garbled is_locked key (ledgered as "repaired").
 
 bash <skill-dir>/contract.sh unlock <name> --why <reason>
-    Permit changes again.
+    Permit changes again. Also the repair for an unreadable lock —
+    the user's call, like any unlock.
 
 bash <skill-dir>/contract.sh check <path>
     Exit 3 if <path> is a locked contract, else 0. Pre-flight

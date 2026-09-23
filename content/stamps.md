@@ -198,7 +198,7 @@ The `var_name` ↔ runtime stamp `env.required` link is by name, not enforced. D
 | `kind` | yes | enum | `schema` / `endpoint` / `doc` — the contract discriminator. |
 | `version` | yes | string (`MAJOR.MINOR.PATCH`) | Contract version. Bumped deliberately via `/contract bump`. |
 | `status` | yes | enum | `draft` / `active` / `deprecated` |
-| `is_locked` | yes | bool | `true` = frozen. A locked contract cannot change until `/contract unlock`. |
+| `is_locked` | yes | bool | `true` = frozen; only an explicit `false` is unlocked. Absent, any other value, a duplicated key, or unreadable frontmatter is treated as locked. A locked contract cannot change until `/contract unlock`. |
 | `created` | yes | date (YYYY-MM-DD) | When the contract was created. |
 | `last_updated` | yes | date (YYYY-MM-DD) | When the body or version last changed. |
 | `owner` | no | string | The repo or team that owns this contract. Forward-looking for cross-repo linking. |

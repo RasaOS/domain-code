@@ -24,6 +24,72 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.52.1 — 2026-09-23
+
+### A locked contract now stays locked, whatever bytes its stamp holds
+
+`/contract`'s lock is the one mechanism that freezes a load-bearing
+definition. On v0.52.0 it failed **open**: a UTF-8 BOM, CRLF line endings, a
+deleted `is_locked` line or a value like `yes` all read as *unlocked*, so
+`update` overwrote a frozen contract and exited 0. The rest of the same code
+was no safer:
+
+- an unlocked `update` on a CRLF stamp, or one with a trailing space on the
+  closing fence, **appended** the new body instead of replacing it;
+- a CRLF `bump` ledgered a version change that never reached the stamp;
+- a duplicate `version:` key had both lines rewritten;
+- `lock` on a stamp with no `is_locked` key ledgered "locked" and wrote
+  nothing;
+- a newline in `--owner` forged frontmatter keys, and a newline in `--why`
+  forged an entry in the append-only ledger;
+- **the edit guard failed open**: a locked stamp that was not valid UTF-8,
+  or a Write larger than the command-line limit (the payload was passed to
+  python as an argument), made the `PreToolUse` hook exit without printing a
+  decision, so the edit went through;
+- `update`, `bump`, `lock` and `unlock` accepted a path-shaped name such as
+  `../../x` and rewrote files outside `contracts/`;
+- an `update` racing a `lock` could land the pre-lock frontmatter over the
+  locked stamp, leaving the ledger saying "locked" and the stamp unlocked;
+- every rewrite left the stamp at mode 600, and `lock` streamed the body
+  through awk, which drops text after a NUL byte on macOS.
+
+**Now** readers tolerate a BOM, CRLF and blanks after a fence and take the
+first occurrence of a key; the writer is an upsert that rewrites only the
+frontmatter, copies the body byte for byte, preserves mode (read-only
+included), refuses control characters (C0 and C1), the Unicode line and paragraph
+separators and duplicate keys, renames atomically and reads the value back. **Only an
+explicit `is_locked: false` is unlocked** — missing, invalid, duplicated or
+unreadable is treated as locked, and `status` says so. `lock` and `unlock`
+repair a missing or invalid key and ledger the repair; a duplicated key or a
+stamp with no readable frontmatter is refused with hand-repair steps (see
+`contract-rules.md`). Every name is validated; mutating commands take a
+per-project mutex; the guard reads its payload from stdin and denies on
+any failure once a path is under `contracts/`. PR #7 was the
+specification; its code was not reused. A new exit code, 4, means a key
+appears more than once.
+
+`bin/test-contract` (37 cases) now runs in CI on ubuntu (mawk) and on stock
+macOS bash 3.2. The same test fails 30 of 37 against v0.52.0.
+
+#### Also in this release
+
+- **The release record is complete.** Eight shipped changes that the
+  v0.50.0 and v0.52.0 entries below never mentioned are listed there now,
+  and v0.51.0 carries a known-issue note. The v0.51.0 and v0.52.0 tags are
+  to be pushed alongside this release.
+- **CI validates `rasa.json` against `RasaOS/schema`.** The job named
+  "manifest + schema" never ran the validator; it does now, as a hard gate.
+
+#### Upgrading
+
+Nothing to migrate. No installed copy holds a contract stamp today, and
+stamps written by v0.52.0 read correctly. A stamp whose lock was already
+unreadable now shows `UNREADABLE (treated as LOCKED)`; repair it with
+`/contract unlock <name> --why "…"`. `bin/test-contract` is repo tooling and
+is not installed, so this is a patch.
+
+---
+
 ## v0.52.0 — 2026-09-21
 
 ### The spec fast-path's allowlist is now checked by a program
@@ -72,9 +138,28 @@ mechanical answer that fails closed plus a contract requiring it — a hardened
 convention, not enforcement. Real enforcement is branch protection on the
 remote: the consumer's repo setting, outside this Element.
 
+#### Also in this release (listed 2026-09-23; omitted when 0.52.0 shipped)
+
+- **TASK-056** (`65ce6d7`) — a `$(cmd || echo unknown)` fallback wrote a
+  stray `unknown` line into two ledgers in a commit-less repo.
+- **TASK-025** (`a6bc272`) — a brownfield carve-out in `test-rules.md`
+  sanctioning characterization tests, plus the `/pin-behavior` skill.
+- **TASK-057** (`a6252fd`) — `/wrangle` files its remediation plan into
+  `tasks/` instead of only rendering it.
+- **TASK-023** (`5744521`) — re-scoped: the report template gains an
+  Evidence section, so the `/goal` evaluator has something falsifiable to
+  read. The evaluator is still not independent; it runs no tools.
+- `773d89b` — `bin/init` writes a valid lockfile in a commit-less repo.
+- `aea240e` — one `rev-parse` idiom across the Element.
+
 ---
 
 ## v0.51.0 — 2026-09-20
+
+> **Known issue (noted 2026-09-23).** Like every version from v0.42.1
+> (`93803ad`) on, v0.51.0 predates `773d89b`: `bin/init` run from a source
+> checkout with no commits writes an invalid `.claude/rasa.lock.json`. Fixed
+> in v0.52.0.
 
 ### /peer-review reads the PR again, and no longer forms its own verdict
 
@@ -199,6 +284,15 @@ Nothing to do. **Every new field is optional** with a declared default —
 the full table is in `task-rules.md` "Backwards compatibility". No existing
 task file becomes invalid and none needs re-filing, which is why this is a
 MINOR. Required fields would have been a MAJOR under this Element's own rule.
+
+#### Also in this tag (listed 2026-09-23; omitted when 0.50.0 shipped)
+
+- **TASK-019** (`a4747c9`) — one actor identity at six provenance sites:
+  `RASA_ACTOR`, then `git config user.name`, then the OS user. Nothing sets
+  `RASA_ACTOR` yet, so agent runs still record the git name.
+- **TASK-020** (`d3a055a`, partial) — `runs.sh`, the run ledger: the
+  autonomy report can be recorded, not only rendered. No skill calls it yet,
+  so the task stays open.
 
 ---
 

@@ -14,6 +14,22 @@ jobs:
       - name: rasa.json is a complete inventory
         run: bash bin/check-manifest
 
+      # Hard gate. This job has been named "manifest + schema" but, until
+      # v0.52.1, never ran the schema validator: check-manifest checks the
+      # inventory, not the Connection Contract. Validate against the
+      # canonical schema, pinned to a tag so a schema change is adopted on
+      # purpose, not inherited silently.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: rasa.json validates against RasaOS/schema
+        run: |
+          set -euo pipefail
+          git clone --quiet --depth 1 --branch v0.2.0 https://github.com/RasaOS/schema.git "$RUNNER_TEMP/schema"
+          python -m pip install --quiet jsonschema
+          python "$RUNNER_TEMP/schema/bin/validate" rasa.json
+
       # Hard gate on the --intent check. A command in shipped docs is a
       # command a consumer pastes; if it cannot run, the docs are wrong in
       # the most expensive way. v0.45.0 made --intent mandatory and left 12
@@ -46,6 +62,17 @@ jobs:
           done < <(find content -name '*.sh' -type f; find bin -type f -perm -u+x)
           exit "$fail"
 
+      # The contract lock under mawk — the awk most Linux consumers get.
+      # Forced through a PATH shim so the result does not depend on which
+      # awk this runner image happens to default to.
+      - name: Contract lock tests (mawk)
+        run: |
+          set -euo pipefail
+          command -v mawk >/dev/null || sudo apt-get install -y mawk
+          shim="$(mktemp -d)"
+          ln -s "$(command -v mawk)" "$shim/awk"
+          PATH="$shim:$PATH" bash bin/test-contract
+
   macos:
     name: runs on stock macOS bash
     runs-on: macos-latest
@@ -63,6 +90,11 @@ jobs:
 
       - name: Portability gate runs
         run: /bin/bash bin/check-bash32
+
+      # The contract lock under stock bash 3.2 and BWK awk. test-contract
+      # runs contract.sh with its own interpreter, so this IS bash 3.2.
+      - name: Contract lock tests (bash 3.2)
+        run: /bin/bash bin/test-contract
 
       # The approval gate must (a) auto-approve under FORCE_APPROVAL=1 and
       # (b) fail CLOSED with no controlling terminal. A CI runner has no
