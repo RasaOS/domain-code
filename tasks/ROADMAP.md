@@ -45,6 +45,10 @@ Tasks are filed as **stubs** per `content/task-rules.md` ("Adding tasks
 to the backlog"): full specs are expanded close to implementation, not
 at filing time. A task is fully specced when it moves to `tasks/active/`.
 
+Which task covers which of the 38 surviving gaps is tracked in
+`docs/audits/2026-09-20-v0.48.1/gap-coverage.md`. Update it in the same
+change that completes or files a covering task.
+
 ---
 
 ## P1 — Fail-closed defaults
@@ -71,6 +75,8 @@ is this soft.
    to match the rule it ships
 7. `TASK-055` — The `bin/lint` release gate is red on `main` (14
    pre-existing findings); found while verifying TASK-013
+8. `TASK-059` — Keep the program audit's gap-to-task coverage in the
+   repository (`docs/audits/`)
 
 ## P2 — The run record
 
