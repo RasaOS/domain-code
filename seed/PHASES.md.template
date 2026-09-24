@@ -1,11 +1,16 @@
 # Phases
 
-High-level phase-only roadmap for this project. Each phase has a
-**name**, a **scope paragraph** (2–4 sentences), and a status. The
-ordered task list for each phase lives in [`ROADMAP.md`](ROADMAP.md).
+An optional narrative view of this project's phases — a status and
+the longer story for each. It is **not authoritative**:
+[`ROADMAP.md`](ROADMAP.md) is the phase registry. Every phase is
+declared there as a `## Phase <id> — <name>` heading with its scope
+paragraph and ordered task list, and `.claude/bin/check-tasks`
+checks every task's `phase:` against it — never against this file.
+Keep its phase ids equal to ROADMAP's; where the two disagree,
+ROADMAP wins.
 
 This file answers "what's the big picture?" — `ROADMAP.md` answers
-"what's in flight?".
+"what's in each phase?".
 
 ---
 
@@ -25,8 +30,9 @@ infrastructure or process) can interleave.
 **Status:** 📋 Queued
 
 **Scope.** {{2–4 SENTENCE SCOPE PARAGRAPH. What's in this phase? What's
-NOT? What does success look like? Be specific enough that any task
-proposed for this phase can be evaluated against this paragraph.}}
+NOT? What does success look like? The binding scope is the paragraph
+under this phase in `ROADMAP.md`; say it the same way here, or say
+more.}}
 
 ---
 
@@ -39,6 +45,7 @@ proposed for this phase can be evaluated against this paragraph.}}
 ---
 
 *(Add phases as the project evolves. Use `/plan` to think through new
-phases conversationally; use `/task` to file tasks under existing
-phases. Don't create empty phases speculatively — a phase exists
-because it has work in it.)*
+phases conversationally; declare each one in `ROADMAP.md` first
+(`/task phase`), then mirror it here. Use `/task` to file tasks under
+existing phases. Don't create empty phases speculatively — a phase
+exists because it has work in it.)*

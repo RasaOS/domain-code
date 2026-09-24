@@ -1,15 +1,15 @@
 ---
 id: TASK-056
-category: bug
+type: defect
+created: 2026-09-21
+created_by: chazzcoin
+updated: 2026-09-21
 phase: P1
-status: completed
-owner: unassigned
-blocked_by:
-outcome: shipped
-filed: 2026-09-21 04:15 UTC
-origin: manual
+completed_by: chazzcoin
+x-origin: manual
+x-outcome: shipped
+x-owner: unassigned
 ---
-
 # TASK-056: `$(cmd || echo unknown)` corrupts two ledgers
 
 **User story.** As an **auditor**, I want **every ledger record to be

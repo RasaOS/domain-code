@@ -15,10 +15,11 @@ things a future reader needs to navigate the project's history.
 
 ## Maintenance rule
 
-Per `task-rules.md`'s "Audit log" section: every batch closing
-report appends entries here for each task that landed and each
-deploy that shipped. Process changes (new rules in
-`task-rules.md`, new conventions) get their own entries.
+Per `code-task-rules.md` §12 (the audit log): every batch closing
+report appends entries here for each task that reached
+`completed/` and each deploy that shipped. Process changes (the
+task rules, `code-task-rules.md`, `.claude/done-gate.md`, new
+conventions) get their own entries.
 
 The format is loose on purpose — readability beats parseability.
 What matters: date, what changed, link to the PR / tag /

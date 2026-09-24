@@ -4,10 +4,10 @@ How we create, update, and run scripts in the kit. Read this file
 before writing any script — whether it ships inside a skill folder
 (`kit/skills/<name>/<name>.sh`), inside `bin/`, or anywhere else.
 
-Sits alongside `task-rules.md` (process) and `craft-rules.md` (code
-quality). This file is specifically about **scripts as a way to lock
-down the mechanics of an operation** so the AI doesn't re-interpret
-plumbing on every invocation.
+Sits alongside `task-rules.md` + `code-task-rules.md` (process) and
+`craft-rules.md` (code quality). This file is specifically about
+**scripts as a way to lock down the mechanics of an operation** so the
+AI doesn't re-interpret plumbing on every invocation.
 
 > **Why this file exists.** A skill that the AI re-interprets every
 > time will drift. The mechanics — where files go, what order, what

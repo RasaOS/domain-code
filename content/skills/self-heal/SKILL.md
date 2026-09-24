@@ -149,9 +149,10 @@ The branch name is `feat/self-heal-<scope-slug>` (e.g.
 ## What "done" looks like for a /self-heal session
 
 A `feat/self-heal-<scope-slug>` branch with one commit per fix,
-every fix's task spec in `tasks/completed/`, **two consecutive clean
-verification re-walks** with zero in-scope issues remaining, and
-a **draft PR** open for review. The autonomy report names every
+every fix's task in `tasks/active/` with its criteria met (a draft
+PR is still `active/`; `completed/` waits for the done-gate and the
+merge), **two consecutive clean verification re-walks** with zero
+in-scope issues remaining, and a **draft PR** open for review. The autonomy report names every
 issue fixed, every assumption made (especially redesigns the
 skill declined to execute silently), and any out-of-scope
 findings surfaced for follow-on. Merge to main remains the

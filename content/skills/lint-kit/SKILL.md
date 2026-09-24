@@ -237,10 +237,11 @@ The output rendered by `bin/lint`:
 ## Edge cases
 
 - **README.md and other intentionally-cross-cutting files.** The
-  kit's `README.md`, `CLAUDE.md.template`, `task-template.md`,
-  `release-rules.md`, `output-rules.md`, and `output-styles.md` are
-  *expected* to mention multiple platforms side-by-side as
-  reference. The linter knows about these and applies a severity
+  Element's `README.md`, `CLAUDE.md.template`, `code-task-rules.md`,
+  `done-gate.md.template`, `release-rules.md`, `output-rules.md`,
+  and `output-styles.md` are *expected* to mention multiple
+  platforms side-by-side as reference. The linter knows about
+  these and applies a severity
   floor drop (HIGH → MEDIUM in those files). If the user disagrees
   with a finding in one of these files, default to "leave it."
 - **A genuine cross-platform skill mentions platform-specific

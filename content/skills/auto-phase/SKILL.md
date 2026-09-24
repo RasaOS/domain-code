@@ -39,15 +39,16 @@ for the whole phase.
   the phase's new specs and auto-merges a `spec-only` PR to
   `main` when the working tree contains *only* allowlisted spec
   files (`tasks/**/*.md`, `tasks/PHASES.md`, `tasks/ROADMAP.md`,
-  `tasks/RELEASES.md`). A whole-phase fast-path is a *single* PR
-  carrying every new spec, not one PR per spec. If any non-spec
-  file is dirty, fall back to "leave uncommitted" — and the
-  autonomy report says why.
+  `tasks/RELEASES.md`, `tasks/history.tsv`). A whole-phase
+  fast-path is a *single* PR carrying every new spec, not one PR
+  per spec. If any non-spec file is dirty, fall back to "leave
+  uncommitted" — and the autonomy report says why.
 - **Watch for phase-collision.** Other in-flight branches may
   already have task numbers reserved against the same phase.
-  `/auto-phase` assigns `TASK-NNN` sequentially from
-  `tasks/ROADMAP.md` — if a feature branch has reserved numbers
-  the local roadmap doesn't yet know about, collisions surface
+  Any task `/auto-phase` files gets its `TASK-NNN` from
+  `.claude/bin/task new`, which allocates from the local
+  `tasks/history.tsv` and disk — if a feature branch has filed
+  ids the local ledger doesn't yet know about, collisions surface
   on merge. The fast-path doesn't make this worse than committing
   by hand; just be aware.
 
@@ -58,7 +59,9 @@ for the whole phase.
    absent — the current active phase in `tasks/PHASES.md`.
 3. **Walk every stub in the phase.** For each, run the autonomous
    expansion: full recon, open questions decided and flagged,
-   full spec written via `task-template.md`.
+   full spec written over the stub in the shape of
+   `.claude/task-templates/<type>.md`, then
+   `.claude/bin/check-tasks --fix` (I-34).
 4. **Propose a working order** with dependency analysis, as
    `/spec-phase` does.
 5. **Spec-file fast-path** (per `autonomy-rules.md` Exception 2).

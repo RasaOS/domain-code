@@ -1,6 +1,6 @@
 ---
 name: release-plan
-description: Create a release before anything is in it, and target phases and tasks at it. Targeting is fluid — any task status, freely moved between releases, changed at will. It does NOT put work into a release; only `/release-add` does that, and only for completed work. Use for "/release-plan", "create v1.3.0", "plan the next release", "what's slated for v1.3.0", "move this to the next release", "target this at 1.4".
+description: Create a release before anything is in it, and target phases and tasks at it. Targeting is fluid — any task stage, freely moved between releases, changed at will. It does NOT put work into a release; only `/release-add` does that, and only for completed work. Use for "/release-plan", "create v1.3.0", "plan the next release", "what's slated for v1.3.0", "move this to the next release", "target this at 1.4".
 ---
 
 # /release-plan — declare a release, then aim work at it
@@ -9,7 +9,7 @@ Two layers, and the distinction is the whole point:
 
 | | |
 |---|---|
-| **Targeted** | Fluid. Any task status — backlog, active, blocked. Moved freely. This skill. |
+| **Targeted** | Fluid. Any task stage — backlog, active, review, blocked. Moved freely. This skill. |
 | **Bundled** | Committed. Requires completed work. `/release-add`. |
 
 A release exists as an empty container the moment you name it. You aim
@@ -42,11 +42,11 @@ releases.
 
 ## Rules you enforce
 
-- **Never gate targeting on task status.** A backlog task, an active
-  task, a blocked task can all be targeted. That is the fluidity the
-  feature exists for. If you find yourself wanting to check whether
-  something is done before targeting it, you are thinking of
-  `/release-add`.
+- **Never gate targeting on a task's stage.** A backlog task, an active
+  task, a task in review, a blocked task can all be targeted. That is
+  the fluidity the feature exists for. If you find yourself wanting to
+  check whether something is done before targeting it, you are
+  thinking of `/release-add`.
 - **Refuse to target into a shipped release.** The engine refuses; say
   why rather than restating the error — a shipped release is frozen, and
   its manifest is also in the annotated tag where it cannot be edited at
@@ -54,10 +54,10 @@ releases.
 - **Bundled work moves with `/release-add`, not here.** The engine
   refuses and names the release it is bundled into.
 - **Do not put a `release:` field in a task's frontmatter.** The mapping
-  lives in `tasks/RELEASES.md`, one place, deliberately —
-  `task-rules.md:514-515` gives the reason for phases and it applies
-  identically here. A field in 12 task files is 12 files to edit when a
-  release slips.
+  lives in `tasks/RELEASES.md`, one place, deliberately — see
+  `release-rules.md` "No `release:` field on tasks". A field in 12 task
+  files is 12 files to edit when a release slips, and `release` is not a
+  key the task validator knows, so it is an error anyway (I-11).
 
 ## Versions
 

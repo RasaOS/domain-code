@@ -124,7 +124,8 @@ enumerate_sources() {
 #                token \t cleaned_text
 #
 # Inherently cross-cutting files (CLAUDE.md template, batch-handoff,
-# release-rules, output-rules, output-styles, task-template) get a
+# release-rules, output-rules, output-styles, code-task-rules, the
+# done-gate) get a
 # severity floor drop: HIGH→MEDIUM. Single-platform tokens still
 # raise to MEDIUM in those because they're worth surfacing during
 # review even if the usual answer is "expected here."
@@ -194,7 +195,7 @@ RE_RUST='Cargo\.toml|Cargo\.lock|[^A-Za-z0-9_]cargo[^A-Za-z0-9_]|[^A-Za-z0-9_]ru
 #     `language: swift` two lines above. An illustrative stamp, not guidance.
 REVIEWED_OK='content/craft-rules.md|SwiftUI:content/migration-rules.md|npm run:content/skills/runtime/SKILL.md|pip install:content/test-rules.md|xcodebuild'
 
-CROSS_CUTTING_BASENAMES='CLAUDE.md.template:AUDIT.md.template:PHASES.md.template:ROADMAP.md.template:task-template.md:batch-handoff.md:release-rules.md:output-rules.md:output-styles.md:runtime-mobile-app.md.template:runtime-dev-server.md.template:runtime-script.md.template:runtime-worker.md.template:pipeline-rules.md'
+CROSS_CUTTING_BASENAMES='CLAUDE.md.template:AUDIT.md.template:PHASES.md.template:ROADMAP.md.template:code-task-rules.md:done-gate.md.template:batch-handoff.md:release-rules.md:output-rules.md:output-styles.md:runtime-mobile-app.md.template:runtime-dev-server.md.template:runtime-script.md.template:runtime-worker.md.template:pipeline-rules.md'
 
 scan_file_via_awk() {
   local file="$1"

@@ -1,10 +1,12 @@
 ---
 id: TASK-055
-category: bug
+type: defect
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P1
-status: completed
+completed_by: chazzcoin
 ---
-
 # TASK-055: The bin/lint release gate was red on main
 
 **User story.** As a **maintainer**, I want **`bin/lint` to pass on `main`** so

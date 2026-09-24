@@ -1,10 +1,12 @@
 ---
 id: TASK-014
-category: bug
+type: defect
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P1
-status: completed
+completed_by: chazzcoin
 ---
-
 # TASK-014: Fix dead pointers shipped into every seeded repo
 
 **User story.** As a **developer onboarding a repo**, I want **the links in my

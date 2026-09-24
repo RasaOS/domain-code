@@ -1,0 +1,176 @@
+# tasks/
+
+Your project's task ledger, provided by `rasa.module.tasks`. It is portable:
+the same lifecycle serves a practice, a clinic, a manuscript and a workshop,
+and it needs no version control, no network and no daemon to work.
+
+The rules that govern every task live in **`.claude/task-rules.md`**. This
+file is the map; that one is the law. Where they disagree, the law wins.
+
+---
+
+## The one idea to take away
+
+**A task's state is the directory it is in. There is no `status:` field.**
+
+The previous design stored the state twice -- once as a directory and once
+as a frontmatter field -- and the two disagreed in more than half of all real
+files, because moving a file *is* the act of changing its state and the
+second write is the one people skip. The field is gone. The disagreement is
+now unrepresentable rather than merely detectable.
+
+The same principle runs through the whole schema: **one fact, one home**.
+The title is the H1 and nowhere else. Whether a task is fully specified is
+derived from whether it has acceptance criteria. Nothing that a human might
+change is written down twice.
+
+## The seven directories
+
+```
+intake.md -> triage/ -> backlog/ -> active/ -> review/ -> completed/
+                            |          |         |
+                            +------ blocked/ ----+
+             (from anywhere) -------------------------> closed/
+```
+
+| Directory | What it means |
+|---|---|
+| `triage/` | Filed and has an id, but not agreed to yet. The only phase-less state. |
+| `backlog/` | Phased and agreed, not started. |
+| `active/` | In flight. |
+| `review/` | The work is finished; the done-gate has not passed yet. |
+| `blocked/` | Cannot proceed. Enterable from `backlog/`, `active/` or `review/`. Must carry a filled `## Blocker` section. |
+| `completed/` | Terminal, and good: the done-gate passed. |
+| `closed/` | Terminal, and not done: superseded, duplicated, overtaken, or decided against. Must carry a `resolution:`. |
+
+Two of those are worth dwelling on.
+
+**`review/` is where the done-gate runs.** Without it, finished-but-unchecked
+work has nowhere to sit, so it stays in `active/` and `active/` stops meaning
+anything. It is also the most domain-native state in the set: a partner's
+review, a clinical sign-off and a cooling-off re-read are all literally this.
+
+**`closed/` keeps the count honest.** `completed/` is the number everybody
+reads. Folding abandoned and superseded work into it makes that number a lie.
+A successful task therefore carries no `resolution:` field at all -- the
+directory already says it succeeded.
+
+## Moving a task
+
+Use the shipped command, never a bare move. One command writes the
+conditional frontmatter, appends the history line, and moves the file --
+together, so they cannot come apart:
+
+```
+task new --type <type> "<title>"
+task graduate <id> --phase <phase>    task demote <id>
+task start <id>                       task park <id>
+task submit <id>                      task reject <id> --note "<gate that failed>"
+task block <id>                       task unblock <id>
+task pass <id> --by <handle>
+task close <id> --resolution <r> --by <handle> [--ref <id>]
+task reopen <id> --to <stage> --note "<why>"
+```
+
+Moving a file by hand does not corrupt anything -- the tree stays valid --
+but the history will not know about it. The validator detects that and
+`check-tasks --fix` reconciles it, dated today, attributed to `unknown`. It
+never invents a past date.
+
+## What is in a task file
+
+Five keys are always required, and four of the five are stamped by the
+tooling. Filing a task costs you one typed value and a title.
+
+| Key | Required | Who writes it |
+|---|---|---|
+| `id` | always | the allocator, once, immutable |
+| `type` | always | you: `change`, `defect`, `upkeep`, `inquiry` or `record` |
+| `created` | always | the allocator, once, never rewritten |
+| `created_by` | always | the allocator, once, never rewritten |
+| `updated` | always | every lifecycle command |
+| `phase` | outside `triage/` and `closed/` | you, when the task graduates |
+| `target` | iff `targets` is declared | you |
+| `completed_by` | in `completed/` and `closed/` | `task pass` / `task close` |
+| `resolution` | in `closed/` only | `task close` |
+| `resolution_ref` | iff superseded or duplicate | `task close` |
+| `priority` | optional | you: `now`, `high`, `normal` (default) or `low` |
+| `needs` | optional | you: ids that must reach `completed/` first |
+| `x-<anything>` | optional | you: preserved, never interpreted |
+
+Any other bare key is an error. That is deliberate: it is what stops the
+frontmatter sprawling into forty invented keys again. When you genuinely
+need a field of your own, prefix it with `x-` and it is yours forever.
+
+**`updated` is checked, not trusted.** A content digest is kept per task; if
+a file's contents change while its `updated` date does not, that is a hard
+error, not a shrug. No timestamps from the filesystem and no version control
+are consulted anywhere in that check.
+
+**Depth is derived.** A task is *stub depth* when it has no
+`## Acceptance criteria` heading or that heading holds no real checkbox, and
+*spec depth* otherwise. There is no depth field and no marker string to keep
+in step. Templates for both depths and all five types are in
+`.claude/task-templates/` -- start with its `README.md`.
+
+## The other files in here
+
+| File | Owner | What it is |
+|---|---|---|
+| `intake.md` | you | Pre-triage capture. One bullet, no id, no obligation. |
+| `ROADMAP.md` | you | The phase registry. Every phase and the tasks under it. |
+| `AUDIT.md` | you | The narrative ledger: what happened, when, and why it mattered. |
+| `tasks.config.yml` | you | Your declarations: actors, targets, series, the ratchet date. Optional. |
+| `history.tsv` | the tooling | Append-only transition log. Never hand-edit it. |
+| `.state/` | the tooling | Caches and the allocation lock. Regenerable; ignore it. |
+
+### `history.tsv`
+
+Six tab-separated columns, a header line, then one line per transition,
+oldest first:
+
+```
+date    id    from    to    actor    note
+```
+
+- `date` -- `YYYY-MM-DD`. Dates never go backwards down the file.
+- `id` -- the task.
+- `from` -- the stage it left, or `-` for the line that files it.
+- `to` -- the stage it entered. One of the seven directory names.
+- `actor` -- a handle, or `unknown`.
+- `note` -- free text. May be empty. This is where a `pass` records which
+  gate was satisfied and a `reject` records which one was not.
+
+It is four things at once: the transition log, the audit trail a project
+without version control has never had, the corroboration for `created`,
+`created_by` and `completed_by`, and -- because it is append-only -- the
+retirement ledger that stops a deleted task's number from ever being handed
+out again. Do not sort it, do not tidy it, do not delete lines from it.
+
+### `intake` and `triage` are not the same thing
+
+`intake.md` costs one line and buys nothing but a record that you thought of
+it. `triage/` costs an id and a file. Keep the cheap layer cheap: put
+half-ideas and complaints in `intake.md`, and promote one into `triage/` only
+when you have decided it is real. Both layers rot if nobody sweeps them, so
+sweep them on a cadence you can actually keep.
+
+## The done-gate
+
+A task reaches `completed/` only when both hold:
+
+1. every acceptance criterion is met **and actually verified**, and
+2. the project's done-gate passes.
+
+What "verified" requires is the one thing that varies by project, so it is
+not written down anywhere in this module. It lives in
+**`.claude/done-gate.md`**, which is yours. Fill it with gates that are
+objectively checkable -- something that succeeds or fails, a named person's
+approval, a document that now exists -- and never step around one to finish
+faster. Stepping around it is the whole failure this lifecycle exists to make
+visible.
+
+---
+
+*Everything here follows `.claude/task-rules.md`. Where this README and that
+file disagree, that file wins -- and the disagreement is worth reporting.*

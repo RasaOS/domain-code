@@ -4,8 +4,9 @@ This file covers release planning, production deploy tagging format,
 version-bump heuristics, the hotfix path for emergencies, and
 dependency hygiene (audit cadence and manifest discipline). **Read
 this file when shipping a release or auditing dependencies.** It
-extends `task-rules.md`; the five Git flow safety rules in
-`git-flow-rules.md` also apply to every release.
+extends `code-task-rules.md` (and through it `task-rules.md`); the
+five Git flow safety rules in `git-flow-rules.md` also apply to
+every release.
 
 ## Targeted vs Bundled
 
@@ -15,17 +16,16 @@ structurally unable to touch the fluid layer.
 
 ### Targeted — the plan
 
-Fluid. A phase or task at **any** status may be targeted at a release,
+Fluid. A phase or task in **any** stage may be targeted at a release,
 moved to another, or untargeted. No gate. `/release-plan` owns it.
 `/release` never reads it, so a plan can be wrong all week at no risk.
 
 ### Bundled — the manifest
 
 Committed. **Only completed work is bundled**: `tasks/completed/<ID>-*.md`
-must exist. The directory decides, because `task-rules.md` calls status
-and directory "the same fact recorded twice" and a mismatch a bug to fix
-rather than a tiebreak. `/release-add` owns it, and `/release` reads it
-and nothing else.
+must exist. The directory decides, because the directory **is** the
+state — `task-rules.md` §1 has no `status:` field to disagree with it.
+`/release-add` owns it, and `/release` reads it and nothing else.
 
 Bundling is harder to undo than targeting, deliberately:
 
@@ -52,9 +52,11 @@ approver for a prompt that never fired would put a lie in an audit trail.
 ### No `release:` field on tasks
 
 The release→work mapping lives in `tasks/RELEASES.md`, in one place.
-Tasks do not declare their release, for exactly the reason
-`task-rules.md` gives for not declaring their phase: it would drift, and
-re-targeting twelve tasks would mean editing twelve files instead of one.
+Tasks do not declare their release: it would drift, and re-targeting
+twelve tasks would mean editing twelve files instead of one. (`phase:`
+is kept in the task file only because `bin/check-tasks` proves it
+agrees with ROADMAP — `task-rules.md` §4. Nothing proves a `release:`
+key, and an unrecognized bare key is an error anyway — I-11.)
 
 ### Version discipline
 
@@ -95,7 +97,7 @@ a manual merge). The user does not maintain this file by hand.
 
 - TASK-042 — fix login bug on iOS
 - TASK-043 — add filter UI to the inbox
-- HOTFIX-007 — patch RBAC bypass on /admin
+- TASK-044 — patch RBAC bypass on /admin
 
 ---
 
@@ -133,8 +135,8 @@ Format conventions, line by line:
 - **Detail line** (shipped only). `shipped <YYYY-MM-DD> · tag
   <tag> · sha <short-sha>`. Indented two spaces under the version
   line.
-- **Task list.** One bullet per task or hotfix that landed in
-  the release. `TASK-NNN — <title>` or `HOTFIX-NNN — <title>`.
+- **Task list.** One bullet per task (hotfixes included) that
+  landed in the release. `TASK-NNN — <title>`.
   Order is merge order (oldest first).
 - **`---` separator** between entries.
 
@@ -167,10 +169,9 @@ Auto-append happens on **merge to `main`** — the moment a task
 becomes part of "what will ship next." Three paths land here:
 
 1. **`/peer-review` merges a PR** → calls `/release-add` with the
-   merged TASK-NNN or HOTFIX-NNN.
+   merged TASK-NNN.
 2. **`/release` merges an integration branch** → calls
-   `/release-add` for every TASK-NNN / HOTFIX-NNN in the
-   integration's commits.
+   `/release-add` for every TASK-NNN in the integration's commits.
 3. **Manual `gh pr merge`** (no kit skill involved) → the user
    runs `/release-add` after the fact, or `/release-add
    --since-last-tag` to bulk-catch up.
@@ -201,7 +202,7 @@ At ship time:
 ### What's no longer here — moved to AUDIT
 
 The 🚀 AUDIT entry on ship still happens (per the audit-log
-rule in `task-rules.md`). RELEASES.md is the *release-shaped*
+rule, `code-task-rules.md` §12). RELEASES.md is the *release-shaped*
 record; AUDIT.md is the *chronological* record. The two are
 complementary, not redundant.
 
@@ -309,9 +310,11 @@ that costs queue discipline; spend it carefully.
 
 ### Flow
 
-1. **Branch from `main`.** `hotfix/HOTFIX-NNN-slug` (HOTFIX
-   numbering is independent of TASK numbering — restart at 001
-   for the project, increment per incident).
+1. **File it, then branch from `main`.** A hotfix is a `defect`
+   with `priority: now` — there is no separate `HOTFIX-` id space
+   (`code-task-rules.md` §4). `.claude/bin/task new --type defect
+   --priority now --phase <P> "<what is broken>"` lands it in
+   `tasks/active/`. Branch `hotfix/TASK-NNN-slug`.
 2. **Single concern.** A hotfix branch fixes exactly one thing.
    Don't bundle a "while I'm here" change. Bundling defeats the
    speed argument.
@@ -319,20 +322,21 @@ that costs queue discipline; spend it carefully.
    `CLAUDE.md`) must be green. Hotfix does not mean "skip tests."
    If the test gate is broken because of the bug, surface that —
    repair it as part of the hotfix, don't bypass.
-4. **PR opens with title `HOTFIX-NNN: <summary>`** and a body
-   explaining the symptom, root cause, fix, and verification.
+4. **PR opens with title `TASK-NNN: <summary>`** and a body
+   explaining the symptom, root cause, fix, and verification;
+   `.claude/bin/task submit <id>` moves the task to `review/`.
    Closing report uses the same shape as a task PR.
 5. **Deploy is patch-bump only.** `vX.Y.Z` → `vX.Y.Z+1`. Major or
    minor bumps imply scope; hotfixes are scope-disciplined patches.
 6. **Tag with 🔥 in the AUDIT entry** so future readers can find
    the incident chain at a glance:
    ```
-   - 🔥 **Hotfix HOTFIX-NNN — <summary>.** Released vX.Y.Z+1.
+   - 🔥 **Hotfix TASK-NNN — <summary>.** Released vX.Y.Z+1.
      Postmortem at docs/postmortems/YYYY-MM-DD-….md.
    ```
-7. **Postmortem follows.** Per the postmortem rule below, every
-   hotfix triggers a postmortem within 48 hours. The point is
-   the lesson, not the absolution.
+7. **Postmortem follows.** Per the postmortem rule
+   (`code-task-rules.md` §13), every hotfix triggers a postmortem
+   within 48 hours. The point is the lesson, not the absolution.
 
 ### What hotfix does NOT change
 
@@ -359,7 +363,8 @@ dependency management into a daily chore.
 - Touching the project's manifest file(s) (`package.json`,
   `Cargo.toml`, `go.mod`, `Gemfile`, `pyproject.toml`,
   `Package.swift`, etc.) is a **gated file** per the existing
-  permission rule. The user approves any add/upgrade/remove.
+  permission rule (`code-task-rules.md` §9). The user approves any
+  add/upgrade/remove.
 - The PR that touches the manifest also commits the lockfile
   update (`package-lock.json`, `Cargo.lock`, `go.sum`,
   `Gemfile.lock`, etc.). Lockfile out of sync with manifest is a

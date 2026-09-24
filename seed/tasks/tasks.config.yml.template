@@ -1,0 +1,104 @@
+# tasks.config.yml -- what this project declares to rasa.module.tasks.
+#
+# PARSING. This file is read by the same restricted parser that reads task
+# frontmatter, so it obeys the same rules:
+#   * flat only. No nesting, and no line may begin with whitespace.
+#   * comments are WHOLE-LINE only. A '#' written after a value is part of
+#     that value, not a comment.
+#   * a value is a plain scalar, or a flow list [a, b, c] or [].
+#   * no duplicate keys, no `null`, no `~`. To say nothing, omit the key.
+#
+# Every key except `schema` is optional, and **a project with no config file
+# at all is completely valid**. Most of this file exists so that you can opt
+# into stricter checking when you want it, not because you must fill it in.
+#
+# An unparseable config stops the validator outright; a missing one does not.
+
+schema: rasa.module.tasks/1.0.0
+
+
+# ---------------------------------------------------------------------------
+# migrated_on -- the attribution ratchet
+# ---------------------------------------------------------------------------
+# Leave this commented out until you want the ratchet on. Then set it to
+# today's date.
+#
+# What it does: `created_by: unknown` and `completed_by: unknown` stay legal
+# on tasks created BEFORE this date, and become hard errors on anything
+# created on or after it. Existing gaps persist; new ones cannot be made. The
+# validator prints the remaining `unknown` count on every run, so the debt is
+# a number, and it can only shrink.
+#
+# A brand-new project should set this to its install date: it has no legacy
+# gaps, so the ratchet costs it nothing and it never accumulates any.
+#
+# migrated_on: <YYYY-MM-DD>
+
+
+# ---------------------------------------------------------------------------
+# actors -- who may appear in `created_by` and `completed_by`
+# ---------------------------------------------------------------------------
+# Empty or absent: any well-formed handle is accepted. A handle matches
+# ^[a-z0-9][a-z0-9._-]{0,31}$ or is the literal `unknown`.
+#
+# List them and a mistyped handle becomes an error instead of a second person
+# quietly appearing in the ledger. Worth doing as soon as the set is stable.
+#
+#   actors: [jmr, para1, claude]
+#
+actors: []
+
+
+# ---------------------------------------------------------------------------
+# targets -- your project's axis: what a task is *for*
+# ---------------------------------------------------------------------------
+# This is the one field the module cannot guess, because every project's
+# axis is different. It is deliberately not an enumeration baked into the
+# module: you declare the values, and the validator then holds tasks to them.
+#
+# Empty or absent  -> `target:` is FORBIDDEN in task frontmatter.
+# Non-empty        -> `target:` is REQUIRED on every task outside triage/ and closed/,
+#                     always as a list, and every member must be declared
+#                     here. A value you did not declare is an error, not a
+#                     shrug.
+#
+# Each value matches ^[a-z0-9][a-z0-9._:-]{0,31}$.
+#
+# Three worked examples. The axis is whatever answers "which one of our
+# several things is this task about?" -- and if nothing answers that, the
+# honest configuration is the empty list you already have.
+#
+#   A litigation practice, where the axis is the matter:
+#     targets: [smith-v-acme, doe-estate, riverside-zoning]
+#
+#   A clinic with several sites and one remote service, where the axis is
+#   where the care is delivered:
+#     targets: [main-clinic, north-site, remote-visits]
+#
+#   A novelist running three things at once, where the axis is the
+#   manuscript:
+#     targets: [the-drowned-city, short-stories, the-anthology]
+#
+# A task may properly name more than one: `target: [main-clinic, north-site]`.
+# If every task in your ledger would name every value, you do not have an
+# axis -- leave this empty.
+#
+targets: []
+
+
+# ---------------------------------------------------------------------------
+# series -- the allocation pools ids may be drawn from
+# ---------------------------------------------------------------------------
+# An id is `TASK-NNN` or `TASK-<SERIES>-NNN`. A series is an opaque counter,
+# nothing more: two people filing into different series never contend for the
+# same number. It is fixed when the id is minted and never changes, so never
+# encode anything mutable in it -- not a phase, not a priority, not an owner.
+# A task that moves to different work changes `phase:`; an urgent one changes
+# `priority:`.
+#
+# Empty or absent: any well-formed series is accepted. A SERIES matches
+# ^[A-Z][A-Z0-9.]{1,5}$.
+#
+#   series: [LIT, EST, ZON]
+#
+series: []

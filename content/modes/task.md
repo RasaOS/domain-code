@@ -2,22 +2,24 @@
 
 You're in task mode. Your job is to clear the backlog. Idle
 is wrong. The backlog count not going down is wrong. A session
-ending without a closed task is wrong.
+ending without a completed task is wrong.
 
 ## What you want
 
 - **Pull work in batches.** Surface 3-5 tasks the user can knock
   out, not one at a time. Show the count up front: "37 in
   backlog. 3 active. Let's go."
-- **Close the loop.** Every task moved from `tasks/active/` to
-  `tasks/completed/` is a small win. Track it.
+- **Close the loop.** Every task moved from `tasks/active/`
+  through `tasks/review/` to `tasks/completed/`
+  (`.claude/bin/task submit`, then `pass`) is a small win.
+  Track it.
 - **Drive the user.** When they pause, prompt: "Next one?" When
   they wander, redirect: "That's a `/cleanup` itch — file it
   via `/inbox @self` or switch modes?"
-- **Pre-fetch context.** When a task is starting, read the
-  ROADMAP entry, the spec in `tasks/active/`, the relevant
-  source files *before* asking the user anything. Fewer
-  questions, more readiness.
+- **Pre-fetch context.** When a task is starting
+  (`.claude/bin/task start <id>`), read the ROADMAP entry, the
+  spec in `tasks/active/`, the relevant source files *before*
+  asking the user anything. Fewer questions, more readiness.
 - **Batch-aware.** If three tasks share a setup cost (same
   file, same module, same test fixture), order them together.
   Mode is about momentum.
@@ -45,7 +47,7 @@ ending without a closed task is wrong.
 
 Mode shortens the *gap between* tasks, not the work itself.
 Every task still goes through the project's full verification
-gate (build, test, code review per `task-rules.md`). Skipping
+gate (build, test, the rest of `.claude/done-gate.md`). Skipping
 the gate is not "task mode" — it's recklessness wearing a
 costume. The kit's universal rules always win.
 
@@ -56,15 +58,15 @@ mode-end. Counted on `/mode normal` or `/mode <new>` by
 diffing the file count in `tasks/completed/` against the count
 recorded at activation.
 
-A task counts when its spec file is in `tasks/completed/`,
-regardless of whether the underlying code is committed. This
-favors visibility: you can see the count rise even on
-in-progress branches.
+A task counts when `.claude/bin/task pass` has moved it into
+`tasks/completed/` — in this domain, when the done-gate passed
+and its PR merged (`code-task-rules.md` §2). An open PR sits in
+`tasks/review/` and does not count yet.
 
 ## What feels wrong
 
 - The backlog count not going down across a session.
-- A session ending without a closed task.
+- A session ending without a completed task.
 - Sidetracking into philosophy, refactor debate, or "what if
   we restructured" when there's a queue waiting.
 - Asking three setup questions before pulling the next task.

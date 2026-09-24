@@ -1,15 +1,15 @@
 ---
 id: TASK-022
-category: spec
+type: change
+created: 2026-09-21
+created_by: chazzcoin
+updated: 2026-09-21
 phase: P3
-status: completed
-owner: unassigned
-blocked_by:
-outcome: shipped
-filed: 2026-09-21 04:30 UTC
-origin: manual
+completed_by: chazzcoin
+x-origin: manual
+x-outcome: shipped
+x-owner: unassigned
 ---
-
 # TASK-022: /peer-review forms its verdict from the artifact, not from memory
 
 **User story.** As a **reviewer**, I want **the merge verdict formed by a

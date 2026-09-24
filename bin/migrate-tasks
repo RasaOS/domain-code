@@ -1,0 +1,2479 @@
+#!/usr/bin/env python3
+# rasa.module.tasks — bin/migrate-tasks
+#
+# One-time, author-side migration of a 0.1.x task ledger to the v1.0.0 schema.
+#
+# This script lives in the ELEMENT's own bin/ and is NEVER installed into a
+# consumer (see SPEC-v1.md "Shipped tooling"). That quarantine is the reason it
+# may opportunistically look at a version-control store: nothing it knows leaks
+# into content/, which stays domain-neutral.
+#
+# Pure Python 3 standard library. No pip, no network, no hard dependency on any
+# version-control system, build tool or test runner. Runs the same on macOS and
+# Linux.
+#
+#   --dry-run   (DEFAULT)  plan everything, write nothing
+#   --apply                migrate a COPY and swap it in atomically; idempotent
+#
+# Exit codes:
+#   0  the plan is clean / the migrated ledger validates with zero errors
+#   1  the migrated ledger still has validation errors a human must resolve
+#   2  the migration could not run (bad input, refused preflight, internal abort)
+
+import argparse
+import datetime
+import hashlib
+import os
+import re
+import shutil
+import subprocess
+import sys
+import unicodedata
+
+VERSION = "1.0.0"
+SCHEMA_ID = "rasa.module.tasks/1.0.0"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Constants — the v1.0.0 shape
+# ─────────────────────────────────────────────────────────────────────────────
+
+# DECISIONS.md D4: the terminal directory is `completed/`, NOT `done/`.
+STAGES = ["triage", "backlog", "active", "review", "blocked", "completed", "closed"]
+TERMINAL = ("completed", "closed")
+
+# Legacy stage directory -> v1.0.0 stage directory.
+LEGACY_STAGE_MAP = {
+    "triage": "triage",
+    "backlog": "backlog",
+    "active": "active",
+    "review": "review",
+    "blocked": "blocked",
+    "completed": "completed",
+    "done": "completed",      # D4: a legacy done/ merges INTO completed/
+}
+
+TYPES = ("change", "defect", "upkeep", "inquiry", "record")
+PRIORITIES = ("now", "high", "normal", "low")
+RESOLUTIONS = ("superseded", "duplicate", "obsolete", "wont-do")
+
+# DECISIONS.md D3: the platform field is `target:` (not `applies_to`).
+KNOWN_KEYS = [
+    "id", "type", "created", "created_by", "updated",
+    "phase", "target", "completed_by", "resolution", "resolution_ref",
+    "priority", "needs",
+]
+KEY_ORDER = {k: i for i, k in enumerate(KNOWN_KEYS)}
+
+ID_RE = re.compile(r"^TASK-(?:([A-Z][A-Z0-9.]{1,5})-)?([0-9]{1,6})([a-z])?$")
+BARE_REF_RE = re.compile(r"^[A-Z][A-Z0-9.]{1,5}-[0-9]{1,6}[a-z]?$")
+SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+ACTOR_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,31}$")
+PHASE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,23}$")
+TARGET_RE = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,31}$")
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+FM_LINE_RE = re.compile(r"^(x-[a-z0-9][a-z0-9_-]*|[a-z][a-z0-9_]*):(?: (.*))?$")
+LEGACY_FM_LINE_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_.-]*):(?:[ \t](.*))?$")
+# A YAML block-scalar header: `|`, `>`, each with an optional chomp (-, +) and/or
+# explicit indent digit. The real corpus uses the bare forms.
+BLOCK_SCALAR_RE = re.compile(r"^[|>][0-9]?[-+]?$")
+
+ROADMAP_HEADING_RE = re.compile(r"^##[ \t]+Phase[ \t]+(\S+?):?(?:[ \t]+(.*))?$")
+ROADMAP_TASK_RE = re.compile(r"^[-*][ \t]+(TASK-\S+)[ \t]+(?:—|–|-)[ \t]+(.+)$")
+ANY_HEADING_RE = re.compile(r"^#{1,6}[ \t]")
+
+PLACEHOLDER_SCOPE = "Scope. TODO — declared by migration; replace this line."
+UNSORTED_PHASE = "unsorted"
+
+HISTORY_HEADER = "date\tid\tfrom\tto\tactor\tnote"
+
+# category -> type (SPEC-v1.md "category: -> type:")
+CATEGORY_TO_TYPE = {
+    "spec": "change", "stub": "change", "feature": "change", "spec-stub": "change",
+    "polish": "change", "hardening": "change",
+    "bug": "defect", "fix": "defect",
+    "chore": "upkeep", "cleanup": "upkeep",
+    "audit": "inquiry",
+    "docs": "record", "handoff": "record", "docs + spec": "record",
+}
+
+SEVERITY_TO_PRIORITY = {
+    "critical": "high", "high": "high", "medium": "normal", "low": "normal_low",
+}
+
+LEGACY_PRIORITY = {
+    "high": "high", "medium": "normal", "low": "low", "next-up": "high",
+    "now": "now", "normal": "normal",
+}
+
+# Legacy keys the migration consumes (they become v1.0.0 fields or body prose).
+# Everything else is preserved verbatim as `x-<key>`.
+CONSUMED_KEYS = {
+    "id", "category", "status", "phase", "severity", "priority",
+    "blocked_by", "depends_on", "depends", "blocks", "blocked_by_external",
+    "related", "closed", "filed", "filed_at",
+    "superseded_by", "absorbed_by",
+}
+
+
+def today_str():
+    return datetime.date.today().isoformat()
+
+
+def die(msg, code=2):
+    sys.stderr.write("migrate-tasks: %s\n" % msg)
+    sys.exit(code)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Frontmatter — the v1.0.0 grammar (SPEC-v1.md §3) and a lenient legacy reader
+# ─────────────────────────────────────────────────────────────────────────────
+
+def split_frontmatter(text):
+    """Return (fm_lines, body, ok). ok=False when there is no closing ---."""
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return [], text, False
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            return lines[1:i], "\n".join(lines[i + 1:]), True
+    return [], text, False
+
+
+def parse_legacy_frontmatter(text):
+    """Lenient reader for 0.1.x files.
+
+    Returns (items, body, ok) where items is an ordered list of
+    [key, raw_value, was_folded]. Multi-line plain-scalar continuations (the 30
+    in the real corpus) are folded onto their key and flagged.
+    """
+    fm_lines, body, ok = split_frontmatter(text)
+    if not ok:
+        return [], text, False
+    items = []
+    cur = None
+    for ln in fm_lines:
+        if not ln.strip():
+            continue
+        m = LEGACY_FM_LINE_RE.match(ln)
+        if m:
+            value = (m.group(2) or "").strip()
+            # A block-scalar indicator (`|`, `>`, with an optional chomp/indent
+            # modifier) is YAML *syntax*: the content is on the lines below. Fold
+            # those lines onto the key, but never keep the indicator itself —
+            # otherwise the value emitted is `| Biggest blast radius…`, which the
+            # v1.0.0 restricted grammar rejects as a block scalar, and the task is
+            # excluded from every later check.
+            if BLOCK_SCALAR_RE.match(value):
+                value = ""
+            cur = [m.group(1), value, False]
+            items.append(cur)
+        elif ln.lstrip().startswith("#") and cur is None:
+            continue
+        elif cur is not None:
+            extra = ln.strip()
+            if extra:
+                cur[1] = (cur[1] + " " + extra).strip()
+                cur[2] = True
+    return items, body, True
+
+
+def parse_value(raw):
+    """Return ('list', [items], trailing) or ('scalar', text, '')."""
+    v = raw.strip()
+    if v.startswith("["):
+        close = v.find("]")
+        if close >= 0:
+            inner = v[1:close]
+            trailing = v[close + 1:].strip()
+            items = [unquote(x.strip()) for x in inner.split(",") if x.strip()]
+            return "list", items, trailing
+    return "scalar", unquote(v), ""
+
+
+def unquote(v):
+    v = v.strip()
+    if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+        return v[1:-1]
+    return v
+
+
+def one_line(v):
+    return " ".join(str(v).split())
+
+
+def render_frontmatter(fields):
+    """fields: dict key -> str | list[str]. Emitted in canonical order."""
+    def sort_key(k):
+        if k in KEY_ORDER:
+            return (0, KEY_ORDER[k], k)
+        return (1, 0, k)
+
+    out = ["---"]
+    for k in sorted(fields.keys(), key=sort_key):
+        v = fields[k]
+        if v is None:
+            continue
+        if isinstance(v, list):
+            items = [one_line(x) for x in v if one_line(x) not in ("", "null", "~")]
+            if not items:
+                continue
+            out.append("%s: [%s]" % (k, ", ".join(items)))
+        else:
+            s = one_line(v)
+            # The grammar forbids the literals null/~; an absent key says the
+            # same thing without lying about it.
+            if s in ("", "null", "~"):
+                continue
+            out.append("%s: %s" % (k, s))
+    out.append("---")
+    return "\n".join(out)
+
+
+def parse_v1_frontmatter(text):
+    """Strict §3 parser used by the built-in validator.
+
+    Returns (fields, body, errors) with errors as (line_no, message).
+    """
+    errors = []
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return None, text, [(1, "line 1 is not exactly ---")]
+    end = None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            end = i
+            break
+    if end is None:
+        return None, text, [(1, "frontmatter block is never closed")]
+    fields = {}
+    seen = []
+    for idx in range(1, end):
+        ln = lines[idx]
+        n = idx + 1
+        if ln.strip() == "":
+            continue
+        if re.match(r"^\s*#", ln):
+            continue
+        if ln[:1] in (" ", "\t"):
+            errors.append((n, "line begins with whitespace (no nesting allowed)"))
+            continue
+        m = FM_LINE_RE.match(ln)
+        if not m:
+            errors.append((n, "line does not match the frontmatter grammar"))
+            continue
+        key = m.group(1)
+        raw = m.group(2) or ""
+        if raw.strip() in ("null", "~"):
+            errors.append((n, "literal null/~ is forbidden; omit the key"))
+            continue
+        if raw.lstrip()[:1] in ("|", ">") and raw.strip() in ("|", ">", "|-", ">-"):
+            errors.append((n, "block scalars are forbidden"))
+            continue
+        if raw.lstrip()[:1] in ("&", "*") and len(raw.strip()) > 1:
+            errors.append((n, "anchors/aliases are forbidden"))
+            continue
+        if key in seen:
+            errors.append((n, "duplicate key %r" % key))
+            continue
+        seen.append(key)
+        kind, val, trailing = parse_value(raw)
+        if kind == "list":
+            if trailing:
+                errors.append((n, "trailing text after a flow list"))
+            fields[key] = val
+        else:
+            fields[key] = val
+    return fields, "\n".join(lines[end + 1:]), errors
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Body helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def body_lines_outside_fences(body):
+    """Yield (index, line, in_fence)."""
+    fence = None
+    for i, ln in enumerate(body.split("\n")):
+        s = ln.strip()
+        m = re.match(r"^(`{3,}|~{3,})", s)
+        if m:
+            tok = m.group(1)[0]
+            if fence is None:
+                fence = tok
+            elif tok == fence:
+                fence = None
+            yield i, ln, True
+            continue
+        yield i, ln, fence is not None
+
+
+def find_h1(body):
+    """Return (index, text) of the first fence-free '# ' line, else (None, None)."""
+    for i, ln, infence in body_lines_outside_fences(body):
+        if infence:
+            continue
+        if ln.startswith("# "):
+            return i, ln
+    return None, None
+
+
+def count_h1(body):
+    n = 0
+    for _, ln, infence in body_lines_outside_fences(body):
+        if not infence and ln.startswith("# "):
+            n += 1
+    return n
+
+
+def section_body(body, heading):
+    """Lines under '## <heading>' up to the next heading (fence-aware)."""
+    want = "## " + heading
+    out = []
+    collecting = False
+    for _, ln, infence in body_lines_outside_fences(body):
+        if not infence and ANY_HEADING_RE.match(ln):
+            if ln.strip() == want:
+                collecting = True
+                continue
+            if collecting:
+                break
+            continue
+        if collecting:
+            out.append(ln)
+    return out if collecting else None
+
+
+def has_section(body, heading):
+    return section_body(body, heading) is not None
+
+
+def rename_section(body, old, new):
+    lines = body.split("\n")
+    for i, ln in enumerate(lines):
+        if ln.strip() == "## " + old:
+            lines[i] = "## " + new
+            return "\n".join(lines), True
+    return body, False
+
+
+def append_to_section(body, heading, extra_lines):
+    """Append lines to '## <heading>', creating the section at the end if absent."""
+    lines = body.split("\n")
+    start = None
+    for i, ln in enumerate(lines):
+        if ln.strip() == "## " + heading:
+            start = i
+            break
+    if start is None:
+        while lines and lines[-1].strip() == "":
+            lines.pop()
+        lines.extend(["", "## " + heading, ""])
+        lines.extend(extra_lines)
+        lines.append("")
+        return "\n".join(lines)
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        if ANY_HEADING_RE.match(lines[j]):
+            end = j
+            break
+    insert = end
+    while insert - 1 > start and lines[insert - 1].strip() == "":
+        insert -= 1
+    block = [""] + extra_lines
+    lines[insert:insert] = block
+    return "\n".join(lines)
+
+
+def slugify(text, limit=60):
+    t = unicodedata.normalize("NFKD", text)
+    t = t.encode("ascii", "ignore").decode("ascii")
+    t = re.sub(r"[^A-Za-z0-9]+", "-", t).strip("-").lower()
+    t = re.sub(r"-+", "-", t)
+    t = t[:limit].strip("-")
+    return t or "task"
+
+
+def is_stub_depth(body):
+    sec = section_body(body, "Acceptance criteria")
+    if sec is None:
+        return True
+    for ln in sec:
+        m = re.match(r"^\s*[-*][ \t]+\[[ xX]\][ \t]*(.*)$", ln)
+        if m and m.group(1).strip():
+            return False
+    return True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ROADMAP
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Roadmap(object):
+    """Parsed ROADMAP.md: an ordered list of blocks.
+
+    Each block is {'heading': str|None, 'phase': str|None, 'name': str, 'lines': [...]}
+    'lines' holds the block content WITHOUT the heading line.
+    """
+
+    def __init__(self, text):
+        self.original = text
+        self.blocks = []
+        cur = {"heading": None, "phase": None, "name": "", "lines": []}
+        fence = None
+        for ln in text.split("\n"):
+            s = ln.strip()
+            m = re.match(r"^(`{3,}|~{3,})", s)
+            if m:
+                tok = m.group(1)[0]
+                fence = None if fence == tok else (fence or tok)
+                cur["lines"].append(ln)
+                continue
+            if fence is None and ln.startswith("## "):
+                self.blocks.append(cur)
+                hm = ROADMAP_HEADING_RE.match(ln)
+                if hm:
+                    pid = hm.group(1).rstrip(":")
+                    nm = (hm.group(2) or "").lstrip("—–-: \t").strip()
+                    cur = {"heading": ln, "phase": pid, "name": nm, "lines": []}
+                else:
+                    cur = {"heading": ln, "phase": None, "name": "", "lines": []}
+                continue
+            cur["lines"].append(ln)
+        self.blocks.append(cur)
+
+    def phase_ids(self):
+        return [b["phase"] for b in self.blocks if b["phase"]]
+
+    def entries(self):
+        """id -> list of (phase_id, title)."""
+        out = {}
+        for b in self.blocks:
+            fence = None
+            for ln in b["lines"]:
+                s = ln.strip()
+                m = re.match(r"^(`{3,}|~{3,})", s)
+                if m:
+                    tok = m.group(1)[0]
+                    fence = None if fence == tok else (fence or tok)
+                    continue
+                if fence:
+                    continue
+                tm = ROADMAP_TASK_RE.match(ln)
+                if tm:
+                    out.setdefault(tm.group(1), []).append((b["phase"], tm.group(2).strip()))
+        return out
+
+    def render(self):
+        out = []
+        for b in self.blocks:
+            if b["heading"] is not None:
+                out.append(b["heading"])
+            out.extend(b["lines"])
+        return "\n".join(out)
+
+
+def rebuild_roadmap(rm, tasks, generated_phases, notes):
+    """Rewrite ROADMAP so every non-triage task has exactly one line under its phase.
+
+    Existing line order is preserved; missing lines are appended to their phase.
+    Lines naming an id that does not exist on disk are left exactly where they
+    are (I-24 is never auto-fixed).
+    """
+    by_phase = {}
+    for t in tasks:
+        if t.stage == "triage":
+            continue
+        by_phase.setdefault(t.phase, []).append(t)
+
+    known = {}
+    for t in tasks:
+        known[t.id] = t
+
+    def note_dropped_roadmap_prose(notes, tid, line, task, why):
+        """Flag a removed ROADMAP line that carried human prose the kept line lacks.
+
+        Removing a duplicated or triage-stage line is correct. Removing the
+        annotation somebody hand-wrote on it — "— shipped in v0.4.0", a caveat,
+        a cross-reference — is not, and it is invisible: the kept line looks
+        fine, so nobody ever learns the note existed. Anything the migration
+        cannot carry forward mechanically has to end up in front of a person.
+        """
+        residue = line.strip().lstrip("-*").strip()
+        for chunk in (tid, task.title or ""):
+            if chunk:
+                residue = residue.replace(chunk, " ")
+        residue = re.sub(r"^[\s—–:-]+|[\s—–:-]+$", "", residue)
+        residue = re.sub(r"\s+", " ", residue)
+        if len(residue) < 3:
+            return
+        notes.setdefault("roadmap_prose_dropped", []).append((tid, line.strip(), why))
+
+    # Pass 1: strip every task line that is misplaced or duplicated.
+    kept_for_phase = {}
+    seen_ids = set()
+    for b in rm.blocks:
+        newlines = []
+        fence = None
+        for ln in b["lines"]:
+            s = ln.strip()
+            m = re.match(r"^(`{3,}|~{3,})", s)
+            if m:
+                tok = m.group(1)[0]
+                fence = None if fence == tok else (fence or tok)
+                newlines.append(ln)
+                continue
+            tm = None if fence else ROADMAP_TASK_RE.match(ln)
+            if not tm:
+                newlines.append(ln)
+                continue
+            tid = tm.group(1)
+            t = known.get(tid)
+            if t is None:
+                # Dangling: a lost task or a stale promise. Only a human knows.
+                newlines.append(ln)
+                notes.setdefault("dangling_roadmap", []).append((tid, b["phase"]))
+                continue
+            if t.stage == "triage":
+                notes.setdefault("roadmap_triage_removed", []).append(tid)
+                note_dropped_roadmap_prose(notes, tid, ln, t, "the task is in triage/, which is "
+                                           "unphased by design and never listed in ROADMAP")
+                continue
+            if tid in seen_ids:
+                notes.setdefault("roadmap_dupe_removed", []).append(tid)
+                note_dropped_roadmap_prose(notes, tid, ln, t, "the task was listed more than "
+                                           "once; a task belongs to exactly one phase (I-22)")
+                continue
+            if b["phase"] == t.phase:
+                seen_ids.add(tid)
+                kept_for_phase.setdefault(t.phase, set()).add(tid)
+                newlines.append(ln)
+            else:
+                notes.setdefault("roadmap_moved", []).append((tid, b["phase"], t.phase))
+                note_dropped_roadmap_prose(notes, tid, ln, t,
+                                           "the line sat under phase %r but the task's phase is "
+                                           "%r, so it was relocated and the line regenerated"
+                                           % (b["phase"], t.phase))
+        b["lines"] = newlines
+
+    # Pass 2: create any missing phase heading blocks.
+    existing = set(rm.phase_ids())
+    for pid in generated_phases:
+        if pid in existing:
+            continue
+        name = "Unsorted (declared by migration)" if pid == UNSORTED_PHASE else pid
+        rm.blocks.append({
+            "heading": "## Phase %s — %s" % (pid, name),
+            "phase": pid,
+            "name": name,
+            "lines": ["", PLACEHOLDER_SCOPE, ""],
+        })
+        existing.add(pid)
+
+    # Pass 3: append the missing task lines into their phase block.
+    block_for = {}
+    for b in rm.blocks:
+        if b["phase"] and b["phase"] not in block_for:
+            block_for[b["phase"]] = b
+
+    added = 0
+    for pid, items in sorted(by_phase.items()):
+        b = block_for.get(pid)
+        if b is None:
+            name = "Unsorted (declared by migration)" if pid == UNSORTED_PHASE else pid
+            b = {
+                "heading": "## Phase %s — %s" % (pid, name),
+                "phase": pid, "name": name,
+                "lines": ["", PLACEHOLDER_SCOPE, ""],
+            }
+            rm.blocks.append(b)
+            block_for[pid] = b
+        have = kept_for_phase.get(pid, set())
+        missing = [t for t in items if t.id not in have]
+        if not missing:
+            continue
+        missing.sort(key=lambda t: id_sort_key(t.id))
+        lines = b["lines"]
+        last_task_idx = None
+        for i, ln in enumerate(lines):
+            if ROADMAP_TASK_RE.match(ln):
+                last_task_idx = i
+        newlines = ["- %s — %s" % (t.id, t.title) for t in missing]
+        added += len(newlines)
+        if last_task_idx is not None:
+            lines[last_task_idx + 1:last_task_idx + 1] = newlines
+        else:
+            while lines and lines[-1].strip() == "":
+                lines.pop()
+            # A generated phase carries only its placeholder scope, so I-21 keeps
+            # warning until a human writes the real one.
+            if PLACEHOLDER_SCOPE not in lines and not any("Tasks (" in l for l in lines):
+                lines.extend(["", "Tasks (in suggested ship order):"])
+            lines.append("")
+            lines.extend(newlines)
+            lines.append("")
+        b["lines"] = lines
+    notes["roadmap_lines_added"] = added
+    return rm
+
+
+def id_sort_key(tid):
+    m = ID_RE.match(tid)
+    if not m:
+        return (tid, 0, "")
+    return (m.group(1) or "", int(m.group(2)), m.group(3) or "")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Task model
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Task(object):
+    def __init__(self, path, stage, filename):
+        self.src_path = path
+        self.src_stage = stage
+        self.src_filename = filename
+        self.stage = LEGACY_STAGE_MAP.get(stage, stage)
+        self.legacy = []
+        self.body = ""
+        self.fields = {}
+        self.id = None
+        self.old_id = None
+        self.title = ""
+        self.phase = None
+        self.filename = filename
+        self.notes_lines = []
+        self.blocker_lines = []
+        self.needs = []
+        self.mtime = 0.0
+        self.review = []
+        self.parse_ok = True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The migration
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Migration(object):
+
+    def __init__(self, tasks_dir, args):
+        self.tasks_dir = os.path.abspath(tasks_dir)
+        self.project_dir = os.path.dirname(self.tasks_dir)
+        self.args = args
+        self.tasks = []
+        self.by_id = {}
+        self.notes = {}
+        self.review = []           # (category, text)
+        self.warnings = []
+        self.errors = []
+        self.generated_phases = []
+        self.renames = []          # (old_id, new_id, path)
+        self.series_seen = set()
+        self.today = today_str()
+        self.roadmap = None
+        self.stats = {}
+
+    # ---- inventory --------------------------------------------------------
+
+    def inventory(self):
+        found = 0
+        for stage in sorted(set(list(LEGACY_STAGE_MAP.keys()))):
+            d = os.path.join(self.tasks_dir, stage)
+            if not os.path.isdir(d):
+                continue
+            for fn in sorted(os.listdir(d)):
+                if not fn.endswith(".md"):
+                    continue
+                p = os.path.join(d, fn)
+                if not os.path.isfile(p):
+                    continue
+                found += 1
+                t = Task(p, stage, fn)
+                try:
+                    raw = open(p, "rb").read()
+                    text = raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    self.errors.append("%s: not valid UTF-8" % self.rel(p))
+                    t.parse_ok = False
+                    self.tasks.append(t)
+                    continue
+                items, body, ok = parse_legacy_frontmatter(text)
+                if not ok:
+                    self.errors.append("%s: no parseable frontmatter block" % self.rel(p))
+                    t.parse_ok = False
+                    self.tasks.append(t)
+                    continue
+                t.legacy = items
+                t.body = body
+                t.mtime = os.path.getmtime(p)
+                self.tasks.append(t)
+        self.stats["files_found"] = found
+        rm_path = os.path.join(self.tasks_dir, "ROADMAP.md")
+        text = open(rm_path, encoding="utf-8").read() if os.path.exists(rm_path) else "# Roadmap\n"
+        self.roadmap = Roadmap(text)
+
+    def rel(self, p):
+        try:
+            return os.path.relpath(p, self.project_dir)
+        except ValueError:
+            return p
+
+    # ---- stage 1: identity -------------------------------------------------
+
+    def resolve_identity(self):
+        """Assign ids, resolve the 10 collisions, fix id-less and slug-less names."""
+        rm_entries = self.roadmap.entries()
+
+        for t in self.tasks:
+            if not t.parse_ok:
+                continue
+            raw_id = None
+            for k, v, _f in t.legacy:
+                if k == "id":
+                    raw_id = unquote(v)
+                    break
+            idx, h1 = find_h1(t.body)
+            title = ""
+            if h1:
+                m = re.match(r"^#[ \t]+(?:(\S+):[ \t]+)?(.*)$", h1)
+                if m:
+                    if m.group(1) and raw_id and m.group(1) == raw_id:
+                        title = m.group(2).strip()
+                    else:
+                        title = h1[2:].strip()
+            if not title:
+                title = os.path.splitext(t.src_filename)[0]
+            t.title = title
+            t.id = raw_id
+            t.h1_index = idx
+
+        # collisions
+        groups = {}
+        for t in self.tasks:
+            if t.parse_ok and t.id:
+                groups.setdefault(t.id, []).append(t)
+
+        used_numbers = {}
+        width = {}
+        for t in self.tasks:
+            if not t.parse_ok or not t.id:
+                continue
+            m = ID_RE.match(t.id)
+            if m:
+                series = m.group(1) or ""
+                used_numbers.setdefault(series, set()).add(int(m.group(2)))
+                width[series] = max(width.get(series, 0), len(m.group(2)))
+                if m.group(1):
+                    self.series_seen.add(m.group(1))
+
+        def allocate(series):
+            # New allocations zero-pad to 3, or to the width this series already
+            # uses — a 2-digit series must not sprout a look-alike `-011`.
+            pool = used_numbers.setdefault(series, set())
+            n = (max(pool) if pool else 0) + 1
+            w = max(2, width.get(series, 3))
+            return_id = "TASK-%s%0*d" % ((series + "-") if series else "", w, n)
+            pool.add(n)
+            return return_id
+
+        # (a) ids that are not legal at all -> allocate fresh, keep legacy id
+        for t in self.tasks:
+            if not t.parse_ok:
+                continue
+            if t.id and ID_RE.match(t.id):
+                continue
+            old = t.id or os.path.splitext(t.src_filename)[0]
+            new = allocate("")
+            t.old_id = old
+            t.id = new
+            t.forced_slug = slugify(old)   # the old string becomes the slug
+            t.fields["x-legacy_id"] = old
+            t.notes_lines.append(
+                "Migrated from `%s`; the v1.0.0 id grammar has no place for that string. "
+                "The previous identifier is preserved as `x-legacy_id`." % old)
+            self.renames.append((old, new, t.src_path))
+            self.review.append((
+                "id", "`%s` had no legal v1.0.0 id and became **%s** (file `%s`). "
+                "References to the old string under `tasks/` were rewritten; check elsewhere."
+                % (old, new, t.src_filename)))
+
+        # (b) genuine collisions (D5)
+        for tid, members in sorted(groups.items()):
+            if len(members) < 2:
+                continue
+            keeper = self.pick_keeper(tid, members, rm_entries)
+            m = ID_RE.match(tid)
+            series = (m.group(1) or "") if m else ""
+            for t in members:
+                if t is keeper:
+                    continue
+                new = allocate(series)
+                t.old_id = tid
+                t.id = new
+                t.fields["x-legacy_id"] = tid
+                t.notes_lines.append(
+                    "Renumbered from `%s` at migration (that id was held by two files); "
+                    "the previous identifier is preserved as `x-legacy_id`." % tid)
+                self.renames.append((tid, new, t.src_path))
+                self.review.append((
+                    "id", "`%s` collided. Keeper: `%s`. Renumbered: `%s` -> **%s**. "
+                    "References under `tasks/` that could be attributed were rewritten; "
+                    "everything else now resolves to the keeper."
+                    % (tid, keeper.src_filename, t.src_filename, new)))
+
+        for t in self.tasks:
+            if t.parse_ok and t.id:
+                t.fields["id"] = t.id
+                self.by_id[t.id] = t
+
+    def pick_keeper(self, tid, members, rm_entries):
+        titles = [ttl for (_p, ttl) in rm_entries.get(tid, [])]
+        if titles:
+            norm = lambda s: re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
+            wanted = set(norm(x) for x in titles)
+            matches = [t for t in members if norm(t.title) in wanted]
+            if len(matches) == 1:
+                return matches[0]
+        return sorted(members, key=lambda t: (t.mtime, t.src_path))[0]
+
+    # ---- stage 2: fields ---------------------------------------------------
+
+    def convert_fields(self):
+        """Legacy frontmatter -> v1.0.0 frontmatter + body prose."""
+        status_counts = {}
+        for t in self.tasks:
+            if not t.parse_ok:
+                continue
+            raw = {}
+            order = []
+            for k, v, folded in t.legacy:
+                if k in raw:
+                    k2 = "%s_2" % k
+                    raw[k2] = (v, folded)
+                    order.append(k2)
+                    continue
+                raw[k] = (v, folded)
+                order.append(k)
+
+            status = unquote(raw.get("status", ("", False))[0]).strip().lower()
+            status_counts[status] = status_counts.get(status, 0) + 1
+
+            # type
+            cat = unquote(raw.get("category", ("", False))[0]).strip().lower()
+            ttype = CATEGORY_TO_TYPE.get(cat)
+            if ttype is None:
+                ttype = "change"
+                if cat:
+                    self.review.append((
+                        "type", "`%s`: category `%s` had no mapping; typed as `change`."
+                        % (t.id, cat)))
+            if cat == "docs + spec":
+                self.review.append((
+                    "type", "`%s`: compound category `docs + spec` -> `record`; confirm."
+                    % t.id))
+            t.fields["type"] = ttype
+
+            # priority (severity -> priority, verbatim copy kept as x-severity)
+            pri = None
+            if "priority" in raw:
+                pv = unquote(raw["priority"][0]).strip().lower()
+                pri = LEGACY_PRIORITY.get(pv)
+                if pri is None:
+                    pri = "normal"
+                    self.review.append((
+                        "priority", "`%s`: priority `%s` had no mapping; set `normal`, "
+                        "original kept as `x-priority`." % (t.id, pv)))
+                    t.fields["x-priority"] = pv
+                if pv == "next-up":
+                    self.review.append((
+                        "priority", "`%s`: `next-up` meant \"top of the phase list\" as well as "
+                        "urgency. Mapped to `high`; the ROADMAP order was NOT changed." % t.id))
+            if "severity" in raw:
+                sv = unquote(raw["severity"][0]).strip()
+                t.fields["x-severity"] = sv
+                norm = re.sub(r"[^a-zA-Z]", "", sv).lower()
+                mapped = SEVERITY_TO_PRIORITY.get(norm)
+                if mapped == "normal_low":
+                    mapped = "low"
+                if mapped and pri is None:
+                    pri = mapped
+                elif mapped is None:
+                    self.review.append((
+                        "priority", "`%s`: severity %r did not normalize; kept as `x-severity` "
+                        "only." % (t.id, sv)))
+            if pri and pri != "normal":
+                t.fields["priority"] = pri
+
+            # dates
+            created = None
+            for k in ("filed", "filed_at", "created"):
+                if k in raw:
+                    dv = unquote(raw[k][0]).strip()
+                    dm = re.match(r"^(\d{4}-\d{2}-\d{2})", dv)
+                    if dm:
+                        created = dm.group(1)
+                        break
+            created_recorded = created is not None
+            if created is None:
+                created = self.infer_created(t)
+            if created > self.today:
+                created = self.today
+            t.fields["created"] = created
+            t.created = created
+            t.created_recorded = created_recorded
+
+            who = self.infer_created_by(t)
+            t.fields["created_by"] = who
+
+            # closure date
+            closed = None
+            if "closed" in raw:
+                dv = unquote(raw["closed"][0]).strip()
+                dm = re.match(r"^(\d{4}-\d{2}-\d{2})", dv)
+                if dm:
+                    closed = dm.group(1)
+                else:
+                    t.fields["x-closed"] = dv
+            t.closed_date = closed
+
+            # A RECORDED `closed:` outranks an INFERRED `created:`. Where there is
+            # no version-control history the created date falls back to the file's
+            # mtime, which a copy or a checkout resets to today — and the later
+            # monotonicity clamp would then forward-date the real closure to today,
+            # silently destroying the one date the terminal history line exists to
+            # carry. The task certainly existed no later than the day it closed, so
+            # back-date `created` instead of discarding the recorded fact.
+            if closed and not created_recorded and closed < created:
+                t.fields["created"] = closed
+                t.created = closed
+                t.fields["x-created_inferred_from"] = "closed"
+
+            # relations
+            t.raw = raw
+            t.raw_order = order
+            t.status = status
+
+        self.stats["legacy_status"] = status_counts
+
+    def infer_created(self, t):
+        if self.args.created_from:
+            out = self.run_capture(self.args.created_from, t.src_path)
+            if out:
+                dm = re.match(r"^(\d{4}-\d{2}-\d{2})", out.strip().split("\n")[0].strip())
+                if dm:
+                    return dm.group(1)
+        st = os.stat(t.src_path)
+        ts = min(st.st_mtime, st.st_ctime)
+        return datetime.date.fromtimestamp(ts).isoformat()
+
+    def infer_created_by(self, t):
+        if self.args.created_by_from:
+            cand = handle_from(self.run_capture(self.args.created_by_from, t.src_path))
+            if cand:
+                return cand
+        return "unknown"
+
+    def run_capture(self, cmd, path):
+        try:
+            r = subprocess.run(cmd + " " + shell_quote(path), shell=True,
+                               cwd=self.project_dir, stdout=subprocess.PIPE,
+                               stderr=subprocess.DEVNULL, timeout=20)
+            return r.stdout.decode("utf-8", "replace")
+        except Exception:
+            return ""
+
+    # ---- stage 3: dependencies --------------------------------------------
+
+    def resolve_dependencies(self):
+        bare_index = {}
+        for tid in self.by_id:
+            m = ID_RE.match(tid)
+            if m and m.group(1):
+                bare_index.setdefault("%s-%s%s" % (m.group(1), m.group(2), m.group(3) or ""),
+                                      []).append(tid)
+                bare_index.setdefault(tid[len("TASK-"):], []).append(tid)
+
+        def expand(tok, t):
+            tok = tok.strip().strip("`").strip()
+            if not tok:
+                return None
+            if tok in self.by_id:
+                return tok
+            # a renamed id still points at its keeper
+            if ID_RE.match(tok):
+                return None
+            if BARE_REF_RE.match(tok):
+                cands = sorted(set(bare_index.get(tok, [])))
+                if len(cands) == 1:
+                    return cands[0]
+                if len(cands) > 1:
+                    self.review.append((
+                        "needs", "`%s`: bare reference `%s` is ambiguous (%s); dropped to "
+                        "`## Notes`." % (t.id, tok, ", ".join(cands))))
+                    return None
+            return None
+
+        def items_of(val):
+            kind, v, trailing = parse_value(val)
+            if kind == "list":
+                return v, trailing
+            if not v:
+                return [], ""
+            if "," in v:
+                return [x.strip() for x in v.split(",") if x.strip()], ""
+            return [v], ""
+
+        pending_inverse = []
+        for t in self.tasks:
+            if not t.parse_ok:
+                continue
+            raw = t.raw
+            needs = []
+            prose = []
+
+            for key in ("blocked_by", "depends_on", "depends"):
+                if key not in raw:
+                    continue
+                val, folded = raw[key]
+                toks, trailing = items_of(val)
+                if trailing:
+                    prose.append("%s (trailing note): %s" % (key, trailing))
+                for tok in toks:
+                    res = expand(tok, t)
+                    if res:
+                        needs.append(res)
+                    elif re.match(r"^[A-Za-z0-9._-]{1,40}$", tok):
+                        prose.append("Unresolved `%s` reference: %s" % (key, tok))
+                        self.review.append((
+                            "needs", "`%s`: `%s: %s` did not resolve to a task on disk; moved "
+                            "to `## Notes`." % (t.id, key, tok)))
+                    else:
+                        t.blocker_lines.append(tok)
+
+            for key in ("blocked_by_external",):
+                if key in raw:
+                    val, _f = raw[key]
+                    kind, v, _tr = parse_value(val)
+                    text = ", ".join(v) if kind == "list" else v
+                    if text:
+                        t.blocker_lines.append(text)
+
+            if "blocks" in raw:
+                val, _f = raw["blocks"]
+                toks, _tr = items_of(val)
+                for tok in toks:
+                    res = expand(tok, t)
+                    if res:
+                        pending_inverse.append((res, t.id))
+                    elif tok:
+                        prose.append("Unresolved `blocks` reference: %s" % tok)
+
+            if "related" in raw:
+                val, _f = raw["related"]
+                toks, _tr = items_of(val)
+                resolved = []
+                for tok in toks:
+                    res = expand(tok, t)
+                    resolved.append(res or tok)
+                if resolved:
+                    prose.append("Related: " + ", ".join(resolved))
+
+            t.needs = needs
+            t.notes_lines.extend(prose)
+
+        for target_id, src_id in pending_inverse:
+            tt = self.by_id.get(target_id)
+            if tt is None:
+                continue
+            if src_id != target_id and src_id not in tt.needs:
+                tt.needs.append(src_id)
+                tt.inverted = True
+
+        self.break_cycles()
+
+        for t in self.tasks:
+            if not t.parse_ok:
+                continue
+            seen = []
+            for n in t.needs:
+                if n != t.id and n in self.by_id and n not in seen:
+                    seen.append(n)
+            if seen:
+                t.fields["needs"] = seen
+            t.needs = seen
+
+    def break_cycles(self):
+        """Drop the minimum set of needs-edges that close a cycle; flag each."""
+        state = {}
+        removed = []
+
+        def visit(tid, stack):
+            state[tid] = 1
+            t = self.by_id.get(tid)
+            if t is not None:
+                for dep in list(t.needs):
+                    if dep not in self.by_id:
+                        continue
+                    s = state.get(dep, 0)
+                    if s == 1:
+                        t.needs.remove(dep)
+                        removed.append((tid, dep, list(stack) + [tid, dep]))
+                        continue
+                    if s == 0:
+                        visit(dep, stack + [tid])
+            state[tid] = 2
+
+        sys.setrecursionlimit(10000)
+        for tid in sorted(self.by_id):
+            if state.get(tid, 0) == 0:
+                visit(tid, [])
+        for a, b, cyc in removed:
+            self.review.append((
+                "needs", "cycle broken: dropped `%s` from `%s`'s `needs` (%s)."
+                % (b, a, " -> ".join(cyc))))
+        self.stats["cycles_broken"] = len(removed)
+
+    # ---- stage 4: stage + terminal fields ---------------------------------
+
+    def resolve_stages(self):
+        for t in self.tasks:
+            if not t.parse_ok:
+                continue
+            raw = t.raw
+            status = t.status
+            stage = t.stage
+
+            resolution = None
+            resolution_ref = None
+
+            def ref_of(key):
+                if key not in raw:
+                    return None
+                kind, v, _tr = parse_value(raw[key][0])
+                tok = (v[0] if (kind == "list" and v) else v)
+                tok = (tok or "").strip()
+                if not tok:
+                    return None
+                if tok in self.by_id:
+                    return tok
+                if BARE_REF_RE.match(tok) and ("TASK-" + tok) in self.by_id:
+                    return "TASK-" + tok
+                return None
+
+            if status in ("superseded", "absorbed"):
+                ref = ref_of("superseded_by") or ref_of("absorbed_by")
+                stage = "closed"
+                if ref:
+                    resolution, resolution_ref = "superseded", ref
+                else:
+                    resolution = "obsolete"
+                    self.review.append((
+                        "closed", "`%s`: `status: %s` with no resolvable target. Closed as "
+                        "`obsolete`; set `resolution: superseded` + `resolution_ref` once the "
+                        "successor is known." % (t.id, status)))
+            elif status == "deferred":
+                if t.stage in TERMINAL:
+                    stage = "closed"
+                    resolution = "obsolete"
+                else:
+                    t.fields["priority"] = "low"
+                    self.review.append((
+                        "priority", "`%s`: `status: deferred` in `%s/` -> stayed put with "
+                        "`priority: low`." % (t.id, t.stage)))
+            elif status in ("done", "satisfied", "prep-complete") and t.stage in ("active", "backlog"):
+                # The one case that reads BOTH assertions instead of discarding one.
+                stage = "review"
+                self.review.append((
+                    "review", "`%s`: author said `%s`, directory said `%s/`. Filed to `review/` "
+                    "- finished but unverified." % (t.id, status, t.stage)))
+            elif ref_of("superseded_by") and t.stage not in TERMINAL:
+                stage = "closed"
+                resolution, resolution_ref = "superseded", ref_of("superseded_by")
+
+            # `supersedes` names the OTHER side of the relation.
+            if "supersedes" in raw:
+                other = ref_of("supersedes")
+                if other and other != t.id:
+                    self.pending_supersede = getattr(self, "pending_supersede", [])
+                    self.pending_supersede.append((other, t.id))
+
+            t.stage = stage
+            if resolution:
+                t.fields["resolution"] = resolution
+            if resolution_ref:
+                t.fields["resolution_ref"] = resolution_ref
+
+        for other, by in getattr(self, "pending_supersede", []):
+            tt = self.by_id.get(other)
+            if tt is None:
+                continue
+            if tt.stage == "closed":
+                continue
+            tt.stage = "closed"
+            tt.fields["resolution"] = "superseded"
+            tt.fields["resolution_ref"] = by
+            self.review.append((
+                "closed", "`%s` was closed as superseded because `%s` declared "
+                "`supersedes: %s`." % (other, by, other)))
+
+        for t in self.tasks:
+            if not t.parse_ok:
+                continue
+            if t.stage in TERMINAL:
+                t.fields["completed_by"] = self.infer_completed_by(t)
+            if t.stage != "closed":
+                t.fields.pop("resolution", None)
+                t.fields.pop("resolution_ref", None)
+            if t.stage == "closed" and "resolution" not in t.fields:
+                t.fields["resolution"] = "obsolete"
+                self.review.append((
+                    "closed", "`%s` landed in `closed/` with no stated outcome; recorded as "
+                    "`obsolete`." % t.id))
+            if t.fields.get("priority") == "now" and t.stage in ("triage", "backlog"):
+                t.stage = "active"
+                self.review.append((
+                    "priority", "`%s` carried `priority: now`; routed to `active/`." % t.id))
+
+    def infer_completed_by(self, t):
+        if self.args.completed_by_from:
+            cand = handle_from(self.run_capture(self.args.completed_by_from, t.src_path))
+            if cand:
+                return cand
+        return "unknown"
+
+    # ---- stage 5: phases ---------------------------------------------------
+
+    def resolve_phases(self):
+        heads = self.roadmap.phase_ids()
+        head_set = set(heads)
+        head_lower = {}
+        for h in heads:
+            head_lower.setdefault(h.lower(), h)
+        entries = self.roadmap.entries()
+
+        resolved = {"exact": 0, "strip": 0, "case": 0, "harvest": 0,
+                    "generated": 0, "unsorted": 0}
+        generated = []
+
+        for t in self.tasks:
+            if not t.parse_ok:
+                continue
+            declared = None
+            if "phase" in t.raw:
+                kind, v, _tr = parse_value(t.raw["phase"][0])
+                declared = (v[0] if (kind == "list" and v) else v)
+                declared = (declared or "").strip()
+            if t.stage == "triage":
+                if declared:
+                    t.fields["x-legacy_phase"] = declared
+                t.phase = None
+                continue
+
+            value = None
+            how = None
+            if declared:
+                cand = declared
+                if cand in head_set:
+                    value, how = cand, "exact"
+                else:
+                    stripped = re.sub(r"^phase[-_ ]", "", cand, flags=re.I)
+                    if stripped in head_set:
+                        value, how = stripped, "strip"
+                    elif cand.lower() in head_lower:
+                        value, how = head_lower[cand.lower()], "case"
+                    elif stripped.lower() in head_lower:
+                        value, how = head_lower[stripped.lower()], "case"
+
+            if value is None:
+                lookup = t.old_id or t.id
+                hits = [p for (p, _ttl) in entries.get(lookup, []) if p]
+                if not hits and t.old_id:
+                    hits = [p for (p, _ttl) in entries.get(t.id, []) if p]
+                if len(set(hits)) == 1:
+                    value, how = hits[0], "harvest"
+                    if declared:
+                        t.fields["x-legacy_phase"] = declared
+
+            if value is None and declared:
+                cand = re.sub(r"^phase[-_ ]", "", declared, flags=re.I).strip()
+                if cand.lower() in ("n/a", "na", "none", "tbd", "null", "-"):
+                    cand = ""
+                if cand and PHASE_ID_RE.match(cand):
+                    value, how = cand, "generated"
+                    if cand not in head_set and cand not in generated:
+                        generated.append(cand)
+                elif declared:
+                    t.fields["x-legacy_phase"] = declared
+
+            if value is None:
+                value, how = UNSORTED_PHASE, "unsorted"
+                if UNSORTED_PHASE not in head_set and UNSORTED_PHASE not in generated:
+                    generated.append(UNSORTED_PHASE)
+
+            resolved[how] += 1
+            t.phase = value
+            t.fields["phase"] = value
+
+        self.generated_phases = generated
+        self.stats["phase_resolution"] = resolved
+        for g in generated:
+            self.review.append((
+                "phase", "generated `## Phase %s` in ROADMAP.md with a placeholder scope - "
+                "replace it with the real scope paragraph." % g))
+
+    # ---- stage 6: leftovers -> x- keys and prose --------------------------
+
+    def preserve_rest(self):
+        for t in self.tasks:
+            if not t.parse_ok:
+                continue
+            for key in t.raw_order:
+                if key in CONSUMED_KEYS:
+                    continue
+                if key in ("supersedes", "absorbed_in", "superseded_by", "absorbed_by") and \
+                        key in ("superseded_by", "absorbed_by") and t.stage == "closed":
+                    continue
+                val, folded = t.raw[key]
+                xkey = "x-" + re.sub(r"[^a-z0-9_-]", "_", key.lower())
+                if not re.match(r"^x-[a-z0-9][a-z0-9_-]*$", xkey):
+                    xkey = "x-legacy_" + re.sub(r"[^a-z0-9_]", "_", key.lower())
+                kind, v, trailing = parse_value(val)
+                if kind == "list":
+                    if not v:
+                        continue
+                    t.fields[xkey] = v
+                    if trailing:
+                        t.notes_lines.append("`%s` trailing note: %s" % (key, trailing))
+                    continue
+                text = one_line(v)
+                if not text:
+                    continue
+                if folded and len(text) > 200:
+                    t.notes_lines.append("`%s`: %s" % (key, text))
+                    t.fields[xkey] = "see ## Notes"
+                    self.review.append((
+                        "folded", "`%s`: multi-line `%s` (%d chars) moved verbatim into "
+                        "`## Notes`; the key survives as `%s: see ## Notes`."
+                        % (t.id, key, len(text), xkey)))
+                else:
+                    if folded:
+                        self.review.append((
+                            "folded", "`%s`: multi-line `%s` folded onto one line."
+                            % (t.id, key)))
+                    t.fields[xkey] = text
+
+    # ---- stage 7: body -----------------------------------------------------
+
+    def finish_bodies(self):
+        stub_terminal = 0
+        synth_blockers = 0
+        renamed_blocker = 0
+        for t in self.tasks:
+            if not t.parse_ok:
+                continue
+            body = t.body
+
+            # H1
+            want = "# %s: %s" % (t.id, t.title)
+            idx, h1 = find_h1(body)
+            if idx is None:
+                lines = body.split("\n")
+                while lines and lines[0].strip() == "":
+                    lines.pop(0)
+                body = "\n".join(["", want, ""] + lines)
+            elif h1 != want:
+                lines = body.split("\n")
+                lines[idx] = want
+                body = "\n".join(lines)
+
+            # Blocker section for blocked/
+            if t.stage == "blocked":
+                sec = section_body(body, "Blocker")
+                if sec is None or not any(l.strip() and not ANY_HEADING_RE.match(l) for l in sec):
+                    if has_section(body, "Blocker notes"):
+                        notes_sec = section_body(body, "Blocker notes") or []
+                        if any(l.strip() and not ANY_HEADING_RE.match(l) for l in notes_sec):
+                            body, ok = rename_section(body, "Blocker notes", "Blocker")
+                            if ok:
+                                renamed_blocker += 1
+                                sec = section_body(body, "Blocker")
+                                self.review.append((
+                                    "blocker", "`%s`: heading `## Blocker notes` renamed to "
+                                    "`## Blocker` (I-31 names the section exactly). The prose "
+                                    "under it is untouched." % t.id))
+                if sec is None or not any(l.strip() and not ANY_HEADING_RE.match(l) for l in sec):
+                    text = t.blocker_lines or [
+                        "Recorded at migration; the blocker was not stated. Verify or unblock."]
+                    body = append_to_section(body, "Blocker", text)
+                    if not t.blocker_lines:
+                        synth_blockers += 1
+                        self.review.append((
+                            "blocker", "`%s` sat in `blocked/` with no stated blocker; a "
+                            "placeholder was written. Verify or unblock." % t.id))
+                elif t.blocker_lines:
+                    body = append_to_section(body, "Blocker", t.blocker_lines)
+            elif t.blocker_lines:
+                # Never move a terminal or unrelated task into blocked/ from prose alone.
+                if t.stage in ("backlog", "active", "review"):
+                    t.stage = "blocked"
+                    body = append_to_section(body, "Blocker", t.blocker_lines)
+                    self.review.append((
+                        "blocker", "`%s` had a free-text blocker and moved to `blocked/`." % t.id))
+                else:
+                    t.notes_lines.extend("Recorded blocker: " + b for b in t.blocker_lines)
+
+            if t.notes_lines:
+                body = append_to_section(body, "Notes", list(t.notes_lines))
+
+            if not body.endswith("\n"):
+                body += "\n"
+            t.body = body
+
+            if t.stage in ("review",) + TERMINAL and is_stub_depth(body):
+                stub_terminal += 1
+
+        self.stats["stub_depth_terminal"] = stub_terminal
+        self.stats["synthesized_blockers"] = synth_blockers
+        self.stats["renamed_blocker_sections"] = renamed_blocker
+
+    # ---- stage 8: filenames -----------------------------------------------
+
+    def resolve_filenames(self):
+        renamed = 0
+        for t in self.tasks:
+            if not t.parse_ok:
+                continue
+            base = os.path.splitext(t.src_filename)[0]
+            slug = getattr(t, "forced_slug", None)
+            if slug is None and t.old_id is None and base.startswith(t.id + "-"):
+                cand = base[len(t.id) + 1:]
+                if SLUG_RE.match(cand) and 1 <= len(cand) <= 60:
+                    slug = cand
+            if slug is None:
+                slug = slugify(t.title)
+            t.slug = slug
+            t.filename = "%s-%s.md" % (t.id, slug)
+            if t.filename != t.src_filename:
+                renamed += 1
+        # uniqueness inside a stage
+        seen = {}
+        for t in self.tasks:
+            if not t.parse_ok:
+                continue
+            key = (t.stage, t.filename.lower())
+            if key in seen:
+                n = 2
+                while (t.stage, ("%s-%d.md" % (t.filename[:-3], n)).lower()) in seen:
+                    n += 1
+                t.filename = "%s-%d.md" % (t.filename[:-3], n)
+                key = (t.stage, t.filename.lower())
+            seen[key] = t
+        self.stats["files_renamed"] = renamed
+
+    # ---- stage 9: history + digests + config -------------------------------
+
+    def build_history(self):
+        rows = []
+        for t in self.tasks:
+            if not t.parse_ok:
+                continue
+            created = t.fields["created"]
+            who = t.fields["created_by"]
+            rows.append([created, t.id, "-", t.stage, who, "migrated"])
+            if t.stage in TERMINAL:
+                cd = t.closed_date or created
+                if cd < created:
+                    cd = created
+                if cd > self.today:
+                    cd = self.today
+                if cd != created or t.closed_date:
+                    rows.append([cd, t.id, t.stage, t.stage,
+                                 t.fields.get("completed_by", "unknown"), "closed at migration"])
+                    t.last_event = cd
+                else:
+                    t.last_event = created
+            else:
+                t.last_event = created
+        rows.sort(key=lambda r: r[0])
+        self.history_rows = rows
+
+        for t in self.tasks:
+            if not t.parse_ok:
+                continue
+            updated = max(t.fields["created"], getattr(t, "last_event", t.fields["created"]))
+            if updated > self.today:
+                updated = self.today
+            t.fields["updated"] = updated
+
+    def build_config(self):
+        migrated_on = self.today
+        latest = max([t.fields["created"] for t in self.tasks if t.parse_ok] or [self.today])
+        if latest >= migrated_on:
+            d = datetime.date.fromisoformat(latest) + datetime.timedelta(days=1)
+            migrated_on = d.isoformat()
+        series = sorted(self.series_seen)
+        lines = [
+            "schema: %s" % SCHEMA_ID,
+            "migrated_on: %s" % migrated_on,
+            "actors: []",
+            "targets: []",
+            "series: [%s]" % ", ".join(series),
+        ]
+        self.config_text = "\n".join(lines) + "\n"
+        self.migrated_on = migrated_on
+
+    # ---- render ------------------------------------------------------------
+
+    def render_task(self, t):
+        return render_frontmatter(t.fields) + "\n" + t.body.lstrip("\n")
+
+    # ---- run ---------------------------------------------------------------
+
+    def plan(self):
+        self.inventory()
+        if self.errors:
+            return False
+        self.resolve_identity()
+        self.convert_fields()
+        self.resolve_dependencies()
+        self.resolve_stages()
+        self.resolve_phases()
+        self.preserve_rest()
+        self.finish_bodies()
+        self.resolve_filenames()
+        self.build_history()
+        self.build_config()
+        rebuild_roadmap(self.roadmap, [t for t in self.tasks if t.parse_ok],
+                        self.generated_phases, self.notes)
+        return True
+
+
+def shell_quote(s):
+    return "'" + s.replace("'", "'\"'\"'") + "'"
+
+
+def handle_from(output):
+    """Turn a command's first output line into an actor handle, or nothing.
+
+    Deliberately strict: a command that prints something that is not a name
+    yields no handle at all, rather than a mangled one. The migration does not
+    fabricate a person.
+    """
+    if not output:
+        return None
+    line = output.strip().split("\n")[0].strip().lower()
+    if not line:
+        return None
+    cand = re.sub(r"\s+", "-", line)
+    return cand if ACTOR_RE.match(cand) else None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Writing
+# ─────────────────────────────────────────────────────────────────────────────
+
+REF_SKIP_DIRS = {".state"}
+
+
+def rewrite_references(root, mapping, skip_files):
+    """Rewrite renamed ids in every .md under root. Returns (files, hits)."""
+    if not mapping:
+        return 0, 0
+    pattern = re.compile(r"(?<![A-Za-z0-9-])(" +
+                         "|".join(re.escape(k) for k in sorted(mapping, key=len, reverse=True)) +
+                         r")(?![A-Za-z0-9-])")
+    files = hits = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in REF_SKIP_DIRS]
+        for fn in filenames:
+            if not fn.endswith(".md"):
+                continue
+            p = os.path.join(dirpath, fn)
+            if os.path.abspath(p) in skip_files:
+                continue
+            text = open(p, encoding="utf-8", errors="replace").read()
+            out = []
+            n = 0
+            for ln in text.split("\n"):
+                # `x-legacy_id` is the record of the OLD value; rewriting it
+                # would erase the very thing it exists to remember.
+                if "x-legacy_id" in ln:
+                    out.append(ln)
+                    continue
+                new_ln, k = pattern.subn(lambda m: mapping[m.group(1)], ln)
+                n += k
+                out.append(new_ln)
+            if n:
+                open(p, "w", encoding="utf-8").write("\n".join(out))
+                files += 1
+                hits += n
+    return files, hits
+
+
+def write_migration(mig, dest):
+    """Write the whole migrated ledger into `dest` (already a copy of tasks/)."""
+    # Does this project keep empty stage directories alive with a placeholder?
+    placeholder = None
+    for st in LEGACY_STAGE_MAP:
+        d = os.path.join(dest, st)
+        if not os.path.isdir(d):
+            continue
+        for fn in os.listdir(d):
+            if fn.startswith(".") and fn not in (".DS_Store",):
+                placeholder = fn
+                break
+        if placeholder:
+            break
+
+    for st in STAGES:
+        d = os.path.join(dest, st)
+        os.makedirs(d, exist_ok=True)
+        if placeholder and not os.path.exists(os.path.join(d, placeholder)):
+            open(os.path.join(d, placeholder), "a").close()
+
+    # remove every legacy task file; they are rewritten from the model
+    for st in LEGACY_STAGE_MAP:
+        d = os.path.join(dest, st)
+        if not os.path.isdir(d):
+            continue
+        for fn in os.listdir(d):
+            if fn.endswith(".md"):
+                os.remove(os.path.join(d, fn))
+
+    written = []
+    for t in mig.tasks:
+        if not t.parse_ok:
+            continue
+        p = os.path.join(dest, t.stage, t.filename)
+        open(p, "w", encoding="utf-8").write(mig.render_task(t))
+        written.append(os.path.abspath(p))
+
+    # ROADMAP (written before reference-rewriting so renames land in it too)
+    rm_path = os.path.join(dest, "ROADMAP.md")
+    text = mig.roadmap.render()
+    if not text.endswith("\n"):
+        text += "\n"
+    open(rm_path, "w", encoding="utf-8").write(text)
+
+    # references to renumbered ids: only the loser's own file is unambiguous,
+    # plus ROADMAP lines whose title matches the loser.
+    self_map = {}
+    for t in mig.tasks:
+        if t.parse_ok and t.old_id:
+            self_map[t.old_id] = t.id
+    surviving_ids = set(t.id for t in mig.tasks if t.parse_ok)
+    if self_map:
+        for t in mig.tasks:
+            if not (t.parse_ok and t.old_id):
+                continue
+            p = os.path.join(dest, t.stage, t.filename)
+            text = open(p, encoding="utf-8").read()
+            pat = re.compile(r"(?<![A-Za-z0-9-])" + re.escape(t.old_id) + r"(?![A-Za-z0-9-])")
+            # do not clobber the preserved x-legacy_id record
+            out = []
+            prose = []
+            for ln in text.split("\n"):
+                if "x-legacy_id" in ln:
+                    out.append(ln)
+                    continue
+                new_ln, k = pat.subn(t.id, ln)
+                if k and not (ln.startswith("id:") or ln.startswith("# ")):
+                    prose.append(ln.strip())
+                out.append(new_ln)
+            open(p, "w", encoding="utf-8").write("\n".join(out))
+            if prose and t.old_id in surviving_ids:
+                mig.review.append((
+                    "id", "`%s` (was `%s`): %d prose mention(s) of the old id inside its own "
+                    "file were rewritten to the new one. The old id still belongs to the "
+                    "keeper, so check these read correctly: %s"
+                    % (t.id, t.old_id, len(prose),
+                       "; ".join("“%s”" % x[:90] for x in prose[:4]))))
+
+    # unambiguous renames (ids with no surviving holder) sweep the whole tree
+    unambiguous = {old: new for old, new in self_map.items() if old not in surviving_ids}
+    files, hits = rewrite_references(dest, unambiguous, set())
+    mig.stats["refs_rewritten_files"] = files
+    mig.stats["refs_rewritten_hits"] = hits
+
+    # history.tsv
+    hp = os.path.join(dest, "history.tsv")
+    with open(hp, "w", encoding="utf-8") as fh:
+        fh.write(HISTORY_HEADER + "\n")
+        for r in mig.history_rows:
+            fh.write("\t".join(r) + "\n")
+
+    # tasks.config.yml
+    open(os.path.join(dest, "tasks.config.yml"), "w", encoding="utf-8").write(mig.config_text)
+
+    # .state/digests.tsv
+    state = os.path.join(dest, ".state")
+    os.makedirs(state, exist_ok=True)
+    with open(os.path.join(state, "digests.tsv"), "w", encoding="utf-8") as fh:
+        for t in sorted((x for x in mig.tasks if x.parse_ok), key=lambda x: x.id):
+            p = os.path.join(dest, t.stage, t.filename)
+            digest = hashlib.sha256(open(p, "rb").read()).hexdigest()
+            fh.write("%s\t%s\t%s\t%s\n" % (t.id, digest, t.fields["updated"], t.stage))
+
+    # empty-file housekeeping that the 0.1.x spine mandated and nothing created
+    for rel in ("CHANGES.md",):
+        p = os.path.join(dest, rel)
+        if os.path.exists(p):
+            content = [l for l in open(p, encoding="utf-8", errors="replace").read().split("\n")
+                       if l.strip() and not l.strip().startswith("#")]
+            if not content:
+                os.remove(p)
+                mig.notes.setdefault("removed_empty", []).append(rel)
+            else:
+                mig.review.append((
+                    "housekeeping", "`tasks/%s` is superseded by `history.tsv` + `closed/` but "
+                    "is not empty; left in place and ignored by the validator." % rel))
+
+    # a legacy done/ holds nothing once its contents are in completed/ (D4);
+    # a bare directory placeholder is not content, so the directory goes too.
+    d = os.path.join(dest, "done")
+    if os.path.isdir(d):
+        leftovers = [f for f in os.listdir(d) if not f.startswith(".")]
+        if not leftovers:
+            shutil.rmtree(d)
+            mig.notes.setdefault("removed_empty", []).append("done/")
+        else:
+            mig.review.append((
+                "housekeeping", "`tasks/done/` still holds %d non-task file(s) after the merge "
+                "into `completed/`; left in place." % len(leftovers)))
+
+    write_review_file(mig, dest)
+    return written
+
+
+def write_review_file(mig, dest):
+    lines = []
+    lines.append("# Migration review — 0.1.x -> %s" % SCHEMA_ID)
+    lines.append("")
+    lines.append("Written by `bin/migrate-tasks` on %s. Every line below is a judgement the"
+                 % mig.today)
+    lines.append("migration refused to make for you. Nothing here blocks the validator unless it")
+    lines.append("says so; delete a line once you have dealt with it.")
+    lines.append("")
+    lines.append("## Standing counts")
+    lines.append("")
+    lines.append("- tasks migrated: %d" % len([t for t in mig.tasks if t.parse_ok]))
+    unknown_created = len([t for t in mig.tasks
+                           if t.parse_ok and t.fields.get("created_by") == "unknown"])
+    unknown_done = len([t for t in mig.tasks
+                        if t.parse_ok and t.fields.get("completed_by") == "unknown"])
+    lines.append("- `created_by: unknown`: %d (the attribution debt; the ratchet at "
+                 "`migrated_on: %s` freezes it so it can only shrink)"
+                 % (unknown_created, mig.migrated_on))
+    lines.append("- `completed_by: unknown`: %d" % unknown_done)
+    lines.append("- stub-depth tasks in `review/`/`completed/`/`closed/`: %d (warning only)"
+                 % mig.stats.get("stub_depth_terminal", 0))
+    lines.append("- tasks in `review/`: %d"
+                 % len([t for t in mig.tasks if t.parse_ok and t.stage == "review"]))
+    lines.append("- generated phase headings: %d" % len(mig.generated_phases))
+    lines.append("- files renamed to carry a slug: %d" % mig.stats.get("files_renamed", 0))
+    lines.append("")
+
+    renames = [(t.old_id, t.id, t.stage, t.filename)
+               for t in mig.tasks if t.parse_ok and t.old_id]
+    if renames:
+        lines.append("## Renumbered ids — check for references OUTSIDE `tasks/`")
+        lines.append("")
+        lines.append("The migration rewrote the references it could attribute. A reference living")
+        lines.append("in a message, a commit note or someone's memory cannot be rewritten. Run")
+        lines.append("this from the project root and read every hit:")
+        lines.append("")
+        lines.append("```sh")
+        alt = "|".join(re.escape(old) for old, _n, _s, _f in sorted(set(renames)))
+        lines.append("grep -rnE --exclude-dir=tasks --exclude-dir=.git \\")
+        lines.append("  '(^|[^A-Za-z0-9-])(%s)([^A-Za-z0-9-]|$)' ." % alt)
+        lines.append("```")
+        lines.append("")
+        lines.append("| old id | new id | now at |")
+        lines.append("|---|---|---|")
+        for old, new, stage, fn in sorted(renames):
+            lines.append("| `%s` | **`%s`** | `%s/%s` |" % (old, new, stage, fn))
+        lines.append("")
+
+    if mig.notes.get("dangling_roadmap"):
+        lines.append("## Dangling ROADMAP entries — these are validator ERRORS")
+        lines.append("")
+        lines.append("Each line names a task id with no file on disk. It is either a lost task or")
+        lines.append("a stale promise, and only you know which — so the migration left them")
+        lines.append("exactly where they were. `bin/check-tasks` will report them until you either")
+        lines.append("delete the line or file the task.")
+        lines.append("")
+        for tid, phase in sorted(set(mig.notes["dangling_roadmap"])):
+            lines.append("- `%s` (listed under phase `%s`)" % (tid, phase))
+        lines.append("")
+
+    if mig.notes.get("roadmap_prose_dropped"):
+        lines.append("## Hand-written ROADMAP notes that were removed with their line")
+        lines.append("")
+        lines.append("Removing these lines was correct — a task belongs to exactly one phase, and")
+        lines.append("a triage task is not listed at all. But each carried words somebody typed")
+        lines.append("that the kept line does not, and the migration will not decide whether they")
+        lines.append("still matter. Re-attach anything worth keeping, then delete the entry.")
+        lines.append("")
+        seen = set()
+        for tid, text, why in mig.notes["roadmap_prose_dropped"]:
+            if (tid, text) in seen:
+                continue
+            seen.add((tid, text))
+            lines.append("- `%s` — removed because %s" % (tid, why))
+            lines.append("  - the line read: `%s`" % text)
+        lines.append("")
+
+    groups = {}
+    for cat, text in mig.review:
+        groups.setdefault(cat, []).append(text)
+    titles = {
+        "id": "Identity", "phase": "Phase scopes to write", "type": "Type mappings to confirm",
+        "priority": "Priority / ordering", "needs": "Dependencies", "closed": "Closures",
+        "blocker": "Blockers", "folded": "Folded multi-line values",
+        "review": "Filed to review/", "housekeeping": "Housekeeping",
+    }
+    for cat in sorted(groups):
+        lines.append("## %s" % titles.get(cat, cat))
+        lines.append("")
+        for text in sorted(set(groups[cat])):
+            lines.append("- %s" % text)
+        lines.append("")
+    return open(os.path.join(dest, "MIGRATION-REVIEW.md"), "w", encoding="utf-8").write(
+        "\n".join(lines) + "\n")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Built-in validator — the invariants of SPEC-v1.md, used as the migration gate
+# when the consumer-side `content/bin/check-tasks` is not on hand.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def validate(tasks_dir):
+    errors = []
+    warnings = []
+    infos = []
+
+    def E(rule, path, msg):
+        errors.append("%s %s: %s" % (rule, path, msg))
+
+    def W(rule, path, msg):
+        warnings.append("%s %s: %s" % (rule, path, msg))
+
+    today = today_str()
+    cfg = {}
+    cfg_path = os.path.join(tasks_dir, "tasks.config.yml")
+    if os.path.exists(cfg_path):
+        f, _b, errs = parse_v1_frontmatter("---\n" +
+                                           open(cfg_path, encoding="utf-8").read() + "---\n")
+        if errs:
+            return ["I-CFG tasks.config.yml: unparseable"], warnings, infos
+        cfg = f or {}
+
+    # I-01 input set
+    files = []
+    for st in STAGES:
+        d = os.path.join(tasks_dir, st)
+        if not os.path.isdir(d):
+            continue
+        for fn in sorted(os.listdir(d)):
+            if fn.endswith(".md") and os.path.isfile(os.path.join(d, fn)):
+                files.append((st, fn, os.path.join(d, fn)))
+    for entry in sorted(os.listdir(tasks_dir)):
+        p = os.path.join(tasks_dir, entry)
+        if os.path.isdir(p) and entry not in STAGES and entry != ".state":
+            infos.append("I-01 tasks/%s/: unrecognized subdirectory, ignored" % entry)
+
+    parsed = {}
+    for st, fn, p in files:
+        rel = "%s/%s" % (st, fn)
+        raw = open(p, "rb").read()
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            E("I-09", rel, "not valid UTF-8")
+            continue
+        if not text.endswith("\n"):
+            E("I-09", rel, "does not end with a newline")
+        fields, body, errs = parse_v1_frontmatter(text)
+        if errs:
+            for n, m in errs:
+                if "duplicate key" in m:
+                    E("I-03", rel, "line %d: %s" % (n, m))
+                else:
+                    E("I-02", rel, "line %d: %s" % (n, m))
+            continue
+        parsed[rel] = (st, fn, p, fields, body, raw)
+
+    ids = {}
+    for rel, (st, fn, p, f, body, raw) in sorted(parsed.items()):
+        tid = f.get("id")
+        if not isinstance(tid, str) or not ID_RE.match(tid or ""):
+            E("I-04", rel, "missing or malformed id %r" % tid)
+            continue
+        m = ID_RE.match(tid)
+        series_cfg = cfg.get("series")
+        if isinstance(series_cfg, list) and series_cfg and m.group(1) and m.group(1) not in series_cfg:
+            E("I-04", rel, "series %r not declared in tasks.config.yml#series" % m.group(1))
+        ids.setdefault(tid, []).append(rel)
+
+    for tid, rels in sorted(ids.items()):
+        if len(rels) > 1:
+            E("I-05", ", ".join(rels), "id %s is held by %d files" % (tid, len(rels)))
+
+    # history
+    hist_path = os.path.join(tasks_dir, "history.tsv")
+    hist = []
+    if os.path.exists(hist_path):
+        hl = open(hist_path, encoding="utf-8").read().split("\n")
+        if not hl or hl[0] != HISTORY_HEADER:
+            E("I-32", "history.tsv", "missing or wrong header line")
+        prev = ""
+        for i, ln in enumerate(hl[1:], start=2):
+            if not ln.strip():
+                continue
+            parts = ln.split("\t")
+            if len(parts) != 6:
+                E("I-32", "history.tsv", "line %d: %d fields, expected 6" % (i, len(parts)))
+                continue
+            d, tid, frm, to, actor, _note = parts
+            if not DATE_RE.match(d) or not real_date(d):
+                E("I-32", "history.tsv", "line %d: bad date %r" % (i, d))
+            elif d < prev:
+                E("I-32", "history.tsv", "line %d: dates decrease (%s after %s)" % (i, d, prev))
+            else:
+                prev = d
+            if not ID_RE.match(tid):
+                E("I-32", "history.tsv", "line %d: bad id %r" % (i, tid))
+            if frm != "-" and frm not in STAGES:
+                E("I-32", "history.tsv", "line %d: bad from %r" % (i, frm))
+            if to not in STAGES:
+                E("I-32", "history.tsv", "line %d: bad to %r" % (i, to))
+            if actor != "unknown" and not ACTOR_RE.match(actor):
+                E("I-32", "history.tsv", "line %d: bad actor %r" % (i, actor))
+            hist.append((d, tid, frm, to, actor))
+    else:
+        E("I-32", "history.tsv", "missing")
+
+    hist_by_id = {}
+    for d, tid, frm, to, actor in hist:
+        hist_by_id.setdefault(tid, []).append((d, frm, to, actor))
+
+    # ROADMAP
+    rm_path = os.path.join(tasks_dir, "ROADMAP.md")
+    rm = Roadmap(open(rm_path, encoding="utf-8").read()) if os.path.exists(rm_path) else Roadmap("")
+    phase_ids = rm.phase_ids()
+    seen_ph = set()
+    for h in phase_ids:
+        if h in seen_ph:
+            E("I-20", "ROADMAP.md", "two headings yield the same phase id %r" % h)
+        seen_ph.add(h)
+    for b in rm.blocks:
+        if not b["phase"]:
+            continue
+        if not b["name"]:
+            E("I-20", "ROADMAP.md", "phase %s has an empty name" % b["phase"])
+        real = [l for l in b["lines"]
+                if l.strip() and not ANY_HEADING_RE.match(l)
+                and not re.match(r"^\s*[-*>]", l) and l.strip() != PLACEHOLDER_SCOPE]
+        if not real:
+            W("I-21", "ROADMAP.md", "phase %s has no scope paragraph" % b["phase"])
+    rm_entries = rm.entries()
+
+    titles = {}
+    stages_of = {}
+    needs_of = {}
+    unknown_count = 0
+
+    for rel, (st, fn, p, f, body, raw) in sorted(parsed.items()):
+        tid = f.get("id", "")
+        if not ID_RE.match(tid or ""):
+            continue
+        stages_of[tid] = st
+
+        if fn != "%s-%s" % (tid, fn[len(tid) + 1:]) or not fn.startswith(tid + "-"):
+            E("I-07", rel, "filename does not start with '%s-'" % tid)
+        else:
+            slug = fn[len(tid) + 1:-3]
+            if not SLUG_RE.match(slug) or not (1 <= len(slug) <= 60):
+                E("I-07", rel, "bad slug %r" % slug)
+
+        n_h1 = count_h1(body)
+        _idx, h1 = find_h1(body)
+        if n_h1 != 1 or not h1 or not re.match(r"^# %s: .+$" % re.escape(tid), h1):
+            E("I-08", rel, "H1 must be exactly one line '# %s: <title>'" % tid)
+        else:
+            titles[tid] = h1[len("# %s: " % tid):].strip()
+
+        if "status" in f:
+            E("I-10", rel, "state is the directory in v1.0.0; delete this key")
+        for k in f:
+            if k not in KNOWN_KEYS and not k.startswith("x-"):
+                E("I-11", rel, "unknown key %r (use x-%s to keep it)" % (k, k))
+
+        ty = f.get("type")
+        if ty not in TYPES:
+            E("I-12", rel, "type %r is not one of %s" % (ty, "|".join(TYPES)))
+
+        pr = f.get("priority")
+        if pr is not None and pr not in PRIORITIES:
+            E("I-13", rel, "priority %r is not one of %s" % (pr, "|".join(PRIORITIES)))
+        if pr == "now" and st in ("triage", "backlog"):
+            E("I-14", rel, "priority: now must not sit in %s/" % st)
+
+        created = f.get("created")
+        if not isinstance(created, str) or not DATE_RE.match(created or "") or not real_date(created):
+            E("I-15", rel, "created %r is not a real YYYY-MM-DD" % created)
+        elif created > today:
+            E("I-15", rel, "created %s is in the future" % created)
+
+        updated = f.get("updated")
+        if not isinstance(updated, str) or not DATE_RE.match(updated or "") or not real_date(updated):
+            E("I-16", rel, "updated %r is not a real YYYY-MM-DD" % updated)
+        elif isinstance(created, str) and DATE_RE.match(created or ""):
+            if not (created <= updated <= today):
+                E("I-16", rel, "requires created <= updated <= today (%s/%s/%s)"
+                  % (created, updated, today))
+
+        for key in ("created_by", "completed_by"):
+            v = f.get(key)
+            if v is None:
+                continue
+            if not isinstance(v, str) or len(v) > 64 or "@" in v or \
+                    (v != "unknown" and not ACTOR_RE.match(v)):
+                E("I-17", rel, "%s %r is not a legal actor handle" % (key, v))
+            actors = cfg.get("actors")
+            if isinstance(actors, list) and actors and v != "unknown" and v not in actors:
+                E("I-17", rel, "%s %r is not declared in tasks.config.yml#actors" % (key, v))
+            if v == "unknown":
+                unknown_count += 1
+                mo = cfg.get("migrated_on")
+                if isinstance(mo, str) and DATE_RE.match(mo) and isinstance(created, str) \
+                        and DATE_RE.match(created or "") and created >= mo:
+                    E("I-18", rel, "%s: unknown is not allowed for a task created on or after "
+                      "migrated_on (%s)" % (key, mo))
+
+        ph = f.get("phase")
+        if st == "triage":
+            if ph is not None:
+                E("I-19", rel, "phase is forbidden in triage/")
+        else:
+            if ph is None:
+                E("I-19", rel, "phase is required outside triage/")
+            elif not isinstance(ph, str) or not PHASE_ID_RE.match(ph):
+                E("I-19", rel, "phase %r is malformed" % ph)
+            elif ph not in phase_ids:
+                E("I-20", rel, "phase %r is not declared in ROADMAP.md" % ph)
+            else:
+                hits = [pp for (pp, _t) in rm_entries.get(tid, [])]
+                if len(hits) != 1:
+                    E("I-22", rel, "ROADMAP.md must list %s exactly once (found %d)"
+                      % (tid, len(hits)))
+                elif hits[0] != ph:
+                    E("I-22", rel, "ROADMAP lists %s under phase %r, frontmatter says %r"
+                      % (tid, hits[0], ph))
+                else:
+                    rmtitle = rm_entries[tid][0][1]
+                    if tid in titles and rmtitle.strip() != titles[tid].strip():
+                        W("I-23", rel, "ROADMAP title differs from the H1 title")
+
+        tg = f.get("target")
+        targets = cfg.get("targets")
+        if isinstance(targets, list) and targets:
+            if st != "triage":
+                if not isinstance(tg, list) or not tg:
+                    E("I-25", rel, "target is required (tasks.config.yml#targets is non-empty)")
+                else:
+                    for v in tg:
+                        if not TARGET_RE.match(v) or v not in targets:
+                            E("I-25", rel, "target %r is not declared in #targets" % v)
+        else:
+            if tg is not None:
+                E("I-25", rel, "target is forbidden (no #targets declared)")
+
+        nd = f.get("needs")
+        if nd is not None:
+            if not isinstance(nd, list):
+                E("I-26", rel, "needs must be a flow list")
+            else:
+                if len(set(nd)) != len(nd):
+                    E("I-26", rel, "needs contains duplicates")
+                for v in nd:
+                    if not ID_RE.match(v):
+                        E("I-26", rel, "needs entry %r is not an id" % v)
+                    elif v == tid:
+                        E("I-26", rel, "needs contains itself")
+                needs_of[tid] = [v for v in nd if ID_RE.match(v)]
+
+        if st in TERMINAL:
+            if "completed_by" not in f:
+                E("I-29", rel, "completed_by is required in %s/" % st)
+        if st == "closed":
+            res = f.get("resolution")
+            if res not in RESOLUTIONS:
+                E("I-29", rel, "resolution %r is not one of %s" % (res, "|".join(RESOLUTIONS)))
+            ref = f.get("resolution_ref")
+            if res in ("superseded", "duplicate"):
+                if not ref:
+                    E("I-29", rel, "resolution_ref is required for %s" % res)
+                elif ref == tid:
+                    E("I-29", rel, "resolution_ref must not be itself")
+            elif ref:
+                E("I-29", rel, "resolution_ref is only legal for superseded/duplicate")
+        else:
+            if "completed_by" in f and st not in TERMINAL:
+                E("I-30", rel, "completed_by is forbidden outside completed/ and closed/")
+            if "resolution" in f or "resolution_ref" in f:
+                E("I-30", rel, "resolution/resolution_ref are forbidden outside closed/")
+
+        if st == "blocked":
+            sec = section_body(body, "Blocker")
+            if sec is None or not any(l.strip() and not ANY_HEADING_RE.match(l) for l in sec):
+                E("I-31", rel, "blocked/ requires a non-empty '## Blocker' section")
+
+        h = hist_by_id.get(tid)
+        if not h:
+            E("I-06", rel, "id does not appear in history.tsv")
+        else:
+            filed = [x for x in h if x[3] == "filed"]
+            if len(filed) > 1:
+                E("I-06", rel, "more than one 'filed' line in history.tsv")
+            if h[-1][2] != st:
+                E("I-33", rel, "directory %r disagrees with the last history line (%r)"
+                  % (st, h[-1][2]))
+            if isinstance(created, str) and h[0][0] != created:
+                E("I-35", rel, "created %s != first history line %s" % (created, h[0][0]))
+            if isinstance(updated, str) and updated < h[-1][0]:
+                E("I-35", rel, "updated %s is older than the last history line %s"
+                  % (updated, h[-1][0]))
+
+        if st == "review" and isinstance(updated, str) and DATE_RE.match(updated or ""):
+            age = (datetime.date.fromisoformat(today) - datetime.date.fromisoformat(updated)).days
+            if age > 30:
+                W("I-36", rel, "in review/ for %d days" % age)
+
+        if st in ("review",) + TERMINAL and is_stub_depth(body):
+            W("I-37", rel, "stub depth in a verified state")
+
+    # I-24 dangling roadmap entries
+    for tid in sorted(rm_entries):
+        if tid not in ids:
+            E("I-24", "ROADMAP.md", "entry names %s, which is not on disk" % tid)
+
+    # I-27 acyclicity
+    color = {}
+    def dfs(n, stack):
+        color[n] = 1
+        for d in needs_of.get(n, []):
+            if d not in stages_of:
+                continue
+            if color.get(d, 0) == 1:
+                E("I-27", "needs", "cycle: %s" % " -> ".join(stack + [n, d]))
+            elif color.get(d, 0) == 0:
+                dfs(d, stack + [n])
+        color[n] = 2
+    for n in sorted(stages_of):
+        if color.get(n, 0) == 0:
+            dfs(n, [])
+
+    # I-26 unresolved / I-28
+    for tid, deps in sorted(needs_of.items()):
+        for d in deps:
+            if d not in stages_of:
+                errors.append("I-26 %s: needs %s, which is not a task on disk"
+                              % (stages_of.get(tid, "?") + "/" + tid, d))
+            elif stages_of.get(tid) == "completed" and stages_of.get(d) not in TERMINAL:
+                warnings.append("I-28 %s: done but needs %s which is not terminal" % (tid, d))
+
+    # I-34 digests
+    dig_path = os.path.join(tasks_dir, ".state", "digests.tsv")
+    if not os.path.exists(dig_path):
+        infos.append("I-38 ledger re-seeded: %d tasks (staleness unverifiable for this run)"
+                     % len(parsed))
+    else:
+        rec = {}
+        for ln in open(dig_path, encoding="utf-8").read().split("\n"):
+            if not ln.strip():
+                continue
+            parts = ln.split("\t")
+            if len(parts) == 4:
+                rec[parts[0]] = (parts[1], parts[2], parts[3])
+        for rel, (st, fn, p, f, body, raw) in sorted(parsed.items()):
+            tid = f.get("id", "")
+            if tid not in rec:
+                continue
+            sha, upd, _stage = rec[tid]
+            cur = hashlib.sha256(open(p, "rb").read()).hexdigest()
+            if cur != sha and f.get("updated") == upd:
+                E("I-34", rel, "content changed but `updated` did not")
+
+    infos.append("attribution debt: %d unknown actor values" % unknown_count)
+    return errors, warnings, infos
+
+
+def real_date(s):
+    try:
+        datetime.date.fromisoformat(s)
+        return True
+    except Exception:
+        return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Preflight, apply, CLI
+# ─────────────────────────────────────────────────────────────────────────────
+
+def vcs_dirty(tasks_dir):
+    """Best-effort: is there a version-control store with uncommitted changes here?
+
+    Returns (store_found, dirty, detail). Never required: a project with no store
+    migrates exactly the same way.
+    """
+    d = os.path.abspath(tasks_dir)
+    root = None
+    while True:
+        if os.path.exists(os.path.join(d, ".git")):
+            root = d
+            break
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    if root is None:
+        return False, False, "no version-control store found"
+    if shutil.which("git") is None:
+        return True, False, "a .git store exists but no git binary is available"
+    try:
+        r = subprocess.run(["git", "status", "--porcelain", "--", tasks_dir],
+                           cwd=root, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                           timeout=60)
+        out = r.stdout.decode("utf-8", "replace").strip()
+    except Exception as exc:
+        return True, False, "could not query the store (%s)" % exc
+    if out:
+        return True, True, out
+    return True, False, "clean"
+
+
+def already_migrated(tasks_dir):
+    p = os.path.join(tasks_dir, "tasks.config.yml")
+    if not os.path.exists(p):
+        return False
+    text = open(p, encoding="utf-8", errors="replace").read()
+    return ("schema: %s" % SCHEMA_ID) in text
+
+
+def locate_tasks_dir(path):
+    path = os.path.abspath(path)
+    if os.path.isdir(path):
+        if any(os.path.isdir(os.path.join(path, s)) for s in LEGACY_STAGE_MAP):
+            return path
+        cand = os.path.join(path, "tasks")
+        if os.path.isdir(cand):
+            return cand
+    return None
+
+
+def print_plan(mig, out=sys.stdout):
+    w = out.write
+    counts = {}
+    for t in mig.tasks:
+        if t.parse_ok:
+            counts[t.stage] = counts.get(t.stage, 0) + 1
+    moves = sum(1 for t in mig.tasks if t.parse_ok and t.stage != t.src_stage)
+    w("  files found ................ %d\n" % mig.stats.get("files_found", 0))
+    w("  stage distribution ......... %s\n"
+      % ", ".join("%s=%d" % (s, counts.get(s, 0)) for s in STAGES if counts.get(s)))
+    w("  files changing directory ... %d\n" % moves)
+    w("  files renamed (slug) ....... %d\n" % mig.stats.get("files_renamed", 0))
+    w("  ids renumbered ............. %d\n"
+      % len([t for t in mig.tasks if t.parse_ok and t.old_id]))
+    pr = mig.stats.get("phase_resolution", {})
+    w("  phases: exact=%d strip=%d case=%d harvest=%d generated=%d unsorted=%d\n"
+      % (pr.get("exact", 0), pr.get("strip", 0), pr.get("case", 0),
+         pr.get("harvest", 0), pr.get("generated", 0), pr.get("unsorted", 0)))
+    w("  phase headings generated ... %d %s\n"
+      % (len(mig.generated_phases), mig.generated_phases or ""))
+    w("  ROADMAP lines added ........ %d\n" % mig.notes.get("roadmap_lines_added", 0))
+    w("  ROADMAP lines relocated .... %d\n" % len(mig.notes.get("roadmap_moved", [])))
+    w("  ROADMAP dangling (I-24) .... %d\n"
+      % len(set(x[0] for x in mig.notes.get("dangling_roadmap", []))))
+    xkeys = {}
+    for t in mig.tasks:
+        if not t.parse_ok:
+            continue
+        for k in t.fields:
+            if k.startswith("x-"):
+                xkeys[k] = xkeys.get(k, 0) + 1
+    w("  keys preserved as x-* ...... %d distinct, %d values\n"
+      % (len(xkeys), sum(xkeys.values())))
+    for k in sorted(xkeys):
+        w("      %-28s %d\n" % (k, xkeys[k]))
+    w("  needs edges ................ %d (cycles broken: %d)\n"
+      % (sum(len(t.needs) for t in mig.tasks if t.parse_ok),
+         mig.stats.get("cycles_broken", 0)))
+    w("  blockers synthesized ....... %d\n" % mig.stats.get("synthesized_blockers", 0))
+    w("  '## Blocker notes' renamed . %d\n" % mig.stats.get("renamed_blocker_sections", 0))
+    w("  history.tsv lines .......... %d\n" % len(mig.history_rows))
+    w("  review items ............... %d\n" % len(mig.review))
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(
+        prog="migrate-tasks",
+        description="Migrate a 0.1.x task ledger to rasa.module.tasks v1.0.0.")
+    ap.add_argument("path", nargs="?", default=".",
+                    help="project root or its tasks/ directory (default: .)")
+    ap.add_argument("--apply", action="store_true",
+                    help="write the migration (default is --dry-run)")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="plan only, write nothing (the default)")
+    ap.add_argument("--force", action="store_true",
+                    help="proceed even if a version-control store has uncommitted changes")
+    ap.add_argument("--created-from", metavar="CMD",
+                    help="shell command that prints a YYYY-MM-DD creation date; the file path "
+                         "is appended to it")
+    ap.add_argument("--created-by-from", metavar="CMD",
+                    help="shell command that prints the creating actor's handle")
+    ap.add_argument("--completed-by-from", metavar="CMD",
+                    help="shell command that prints the completing actor's handle")
+    ap.add_argument("--validate-with", metavar="PATH",
+                    help="path to check-tasks; defaults to the Element's content/bin/check-tasks "
+                         "when it exists")
+    ap.add_argument("--no-validate", action="store_true", help="skip the validation gate")
+    ap.add_argument("--no-backup", action="store_true",
+                    help="delete the pre-migration copy after a successful swap")
+    ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--version", action="version", version="migrate-tasks %s" % VERSION)
+    args = ap.parse_args(argv)
+
+    if args.apply and args.dry_run:
+        die("--apply and --dry-run are mutually exclusive")
+    apply_mode = bool(args.apply)
+
+    tasks_dir = locate_tasks_dir(args.path)
+    if tasks_dir is None:
+        die("no task ledger found at %s (expected tasks/ with stage directories)"
+            % os.path.abspath(args.path))
+
+    out = sys.stdout
+    say = (lambda *a: None) if args.quiet else (lambda s: out.write(s))
+
+    say("migrate-tasks %s -> %s\n" % (VERSION, SCHEMA_ID))
+    say("ledger: %s\n" % tasks_dir)
+    say("mode:   %s\n\n" % ("APPLY" if apply_mode else "DRY RUN (nothing will be written)"))
+
+    if already_migrated(tasks_dir):
+        say("This ledger already declares `schema: %s`.\n" % SCHEMA_ID)
+        say("Nothing to migrate — the migration is idempotent and stops here.\n\n")
+        return finish_validation(tasks_dir, args, say)
+
+    if apply_mode:
+        found, dirty, detail = vcs_dirty(tasks_dir)
+        if dirty and not args.force:
+            sys.stderr.write(
+                "migrate-tasks: refusing to --apply: the version-control store reports "
+                "uncommitted changes under %s.\n"
+                "Commit or stash them first, or re-run with --force to migrate anyway.\n\n%s\n"
+                % (tasks_dir, detail))
+            return 2
+        if found and not args.quiet:
+            say("version control: %s\n\n" % detail)
+
+    mig = Migration(tasks_dir, args)
+    ok = mig.plan()
+    if not ok:
+        for e in mig.errors:
+            sys.stderr.write("migrate-tasks: abort: %s\n" % e)
+        return 2
+
+    say("PLAN\n")
+    if not args.quiet:
+        print_plan(mig, out)
+    say("\n")
+
+    if not apply_mode:
+        say("Dry run complete. Nothing was written.\n")
+        say("Re-run with --apply to migrate. %d item(s) will be listed in "
+            "tasks/MIGRATION-REVIEW.md.\n" % len(mig.review))
+        return 0
+
+    parent = os.path.dirname(tasks_dir)
+    base = os.path.basename(tasks_dir)
+    stamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    tmp = os.path.join(parent, ".%s.migrate-%s" % (base, stamp))
+    backup = os.path.join(parent, "%s.pre-1.0.0-%s" % (base, stamp))
+    if os.path.exists(tmp):
+        shutil.rmtree(tmp)
+    shutil.copytree(tasks_dir, tmp, symlinks=True)
+    try:
+        write_migration(mig, tmp)
+    except Exception as exc:
+        shutil.rmtree(tmp, ignore_errors=True)
+        die("migration failed before anything was swapped in: %s" % exc)
+
+    os.rename(tasks_dir, backup)
+    os.rename(tmp, tasks_dir)
+    say("migrated. previous ledger preserved at %s\n" % backup)
+    if args.no_backup:
+        shutil.rmtree(backup, ignore_errors=True)
+        say("backup removed (--no-backup)\n")
+    say("review file: %s\n\n" % os.path.join(tasks_dir, "MIGRATION-REVIEW.md"))
+    return finish_validation(tasks_dir, args, say)
+
+
+def finish_validation(tasks_dir, args, say):
+    if args.no_validate:
+        say("validation skipped (--no-validate)\n")
+        return 0
+
+    external = args.validate_with
+    if not external:
+        here = os.path.dirname(os.path.abspath(__file__))
+        cand = os.path.join(os.path.dirname(here), "content", "bin", "check-tasks")
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            external = cand
+
+    ext_code = None
+    if external:
+        try:
+            r = subprocess.run([external], cwd=os.path.dirname(tasks_dir),
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=300)
+            ext_code = r.returncode
+            say("check-tasks (%s) exit=%d\n" % (external, ext_code))
+            if not args.quiet:
+                say(r.stdout.decode("utf-8", "replace"))
+        except Exception as exc:
+            say("check-tasks could not be run (%s); falling back to the built-in gate\n" % exc)
+            ext_code = None
+
+    errors, warnings, infos = validate(tasks_dir)
+    say("VALIDATION (built-in gate)\n")
+    say("  errors:   %d\n" % len(errors))
+    say("  warnings: %d\n" % len(warnings))
+    for i in infos:
+        say("  info:     %s\n" % i)
+    if errors and not args.quiet:
+        say("\n")
+        for e in errors[:200]:
+            say("  ERROR %s\n" % e)
+        if len(errors) > 200:
+            say("  ... and %d more\n" % (len(errors) - 200))
+    if warnings and not args.quiet:
+        counts = {}
+        for w in warnings:
+            counts[w.split(" ", 1)[0]] = counts.get(w.split(" ", 1)[0], 0) + 1
+        say("  warning breakdown: %s\n"
+            % ", ".join("%s=%d" % kv for kv in sorted(counts.items())))
+    bad = bool(errors) or (ext_code not in (None, 0))
+    if bad:
+        say("\nThe migrated ledger does NOT yet validate clean. "
+            "See tasks/MIGRATION-REVIEW.md.\n")
+        return 1
+    say("\nThe migrated ledger validates with zero errors.\n")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)

@@ -3,10 +3,10 @@
 Working context for Claude Code sessions on this repo. Read this
 before making non-trivial changes.
 
-> This file is **project-specific**. It overrides and extends the
-> generic foundation in `.claude/task-rules.md`. Update the
-> placeholders below for this project. The kit's `/sync` will never
-> overwrite this file — it's yours to evolve.
+> This file is **project-specific**. It holds this project's facts;
+> the task rules it points at (see **Tasks** below) hold the
+> process. Update the placeholders below for this project. `/sync`
+> will never overwrite this file — it's yours to evolve.
 
 ## 🪡 Auto-loaded primitives
 
@@ -51,6 +51,23 @@ to load your messages on session start.
 meanings of kit terms (versioning, lifecycle states, verification
 gate, etc.) in `.claude/vocabulary-overrides.md`. Defaults are in
 `.claude/vocabulary.md`.
+
+## Tasks
+
+Work is tracked under `tasks/`. Before starting a task, read, in
+order:
+
+- **`.claude/task-rules.md`** — the lifecycle: the seven stage
+  directories, the frontmatter, the `.claude/bin/task` verbs and
+  the invariants `.claude/bin/check-tasks` enforces.
+- **`.claude/code-task-rules.md`** — the engineering extension:
+  what the stages mean with branches and PRs, hotfixes, gated
+  files, the audit log, postmortems.
+- **`.claude/done-gate.md`** — what "done" means in this project.
+  It is yours: **edit its commands** to match **Commands** below.
+
+Move a task only with `.claude/bin/task <verb>` — never `git mv`,
+never a `status:` key. The directory is the state.
 
 ## What this is
 
@@ -100,7 +117,8 @@ Past goals, newest first — the project's trail of met objectives.
 When this is set, agents read the matching `.claude/<platform>-*.md`
 files (e.g. `.claude/ios-task-rules.md`,
 `.claude/ios-conventions.md`) alongside the universal
-`.claude/task-rules.md`. Multi-platform projects can list more than
+`.claude/task-rules.md` and `.claude/code-task-rules.md` (its §1
+lists them). Multi-platform projects can list more than
 one — e.g. `ios + python` for an iOS app talking to a Python API,
 or `web + python` for a web frontend with a Python backend.
 Agents will read all relevant prefix files for cross-boundary work.
@@ -135,15 +153,15 @@ project's own context:
   matching current work
 
 Also check `.claude/active-migrations.md` (and any other
-`.claude/active-*.md` files) on session start, per `task-rules.md`
-"Active orchestrator notices" — those are written by the
-orchestrator's `/migration` and similar skills, and list cross-repo
-coordination signals affecting this codebase. Do not edit them by
-hand.
+`.claude/active-*.md` files) on session start, per
+`code-task-rules.md` §14 "Orchestrator notices" — those are written
+by the orchestrator's `/migration` and similar skills, and list
+cross-repo coordination signals affecting this codebase. Do not
+edit them by hand.
 
 If the orchestrator path is `n/a — solo project`, the
-"Active orchestrator notices" rule in `task-rules.md` doesn't apply
-to this repo.
+"Orchestrator notices" rule in `code-task-rules.md` §14 doesn't
+apply to this repo.
 
 ## Tech stack
 
@@ -218,8 +236,8 @@ Example to delete:
 
 ## Gated files (project-specific extensions)
 
-The kit's `task-rules.md` lists generic gated-file categories.
-This section adds project-specific ones:
+`.claude/code-task-rules.md` §9 lists the generic gated-file
+categories. This section adds project-specific ones:
 
 {{LIST FILES OR DIRECTORIES THAT REQUIRE EXPLICIT PERMISSION TO TOUCH
 IN THIS PROJECT BEYOND THE GENERIC LIST. Things like critical config,

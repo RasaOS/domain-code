@@ -18,6 +18,7 @@ where the pain is. /handoff overwrites this on end-of-session.}}
 ## What to read first
 
 - [`tasks/active/`](../tasks/active/) — anything in flight
+- [`tasks/review/`](../tasks/review/) — open PRs waiting on the done-gate
 - [`docs/notes/INDEX.md`](../docs/notes/INDEX.md) — recent learnings *(if `/lessons` is in use)*
 - [`.claude/inbox/`](inbox/) — messages addressed to you *(if `/inbox` is in use)*
 

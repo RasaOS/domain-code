@@ -1,4 +1,11 @@
-# TASK-006 — Cross-repo handoff & communication shared system
+---
+id: TASK-006
+type: change
+created: 2026-05-17
+created_by: claude
+updated: 2026-05-17
+---
+# TASK-006: TASK-006 — Cross-repo handoff & communication shared system
 
 **User story.** As a developer, I want a schema-like shared
 structure that holds cross-repo handoffs and communication — so

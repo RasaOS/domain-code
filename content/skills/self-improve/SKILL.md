@@ -14,7 +14,7 @@ that file; this SKILL.md only states what is specific to
 `/self-improve`.
 
 Per CLAUDE.md ethos: an improvement is something the kit's own
-rules (`craft-rules.md`, `test-rules.md`, `task-rules.md`) and
+rules (`craft-rules.md`, `test-rules.md`, `code-task-rules.md`) and
 the codebase's own conventions can *verify* — not a matter of
 taste. "This function is 200 lines and craft-rules.md caps
 functions at 80" is improvable. "I'd write this differently" is
@@ -171,10 +171,12 @@ The branch name is `feat/self-improve-<scope-slug>`.
 ## What "done" looks like for a /self-improve session
 
 A `feat/self-improve-<scope-slug>` branch with one commit per
-improvement, every improvement's task spec in `tasks/completed/`, the
-test suite's green/red profile unchanged from baseline, **two
-consecutive clean verification re-walks** with zero in-scope
-improvements remaining, and a **draft PR** open for review. The
+improvement, every improvement's task in `tasks/active/` with its
+criteria met (a draft PR is still `active/`; `completed/` waits for
+the done-gate and the merge), the test suite's green/red profile
+unchanged from baseline, **two consecutive clean verification
+re-walks** with zero in-scope improvements remaining, and a
+**draft PR** open for review. The
 autonomy report names every improvement applied, every candidate
 redesign declined (and why), and any out-of-scope findings.
 Merge to main remains the user's call.

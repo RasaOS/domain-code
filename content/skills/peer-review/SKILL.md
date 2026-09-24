@@ -35,11 +35,11 @@ passes, Z fails because <reason>" is.
   reject when the diff fails a real check or when the project's
   rules are ambiguous.
 - **Ground the verdict in the project's rules.** The review uses
-  `task-rules.md`, `craft-rules.md`, `test-rules.md`, and
-  `git-flow-rules.md` as the checklist. Plus the project's own
-  `CLAUDE.md`. A review that disagrees with the kit's contract
-  but doesn't cite which rule is being broken is not a review —
-  it's an opinion.
+  `task-rules.md` + `code-task-rules.md`, `craft-rules.md`,
+  `test-rules.md`, and `git-flow-rules.md` as the checklist. Plus
+  the project's own `CLAUDE.md`. A review that disagrees with the
+  Element's contract but doesn't cite which rule is being broken is
+  not a review — it's an opinion.
 - **Stop at hard gates.** Same gates as the autonomous skills
   (per `autonomy-rules.md`): a locked contract the PR touches, a
   gated file the PR modifies without authorization, a destructive
@@ -80,7 +80,7 @@ disqualifier:
    actually does? Scope creep ("added X" but diff also reworks
    Y) is a reject unless the body names Y.
 2. **Gated files.** Does the diff touch any file the project
-   marks as gated (per `task-rules.md` "Gated files" or
+   marks as gated (per `code-task-rules.md` §9 or
    `CLAUDE.md`)? If yes and the PR body doesn't acknowledge it,
    reject — gated files need explicit authorization.
 3. **Tests.** Does the diff include tests for the new behavior?
@@ -110,9 +110,10 @@ Restored in v0.51.0. v0.48.0 (`72f1149`) deleted this section, and with it the
 only instruction that fetched the PR from the remote — after which "read the
 diff" was satisfied, in the authoring session, by memory of having written it.
 
-1. **Read the contracts.** `task-rules.md`, `craft-rules.md`,
-   `test-rules.md`, `git-flow-rules.md`, `autonomy-rules.md` (for
-   the hard-gate list), and the project's `CLAUDE.md`.
+1. **Read the contracts.** `task-rules.md`, `code-task-rules.md`,
+   `craft-rules.md`, `test-rules.md`, `git-flow-rules.md`,
+   `autonomy-rules.md` (for the hard-gate list), and the project's
+   `CLAUDE.md`.
 
 2. **Resolve the PR target.** Accept `#NNN`, `NNN`, a GitHub URL,
    or "the open PR on this branch" (`gh pr view --json number`).
@@ -169,7 +170,10 @@ diff" was satisfied, in the authoring session, by memory of having written it.
    - **Reject** → `gh pr review <N> --request-changes --body
      "<numbered blocking issues, each with file:line and the rule>"`.
      A reject hands the PR back to the authoring agent, which is
-     what an autonomous org wants — not to a human.
+     what an autonomous org wants — not to a human. If the PR's
+     task is in `tasks/review/`, send it back too:
+     `.claude/bin/task reject TASK-NNN --note "<first blocking issue>"`
+     (`code-task-rules.md` §2).
 
 8. **Track the merge in `RELEASES.md`** (accept path only), per
    `release-add/SKILL.md`. Idempotent; re-runs are no-ops.
@@ -186,7 +190,7 @@ credentials — so this is **decorrelated error, not an independent
 party**. Do not write anything on the PR implying a second person
 or second party reviewed it.
 
-If `/release-add` reports that the task is not in `tasks/completed/`, keep that as a **non-blocking note** in the review report — the work merged, the spec just has not moved yet, and `/release-add` will do the move itself next time it is run with git evidence. (The old degradation for "no 🚧 Next entry" is gone: that condition was the pre-v0.48.0 tracker being broken on install, not a real state. See CHANGELOG v0.48.0.)
+If `/release-add` reports that the task is not in `tasks/completed/`, keep that as a **non-blocking note** in the review report — the work merged, the task just has not passed its done-gate yet, and `/release-add` will pass it (`.claude/bin/task pass`) itself next time it is run with git evidence. (The old degradation for "no 🚧 Next entry" is gone: that condition was the pre-v0.48.0 tracker being broken on install, not a real state. See CHANGELOG v0.48.0.)
 
 ## Output structure — the review report
 

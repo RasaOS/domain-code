@@ -50,7 +50,7 @@ merge-bearing skills) and Rule 5 (deploys route through
 - **Pick the version; do not ask.** If invoked with a version arg
   (`/release patch`, `/release minor`, `/release major`,
   `/release v1.2.3`), use that. Otherwise compute it from the
-  heuristic in `task-rules.md` / `release-rules.md`. The choice
+  heuristic in `release-rules.md`. The choice
   is logged as a flagged assumption in the closing report.
 - **Order: preflight → merge → tag → deploy → push tag.** The
   tag is created on the merge commit *before* deploy runs, so
@@ -233,7 +233,7 @@ If invoked with a version arg, use it:
 - `/release v1.2.3` → exactly that semver.
 
 If no arg, compute the next version from the
-`release-rules.md` / `task-rules.md` heuristic:
+`release-rules.md` heuristic:
 
 - **Patch** — bug fixes, copy/styling tweaks.
 - **Minor** — new user-visible features, additive (default).
@@ -394,7 +394,7 @@ Two files capture what shipped.
      <tag> · sha <short-sha>` (two-space indented under the
      version line).
 2. **Cross-check the task list** against commits since the
-   last tag. Add any TASK-NNN / HOTFIX-NNN missed by manual
+   last tag. Add any TASK-NNN missed by manual
    merges (silently — these were caught at pre-flight in
    Step 1). Remove any stale claims (none should exist
    because pre-flight would have hard-stopped).
@@ -429,7 +429,7 @@ fails, report it as a partial-state warning.
 ### Step 8 — Closing report
 
 Render the deploy completion report per §5 Deployment report
-(per `task-rules.md` "Closing report after deploy"):
+(per `release-rules.md` "Closing report after deploy"):
 
 ````markdown
 # Release v1.2.0 — shipped
@@ -472,7 +472,7 @@ Render the deploy completion report per §5 Deployment report
 **Rollback** *(if needed)*
 - Hosting rollback: `<command, e.g. firebase hosting:rollback>`
 - Note: rollback reverts the live build; the tag stays in place
-  per `task-rules.md` "Rollback semantics".
+  per `release-rules.md` "Rollback semantics".
 ````
 
 Glyph semantics: ● = step succeeded, ◐ = step running, ✗ = step
@@ -511,7 +511,8 @@ release, which a partial state isn't.
   `v1.0.0` per the project's tagging rule. No version arg
   required; the bootstrap is the choice.
 - **Hotfix path**: if the user invoked this skill via a hotfix
-  branch (`hotfix/HOTFIX-NNN-slug`), defer to the project's
+  branch (`hotfix/TASK-NNN-slug` — a `priority: now` defect,
+  `code-task-rules.md` §4), defer to the project's
   hotfix rule (typically: branch off main, patch bump,
   fast-track verification, audit entry tagged 🔥). The contract
   is the same — invocation is consent — but the version

@@ -18,6 +18,54 @@ the Element primitive) was locked to canon vocabulary in the
 2026-05-22 drift-fix pass. See `~/rAI/rasa-os/DRIFT_REPORT.md` for
 the audit trail.
 
+**Version:** 0.53.0 — see `CHANGELOG.md`.
+
+---
+
+## The task system (from 0.53.0)
+
+The task lifecycle this Element installs is **`rasa.module.tasks` v1.0.0**,
+vendored byte-identical (`vendored.json` pins every file's sha256, and
+`bin/check-manifest` fails on an edit in place):
+
+| installs to | what it is | owner |
+|---|---|---|
+| `.claude/task-rules.md` | the lifecycle spine — seven stage directories, no `status:` field | the module |
+| `.claude/bin/task`, `.claude/bin/check-tasks` | the twelve lifecycle verbs, and the validator | the module |
+| `.claude/task-templates/` | one body template per task type | the module |
+| `.claude/skills/{task,backlog,roadmap}/` | the three task skills | the module |
+| `.claude/code-task-rules.md` | the engineering extension: PR flow, hotfixes, gated files, postmortems | this Element |
+| `.claude/done-gate.md` | what *done* means here — seeded once, then the project's | the project |
+| `tasks/` — ROADMAP, intake, `history.tsv`, `tasks.config.yml`, the seven stages | the ledger | the project |
+
+In this domain `review/` is an open PR and `completed/` is a passed
+done-gate plus a merged PR. Every move is `.claude/bin/task <verb>`.
+
+## Updating an installed project
+
+Re-running this Element's `bin/init` is the update path: it is
+manifest-driven, honours `overrides[]` in `.claude/rasa.lock.json`, never
+overwrites a seeded file that exists, and restamps the pin. From 0.53.0 it
+also **migrates a pre-1.0 task ledger** (`bin/migrate-ledger`, wrapping the
+module's `bin/migrate-tasks`): statuses become directories, categories
+become types, created / created_by / completed_by are read from git, and the
+ROADMAP is normalized. It runs only when `tasks/` has no uncommitted changes,
+leaves the result uncommitted, and writes `tasks/MIGRATION-REVIEW.md` with
+every judgement it could not make.
+
+A project on 0.52 or older (its `/sync` cannot run — it predates the
+canonical lockfile), from the project root, with `tasks/` committed:
+
+```sh
+git clone https://github.com/RasaOS/domain-code /tmp/domain-code
+/tmp/domain-code/bin/migrate-ledger .     # optional: preview the ledger migration
+/tmp/domain-code/bin/init .
+.claude/bin/check-tasks                   # then work MIGRATION-REVIEW.md to zero errors
+```
+
+From 0.53.0 on, `/sync` does the same with a plan first and a decision on
+every locally edited file (`/sync-all` for hands-off).
+
 ---
 
 ## Original claude-kit README
@@ -357,12 +405,13 @@ already exists.
 | `.claude/modes/` | additive — overlays kit modes | Mode definitions (drive prose) sync from `kit/modes/`. Local edits to `.claude/modes/<name>.md` are preserved across `/sync` if listed as overrides in `foundation.json`. |
 | `.claude/mode.md` | **never touched** by init or sync | Project-owned activation record (created by `/mode <name>`, removed by `/mode normal`). |
 | `.claude/mode-stats.md` | **never touched** by init or sync | Project-owned cross-activation accumulator. |
-| `.claude/task-rules.md` | **OVERWRITE** with kit version | If your project has elaborated this file with project-specific content (gated files, verification commands, baselines, project trust modes), **back it up first** — see "Save your work" below. |
-| `.claude/task-template.md` | **OVERWRITE** with kit version | Same — back it up first if project-customized. |
+| `.claude/task-rules.md` | **OVERWRITE** with the Element's version | The vendored `rasa.module.tasks` spine. Project-specific content (gated files, verification commands) belongs in `CLAUDE.md` and `.claude/done-gate.md` — **back it up first** if you elaborated it; see "Save your work" below. |
+| `.claude/task-templates/`, `.claude/bin/`, `.claude/code-task-rules.md` | **OVERWRITE** with the Element's version | The task templates, the two task programs, and the engineering extension. |
+| `.claude/done-gate.md` | `skip-if-exists` | What *done* means in this project. Edit its commands to match `CLAUDE.md`. |
 | `.claude/<platform>-*.md` (e.g. `ios-task-rules.md`) | added | New file — won't collide unless you happen to already have one with a matching name. |
 | `.claude/foundation.json` | created if missing | Skipped if exists — your existing pin stays. |
 | `.claude/pact.md`, `welcome.md`, `wont-do.md`, `playlists.md`, `bookmarks.md` | `skip-if-exists` | Primitive-layer files. Existing versions stay; user owns them after init. |
-| `tasks/{backlog,active,done}/` | scaffolded if missing/empty | Existing task files preserved. |
+| `tasks/{triage,backlog,active,review,blocked,completed,closed}/` | scaffolded if missing | A pre-1.0 ledger is **migrated** first (see "Updating an installed project"). |
 | `tasks/PHASES.md`, `tasks/ROADMAP.md`, `tasks/AUDIT.md` | `skip-if-exists` | Existing project-specific versions stay. |
 | `CLAUDE.md` | `skip-if-exists` | Existing CLAUDE.md stays. **You'll edit it after init** to add the new `## Platform` section and migrate any project-specific content from the old task-rules.md. |
 | `docs/{decisions,postmortems,notes,audits,handoff,regrets,retros,blast-radius,scope,exports,proto,mvp}/` | scaffolded if missing | Empty `.gitkeep` only. Skill output destinations. |

@@ -1,0 +1,1822 @@
+#!/usr/bin/env python3
+"""check-tasks - validate a tasks/ ledger against the rasa.module.tasks v1.0.0 schema.
+
+Reads    tasks/<stage>/*.md, tasks/ROADMAP.md, tasks/history.tsv,
+         tasks/tasks.config.yml, tasks/.state/digests.tsv
+Writes   tasks/.state/digests.tsv (when it is absent, and after a clean run)
+         and, with --fix, the mechanically safe repairs and nothing else.
+
+Exit     0 = no errors (warnings are allowed), 1 = errors, 2 = cannot run.
+
+Pure Python 3 standard library: no third-party parser, no network, no daemon,
+no version-control store is read anywhere. A project with no such store, no
+task runner and no config file validates exactly the same way.
+"""
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import sys
+import time
+from datetime import date, datetime
+
+VERSION = "1.0.0"
+
+# ---------------------------------------------------------------------------
+# The schema, as constants
+# ---------------------------------------------------------------------------
+
+STAGES = ["triage", "backlog", "active", "review", "blocked", "completed", "closed"]
+TERMINAL_STAGES = ("completed", "closed")
+PHASED_STAGES = [s for s in STAGES if s != "triage"]
+
+KNOWN_KEYS = [
+    "id", "type", "created", "created_by", "updated", "phase", "target",
+    "completed_by", "resolution", "resolution_ref", "priority", "needs",
+]
+TYPES = ["change", "defect", "upkeep", "inquiry", "record"]
+PRIORITIES = ["now", "high", "normal", "low"]
+RESOLUTIONS = ["superseded", "duplicate", "obsolete", "wont-do"]
+REF_RESOLUTIONS = ("superseded", "duplicate")
+NOW_STAGES = ("active", "review", "blocked", "completed", "closed")
+
+CONFIG_KEYS = ["schema", "migrated_on", "actors", "targets", "series"]
+CONFIG_SCHEMA_VALUE = "rasa.module.tasks/1.0.0"
+
+RX_ID = r"^TASK-(?:([A-Z][A-Z0-9.]{1,5})-)?([0-9]{1,6})([a-z])?$"
+RX_SLUG = r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
+RX_ACTOR = r"^[a-z0-9][a-z0-9._-]{0,31}$"
+RX_TARGET = r"^[a-z0-9][a-z0-9._:-]{0,31}$"
+RX_PHASE = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,23}$"
+RX_KEY_LINE = r"^(x-[a-z0-9][a-z0-9_-]*|[a-z][a-z0-9_]*):(?: (.*))?$"
+RX_DATE = r"^\d{4}-\d{2}-\d{2}$"
+RX_PHASE_HEADING = r"^##[ \t]+Phase[ \t]+(\S+?):?(?:[ \t]+(.*))?$"
+RX_MAP_LINE = r"^[-*][ \t]+(TASK-\S+)[ \t]+(?:—|–|-)[ \t]+(.+)$"
+RX_CHECKBOX = r"^[ \t]*[-*][ \t]+\[[ xX]\][ \t]*(\S.*)$"
+
+HISTORY_HEADER = ["date", "id", "from", "to", "actor", "note"]
+SCOPE_PLACEHOLDER = "Scope. TODO — declared by migration; replace this line."
+REVIEW_AGE_LIMIT = 30
+
+ERROR, WARN, INFO = "ERROR", "WARN", "INFO"
+SEVERITY_ORDER = {ERROR: 0, WARN: 1, INFO: 2}
+
+
+# ---------------------------------------------------------------------------
+# Findings
+# ---------------------------------------------------------------------------
+
+class Finding(object):
+    __slots__ = ("severity", "inv", "where", "line", "msg", "hint", "fixable")
+
+    def __init__(self, severity, inv, msg, where=None, line=None, hint=None,
+                 fixable=False):
+        self.severity = severity
+        self.inv = inv
+        self.msg = msg
+        self.where = where
+        self.line = line
+        self.hint = hint
+        self.fixable = fixable
+
+    def as_dict(self):
+        return {
+            "severity": self.severity,
+            "invariant": self.inv,
+            "file": self.where,
+            "line": self.line,
+            "message": self.msg,
+            "action": self.hint,
+            "fixable": self.fixable,
+        }
+
+
+class Report(object):
+    def __init__(self):
+        self.findings = []
+
+    def add(self, severity, inv, msg, where=None, line=None, hint=None,
+            fixable=False):
+        self.findings.append(Finding(severity, inv, msg, where, line, hint, fixable))
+
+    def error(self, *a, **kw):
+        self.add(ERROR, *a, **kw)
+
+    def warn(self, *a, **kw):
+        self.add(WARN, *a, **kw)
+
+    def info(self, *a, **kw):
+        self.add(INFO, *a, **kw)
+
+    def count(self, severity):
+        return sum(1 for f in self.findings if f.severity == severity)
+
+
+# ---------------------------------------------------------------------------
+# The restricted mapping grammar - one parser, used for frontmatter and config
+# ---------------------------------------------------------------------------
+
+def parse_value(raw, lineno):
+    """Return (kind, value, error). kind is 'scalar' or 'list'."""
+    if raw is None:
+        return "scalar", "", None
+    text = raw.strip()
+    if text in ("null", "Null", "NULL", "~"):
+        return None, None, (lineno, "the literal '%s' is forbidden; omit the key instead" % text)
+    if text[:1] in ("|", ">"):
+        return None, None, (lineno, "block scalars (| and >) are forbidden; "
+                                    "use a single-line value")
+    if re.match(r"^[&*][A-Za-z0-9_]", text):
+        kind = "an anchor" if text[0] == "&" else "an alias"
+        return None, None, (lineno, "%s is forbidden in this grammar" % kind)
+    if text.startswith("["):
+        if not text.endswith("]"):
+            return None, None, (lineno, "a flow list must open and close on one line")
+        inner = text[1:-1].strip()
+        if inner == "":
+            return "list", [], None
+        items = []
+        for part in inner.split(","):
+            item = part.strip()
+            if item == "":
+                return None, None, (lineno, "empty item in the flow list")
+            if "[" in item or "]" in item:
+                return None, None, (lineno, "nested lists are forbidden")
+            items.append(unquote(item))
+        return "list", items, None
+    if text.endswith("]") and not text.startswith("["):
+        return None, None, (lineno, "a value ending in ']' must be a whole flow list")
+    return "scalar", unquote(text), None
+
+
+def unquote(text):
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+        return text[1:-1]
+    return text
+
+
+def parse_mapping(lines, first_lineno):
+    """Parse a block of restricted-grammar lines.
+
+    lines        the lines of the mapping, without terminators
+    first_lineno the 1-based file line number of lines[0]
+
+    Returns (values, key_lines, errors). `values` maps key -> scalar or list.
+    `key_lines` maps key -> 1-based file line number. `errors` is a list of
+    (lineno, message) and makes the whole mapping unusable.
+    """
+    values = {}
+    key_lines = {}
+    errors = []
+    for offset, line in enumerate(lines):
+        lineno = first_lineno + offset
+        stripped = line.strip()
+        if stripped == "":
+            continue
+        if stripped.startswith("#"):
+            continue
+        if line[:1] in (" ", "\t"):
+            errors.append((lineno, "a line may not begin with whitespace (no nesting, "
+                                   "no multi-line values)"))
+            continue
+        if stripped == "---" or stripped == "...":
+            errors.append((lineno, "a document marker may not appear inside the mapping"))
+            continue
+        m = re.match(RX_KEY_LINE, line.rstrip("\n"))
+        if not m:
+            errors.append((lineno, "not a legal key line; expected "
+                                   "'<key>: <value>' with a lower-case key"))
+            continue
+        key = m.group(1)
+        kind, value, err = parse_value(m.group(2), lineno)
+        if err:
+            errors.append(err)
+            continue
+        if key in values:
+            errors.append((lineno, "duplicate key '%s' (first seen on line %d); "
+                                   "last-wins is never applied" % (key, key_lines[key])))
+            continue
+        values[key] = value
+        key_lines[key] = lineno
+    return values, key_lines, errors
+
+
+def split_frontmatter(lines):
+    """Return (fm_lines, first_lineno, close_index, error).
+
+    `lines` are the whole file's lines without terminators. close_index is the
+    0-based index of the closing '---'.
+    """
+    # A trailing "\r" is a line TERMINATOR artifact on a CRLF file, not content.
+    # The opening fence already tolerated it (via rstrip) while the closing fence
+    # did not, so a CRLF task file parsed for checking but was unfixable: --fix
+    # found no close, bailed, and reported success having changed nothing.
+    # Leading whitespace must still disqualify a fence, so compare against the
+    # line with only its terminator removed — never against a fully stripped one.
+    def fence(line):
+        bare = line[:-1] if line.endswith("\r") else line
+        return bare == "---"
+
+    if not lines:
+        return None, 0, -1, (1, "the file is empty; line 1 must be exactly '---'")
+    if not fence(lines[0]):
+        return None, 0, -1, (1, "line 1 must be exactly '---'")
+    for idx in range(1, len(lines)):
+        if fence(lines[idx]):
+            return lines[1:idx], 2, idx, None
+    return None, 0, -1, (1, "the frontmatter is never closed by a line that is exactly '---'")
+
+
+# ---------------------------------------------------------------------------
+# Small helpers
+# ---------------------------------------------------------------------------
+
+def is_real_date(text):
+    if not re.match(RX_DATE, text or ""):
+        return None
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def sha256_of(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def fence_map(body_lines):
+    """Return a list of booleans: True when that body line sits inside a fence.
+
+    Fenced regions are excluded from heading detection, so a code sample that
+    happens to contain a '# ' line is not read as a second document title.
+    """
+    inside = False
+    marks = []
+    for line in body_lines:
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            marks.append(True)
+            inside = not inside
+            continue
+        marks.append(inside)
+    return marks
+
+
+def as_list(value):
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return value
+    return None
+
+
+# ---------------------------------------------------------------------------
+# The parsed task file
+# ---------------------------------------------------------------------------
+
+class TaskFile(object):
+    def __init__(self, path, rel, stage):
+        self.path = path
+        self.rel = rel
+        self.stage = stage
+        self.raw = b""
+        self.lines = []
+        self.digest = ""
+        self.readable = True
+        self.parsed = False        # frontmatter satisfies I-02/I-03
+        self.fm = {}
+        self.fm_lines = {}
+        self.fm_close = -1
+        self.body = []
+        self.body_offset = 0
+        self.title = None
+        self.tid = None
+        self.has_criteria = False
+        self.is_stub = True
+        self.blocker_ok = False
+
+
+def load_task(path, rel, stage, report):
+    tf = TaskFile(path, rel, stage)
+    try:
+        with open(path, "rb") as handle:
+            tf.raw = handle.read()
+    except OSError as exc:
+        tf.readable = False
+        report.error("I-09", "cannot read the file: %s" % exc, where=rel)
+        return tf
+    tf.digest = sha256_of(tf.raw)
+    try:
+        text = tf.raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        tf.readable = False
+        report.error("I-09", "not valid UTF-8 (%s)" % exc.reason, where=rel,
+                     hint="re-save the file as UTF-8")
+        return tf
+    if tf.raw and not text.endswith("\n"):
+        report.error("I-09", "the file does not end with a newline", where=rel,
+                     hint="append a final newline")
+    if "\r\n" in text:
+        report.warn("I-02", "the file uses CRLF line endings; the grammar is written for LF "
+                            "and the trailing carriage returns are ignored here", where=rel)
+        text = text.replace("\r\n", "\n")
+    tf.lines = text.split("\n")
+    if tf.lines and tf.lines[-1] == "":
+        tf.lines.pop()
+
+    fm_lines, first_lineno, close_index, err = split_frontmatter(tf.lines)
+    if err:
+        report.error("I-02", err[1], where=rel, line=err[0],
+                     hint="a file without legal frontmatter is excluded from every later rule")
+        return tf
+    values, key_lines, errors = parse_mapping(fm_lines, first_lineno)
+    if errors:
+        for lineno, msg in errors:
+            inv = "I-03" if msg.startswith("duplicate key") else "I-02"
+            report.add(ERROR, inv, msg, where=rel, line=lineno,
+                       hint="the file is excluded from every later rule until this parses")
+        return tf
+
+    tf.parsed = True
+    tf.fm = values
+    tf.fm_lines = key_lines
+    tf.fm_close = close_index
+    tf.body = tf.lines[close_index + 1:]
+    tf.body_offset = close_index + 2
+    tf.tid = values.get("id") if isinstance(values.get("id"), str) else None
+    read_body(tf)
+    return tf
+
+
+def read_body(tf):
+    marks = fence_map(tf.body)
+    titles = []
+    headings = []           # (index, text)
+    for idx, line in enumerate(tf.body):
+        if marks[idx]:
+            continue
+        if line.startswith("# "):
+            titles.append((idx, line))
+        elif re.match(r"^#{2,6}[ \t]+\S", line):
+            headings.append((idx, re.sub(r"^#{2,6}[ \t]+", "", line).strip()))
+    tf._titles = titles
+    tf._headings = headings
+    tf._marks = marks
+
+    # acceptance criteria -> depth
+    tf.has_criteria = False
+    for pos, (idx, text) in enumerate(headings):
+        if text.lower().rstrip(":").startswith("acceptance criteria"):
+            stop = headings[pos + 1][0] if pos + 1 < len(headings) else len(tf.body)
+            for j in range(idx + 1, stop):
+                if marks[j]:
+                    continue
+                m = re.match(RX_CHECKBOX, tf.body[j])
+                if m and m.group(1).strip():
+                    tf.has_criteria = True
+                    break
+        if tf.has_criteria:
+            break
+    tf.is_stub = not tf.has_criteria
+
+    # blocker section
+    tf.blocker_ok = False
+    for pos, (idx, text) in enumerate(headings):
+        if text.lower().rstrip(":").startswith("blocker"):
+            stop = headings[pos + 1][0] if pos + 1 < len(headings) else len(tf.body)
+            for j in range(idx + 1, stop):
+                if marks[j]:
+                    if tf.body[j].strip():
+                        tf.blocker_ok = True
+                        break
+                    continue
+                if tf.body[j].strip():
+                    tf.blocker_ok = True
+                    break
+        if tf.blocker_ok:
+            break
+
+
+# ---------------------------------------------------------------------------
+# The phase map (tasks/ROADMAP.md)
+# ---------------------------------------------------------------------------
+
+class PhaseMap(object):
+    def __init__(self, path, rel):
+        self.path = path
+        self.rel = rel
+        self.present = False
+        self.lines = []
+        self.phases = {}          # phase id -> {"line": idx, "name": str}
+        self.order = []
+        self.entries = []         # {"id","title","line","phase"}
+        self.dupes = []
+        self.malformed = []
+
+    def entries_for(self, tid):
+        return [e for e in self.entries if e["id"] == tid]
+
+
+def load_phase_map(path, rel, report):
+    pm = PhaseMap(path, rel)
+    if not os.path.isfile(path):
+        return pm
+    pm.present = True
+    try:
+        with open(path, "rb") as handle:
+            text = handle.read().decode("utf-8", "replace")
+    except OSError as exc:
+        report.error("I-20", "cannot read the phase map: %s" % exc, where=rel)
+        return pm
+    pm.lines = text.split("\n")
+    if pm.lines and pm.lines[-1] == "":
+        pm.lines.pop()
+    marks = fence_map(pm.lines)
+    current = None
+    for idx, line in enumerate(pm.lines):
+        if marks[idx]:
+            continue
+        m = re.match(RX_PHASE_HEADING, line)
+        if m:
+            pid = m.group(1)
+            name = (m.group(2) or "")
+            name = re.sub(r"^[\s—–·:-]+", "", name).strip()
+            if not name:
+                pm.malformed.append((idx, line.strip()))
+                current = None
+                continue
+            if pid in pm.phases:
+                pm.dupes.append((idx, pid))
+                current = pid
+                continue
+            pm.phases[pid] = {"line": idx, "name": name}
+            pm.order.append(pid)
+            current = pid
+            continue
+        if re.match(r"^#{1,6}[ \t]+\S", line):
+            if re.match(r"^##?[ \t]", line):
+                current = None if not re.match(RX_PHASE_HEADING, line) else current
+            continue
+        m = re.match(RX_MAP_LINE, line)
+        if m:
+            pm.entries.append({"id": m.group(1), "title": m.group(2).strip(),
+                               "line": idx, "phase": current})
+    return pm
+
+
+def phase_section_bounds(pm, pid):
+    """Return (start, stop) body-line indices of a phase's section."""
+    start = pm.phases[pid]["line"]
+    stop = len(pm.lines)
+    for idx in range(start + 1, len(pm.lines)):
+        if re.match(r"^##[ \t]+\S", pm.lines[idx]) or re.match(r"^#[ \t]+\S", pm.lines[idx]):
+            stop = idx
+            break
+    return start, stop
+
+
+# ---------------------------------------------------------------------------
+# The transition log (tasks/history.tsv)
+# ---------------------------------------------------------------------------
+
+class HistoryLog(object):
+    def __init__(self, path, rel):
+        self.path = path
+        self.rel = rel
+        self.present = False
+        self.rows = []            # {"date","id","from","to","actor","note","line"}
+        self.by_id = {}
+        self.well_formed = True
+
+
+def load_history(path, rel, report):
+    log = HistoryLog(path, rel)
+    if not os.path.isfile(path):
+        return log
+    log.present = True
+    try:
+        with open(path, "rb") as handle:
+            text = handle.read().decode("utf-8", "replace")
+    except OSError as exc:
+        log.well_formed = False
+        report.error("I-32", "cannot read the transition log: %s" % exc, where=rel)
+        return log
+    raw_lines = text.split("\n")
+    if raw_lines and raw_lines[-1] == "":
+        raw_lines.pop()
+    if not raw_lines:
+        log.well_formed = False
+        report.error("I-32", "the transition log is empty; it must start with the header "
+                             "'%s'" % "\\t".join(HISTORY_HEADER), where=rel, line=1)
+        return log
+    if raw_lines[0].split("\t") != HISTORY_HEADER:
+        log.well_formed = False
+        report.error("I-32", "line 1 must be the header '%s'" % "\\t".join(HISTORY_HEADER),
+                     where=rel, line=1)
+    previous = None
+    for offset, line in enumerate(raw_lines[1:], start=2):
+        if line.strip() == "":
+            continue
+        cols = line.split("\t")
+        if len(cols) == 5:
+            cols = cols + [""]
+        if len(cols) != 6:
+            log.well_formed = False
+            report.error("I-32", "%d tab-separated fields; exactly 6 are required "
+                                 "(the note may be empty)" % len(cols), where=rel, line=offset)
+            continue
+        when, tid, frm, to, actor, note = cols
+        ok = True
+        stamp = is_real_date(when)
+        if stamp is None:
+            log.well_formed = False
+            report.error("I-32", "'%s' is not a real YYYY-MM-DD date" % when,
+                         where=rel, line=offset)
+            ok = False
+        elif previous is not None and stamp < previous:
+            log.well_formed = False
+            report.error("I-32", "dates run backwards here (%s after %s); the log is "
+                                 "ordered oldest first" % (when, previous.isoformat()),
+                         where=rel, line=offset)
+        if stamp is not None:
+            previous = stamp if previous is None or stamp > previous else previous
+        if not re.match(RX_ID, tid):
+            log.well_formed = False
+            report.error("I-32", "'%s' is not a legal task id" % tid, where=rel, line=offset)
+            ok = False
+        if frm != "-" and frm not in STAGES:
+            log.well_formed = False
+            report.error("I-32", "'from' is '%s'; expected '-' or one of %s"
+                         % (frm, "/".join(STAGES)), where=rel, line=offset)
+            ok = False
+        if to not in STAGES:
+            log.well_formed = False
+            report.error("I-32", "'to' is '%s'; expected one of %s" % (to, "/".join(STAGES)),
+                         where=rel, line=offset)
+            ok = False
+        if actor != "unknown" and not re.match(RX_ACTOR, actor):
+            log.well_formed = False
+            report.error("I-32", "'%s' is not a legal actor handle" % actor,
+                         where=rel, line=offset)
+            ok = False
+        if not ok:
+            continue
+        row = {"date": when, "id": tid, "from": frm, "to": to, "actor": actor,
+               "note": note, "line": offset}
+        log.rows.append(row)
+        log.by_id.setdefault(tid, []).append(row)
+    return log
+
+
+# ---------------------------------------------------------------------------
+# The digest ledger (tasks/.state/digests.tsv)
+# ---------------------------------------------------------------------------
+
+def load_digests(path):
+    """Return (records, ok). records maps id -> (sha, updated, stage)."""
+    if not os.path.isfile(path):
+        return {}, False
+    records = {}
+    try:
+        with open(path, "rb") as handle:
+            text = handle.read().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return {}, False
+    # One bad row used to discard the WHOLE ledger (return {}, False), and the
+    # caller then re-seeds from current content — so a single stray line reset
+    # staleness detection for every task at once, silently, which is the one
+    # thing this ledger exists to prevent. A row is now dropped on its own
+    # merits; the surviving rows keep protecting their tasks. The header row
+    # fails the sha column and is skipped by exactly the same path.
+    dropped = 0
+    for line in text.split("\n"):
+        if line.strip() == "" or line.startswith("#"):
+            continue
+        cols = line.rstrip("\r").split("\t")
+        if len(cols) != 4 or not re.match(r"^[0-9a-f]{64}$", cols[1]):
+            dropped += 1
+            continue
+        records[cols[0]] = (cols[1], cols[2], cols[3])
+    # Only a ledger with nothing salvageable counts as unusable.
+    if not records:
+        return {}, False
+    return records, True
+
+
+def write_digests(path, tasks):
+    parent = os.path.dirname(path)
+    try:
+        if parent and not os.path.isdir(parent):
+            os.makedirs(parent)
+        rows = []
+        for tf in tasks:
+            if not tf.parsed or not tf.tid:
+                continue
+            updated = tf.fm.get("updated")
+            if not isinstance(updated, str):
+                updated = ""
+            rows.append("%s\t%s\t%s\t%s" % (tf.tid, tf.digest, updated, tf.stage))
+        rows.sort()
+        tmp = path + ".new"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(rows))
+            if rows:
+                handle.write("\n")
+        os.replace(tmp, path)
+        return True, len(rows)
+    except OSError as exc:
+        return False, str(exc)
+
+
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+class Config(object):
+    def __init__(self):
+        self.present = False
+        self.schema = None
+        self.migrated_on = None
+        self.actors = []
+        self.targets = []
+        self.series = []
+
+
+def load_config(path, rel, report):
+    cfg = Config()
+    if not os.path.isfile(path):
+        return cfg, None
+    cfg.present = True
+    try:
+        with open(path, "rb") as handle:
+            text = handle.read().decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return cfg, "the config cannot be read (%s)" % exc
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    values, key_lines, errors = parse_mapping(lines, 1)
+    if errors:
+        detail = "; ".join("line %d: %s" % (n, m) for n, m in errors[:4])
+        return cfg, "the config does not parse (%s)" % detail
+
+    for key in values:
+        if key in CONFIG_KEYS or key.startswith("x-"):
+            continue
+        report.warn("CFG-02", "unknown config key '%s'; the declared keys are %s"
+                    % (key, ", ".join(CONFIG_KEYS)), where=rel, line=key_lines[key],
+                    hint="delete it, or rename it to 'x-%s'" % key)
+
+    schema = values.get("schema")
+    if not isinstance(schema, str) or not schema:
+        report.error("CFG-01", "the config must declare 'schema: %s'" % CONFIG_SCHEMA_VALUE,
+                     where=rel, hint="add the schema line")
+    else:
+        cfg.schema = schema
+        if schema != CONFIG_SCHEMA_VALUE:
+            report.warn("CFG-01", "this ledger declares schema '%s'; this validator "
+                                  "implements '%s'" % (schema, CONFIG_SCHEMA_VALUE), where=rel)
+
+    stamp = values.get("migrated_on")
+    if isinstance(stamp, str) and stamp:
+        if is_real_date(stamp) is None:
+            report.error("CFG-01", "'migrated_on: %s' is not a real YYYY-MM-DD date" % stamp,
+                         where=rel, line=key_lines.get("migrated_on"))
+        else:
+            cfg.migrated_on = stamp
+
+    for key, attr, pattern, label in (
+        ("actors", "actors", RX_ACTOR, "actor handle"),
+        ("targets", "targets", RX_TARGET, "target"),
+        ("series", "series", r"^[A-Z][A-Z0-9.]{1,5}$", "series"),
+    ):
+        if key not in values:
+            continue
+        items = as_list(values[key])
+        if items is None:
+            report.error("CFG-01", "'%s' must be a flow list, for example '%s: []'" % (key, key),
+                         where=rel, line=key_lines.get(key))
+            continue
+        clean = []
+        for item in items:
+            if not re.match(pattern, item):
+                report.error("CFG-01", "'%s' is not a legal %s" % (item, label),
+                             where=rel, line=key_lines.get(key))
+                continue
+            clean.append(item)
+        setattr(cfg, attr, clean)
+    return cfg, None
+
+
+# ---------------------------------------------------------------------------
+# Fix intents
+# ---------------------------------------------------------------------------
+
+class FixPlan(object):
+    def __init__(self):
+        self.frontmatter = {}      # path -> list of ("del", key) / ("set", key, value)
+        self.history_add = []      # (date, id, from, to, actor, note)
+        self.map_remove = []       # phase-map line indices
+        self.map_insert = []       # (phase id, task id, title)
+        self.digest_accept = set() # task ids whose I-34 drift --fix has reconciled
+
+    def touch_fm(self, path, op):
+        self.frontmatter.setdefault(path, [])
+        if op not in self.frontmatter[path]:
+            self.frontmatter[path].append(op)
+
+    def empty(self):
+        return not (self.frontmatter or self.history_add or self.map_remove
+                    or self.map_insert or self.digest_accept)
+
+
+# ---------------------------------------------------------------------------
+# The check pass
+# ---------------------------------------------------------------------------
+
+class Ledger(object):
+    def __init__(self, tasks_dir, today):
+        self.dir = tasks_dir
+        self.today = today
+        self.report = Report()
+        self.fixes = FixPlan()
+        self.tasks = []
+        self.by_id = {}
+        self.config = Config()
+        self.stub_counts = {}
+        self.unknown_created = 0
+        self.unknown_completed = 0
+        self.unparsed = 0
+        self.digest_note = None
+
+    def rel(self, path):
+        return os.path.relpath(path, os.path.dirname(self.dir.rstrip(os.sep)))
+
+
+def discover(ledger):
+    report = ledger.report
+    root = ledger.dir
+    strays = []
+    try:
+        names = sorted(os.listdir(root))
+    except OSError as exc:
+        report.error("I-01", "cannot list the ledger: %s" % exc, where=ledger.rel(root))
+        return
+    for name in names:
+        full = os.path.join(root, name)
+        if os.path.isdir(full):
+            if name not in STAGES and name != ".state":
+                strays.append(name)
+            continue
+    if strays:
+        report.info("I-01", "these subdirectories are not stages and are ignored: %s"
+                    % ", ".join(sorted(strays)), where=ledger.rel(root))
+    for stage in STAGES:
+        stage_dir = os.path.join(root, stage)
+        if not os.path.isdir(stage_dir):
+            continue
+        for name in sorted(os.listdir(stage_dir)):
+            if not name.endswith(".md"):
+                continue
+            full = os.path.join(stage_dir, name)
+            if not os.path.isfile(full) or os.path.islink(full):
+                continue
+            tf = load_task(full, ledger.rel(full), stage, report)
+            ledger.tasks.append(tf)
+    for tf in ledger.tasks:
+        if not tf.parsed:
+            ledger.unparsed += 1
+
+
+def check_files(ledger):
+    report = ledger.report
+    cfg = ledger.config
+    today = ledger.today
+    fixes = ledger.fixes
+
+    for tf in ledger.tasks:
+        if not tf.parsed:
+            continue
+        rel = tf.rel
+        fm = tf.fm
+        at = tf.fm_lines
+
+        # I-04 id
+        tid = fm.get("id")
+        if not isinstance(tid, str) or not tid:
+            report.error("I-04", "'id' is missing", where=rel,
+                         hint="every task carries the id it was allocated")
+            tid = None
+        elif not re.match(RX_ID, tid):
+            report.error("I-04", "'%s' does not match the id grammar "
+                                 "TASK-[SERIES-]NNN[suffix]" % tid, where=rel, line=at.get("id"))
+            tid = None
+        else:
+            series = re.match(RX_ID, tid).group(1)
+            if series and cfg.series and series not in cfg.series:
+                report.error("I-04", "series '%s' is not declared in "
+                                     "tasks.config.yml#series (%s)"
+                             % (series, ", ".join(cfg.series)), where=rel, line=at.get("id"))
+        tf.tid = tid
+
+        # I-07 filename
+        if tid:
+            name = os.path.basename(tf.path)
+            expected_head = tid + "-"
+            if not name.startswith(expected_head) or not name.endswith(".md"):
+                report.error("I-07", "the filename must be '<id>-<slug>.md'; expected it to "
+                                     "start '%s'" % expected_head, where=rel)
+            else:
+                slug = name[len(expected_head):-3]
+                if not re.match(RX_SLUG, slug) or not (1 <= len(slug) <= 60):
+                    report.error("I-07", "the slug '%s' must match lower-case words joined by "
+                                         "single hyphens, 1-60 characters" % slug, where=rel)
+
+        # I-08 title line
+        titles = tf._titles
+        if len(titles) != 1:
+            report.error("I-08", "the body holds %d lines beginning '# '; exactly one is "
+                                 "required" % len(titles), where=rel)
+        else:
+            idx, line = titles[0]
+            if tid and not re.match(r"^# %s: .+$" % re.escape(tid), line):
+                report.error("I-08", "the title line must read '# %s: <title>'" % (tid or "<id>"),
+                             where=rel, line=tf.body_offset + idx)
+            elif tid:
+                tf.title = line[len("# %s: " % tid):].strip()
+
+        # I-10 status
+        if "status" in fm:
+            report.error("I-10", "state is the directory in v1.0.0; delete this key",
+                         where=rel, line=at.get("status"), fixable=True,
+                         hint="--fix deletes the key")
+            fixes.touch_fm(tf.path, ("del", "status"))
+
+        # I-11 unknown keys
+        for key in fm:
+            if key in KNOWN_KEYS or key.startswith("x-"):
+                continue
+            if key == "status":
+                continue
+            report.error("I-11", "'%s' is not a schema key" % key, where=rel,
+                         line=at.get(key),
+                         hint="rename it to 'x-%s' to keep it, or delete it" % key)
+
+        # I-12 type
+        ttype = fm.get("type")
+        if not isinstance(ttype, str) or ttype == "":
+            report.error("I-12", "'type' is missing; one of %s" % ", ".join(TYPES), where=rel)
+        elif ttype not in TYPES:
+            report.error("I-12", "type '%s' is not one of %s" % (ttype, ", ".join(TYPES)),
+                         where=rel, line=at.get("type"))
+
+        # I-13 / I-14 priority
+        priority = fm.get("priority")
+        if priority is not None:
+            if not isinstance(priority, str) or priority not in PRIORITIES:
+                report.error("I-13", "priority '%s' is not one of %s"
+                             % (priority, ", ".join(PRIORITIES)), where=rel,
+                             line=at.get("priority"))
+            elif priority == "now" and tf.stage not in NOW_STAGES:
+                report.error("I-14", "'priority: now' routes a task straight into active/; it "
+                                     "cannot sit in %s/" % tf.stage, where=rel,
+                             line=at.get("priority"),
+                             hint="move the file to active/, or lower the priority")
+
+        # I-15 created / I-16 updated
+        created = fm.get("created")
+        created_day = None
+        if not isinstance(created, str) or not created:
+            report.error("I-15", "'created' is missing (YYYY-MM-DD)", where=rel)
+        else:
+            created_day = is_real_date(created)
+            if created_day is None:
+                report.error("I-15", "'created: %s' is not a real YYYY-MM-DD date" % created,
+                             where=rel, line=at.get("created"))
+            elif created_day > today:
+                report.error("I-15", "'created: %s' is in the future (today is %s)"
+                             % (created, today.isoformat()), where=rel, line=at.get("created"))
+
+        updated = fm.get("updated")
+        updated_day = None
+        if not isinstance(updated, str) or not updated:
+            report.error("I-16", "'updated' is missing (YYYY-MM-DD)", where=rel)
+        else:
+            updated_day = is_real_date(updated)
+            if updated_day is None:
+                report.error("I-16", "'updated: %s' is not a real YYYY-MM-DD date" % updated,
+                             where=rel, line=at.get("updated"))
+            else:
+                if updated_day > today:
+                    report.error("I-16", "'updated: %s' is in the future (today is %s)"
+                                 % (updated, today.isoformat()), where=rel,
+                                 line=at.get("updated"))
+                if created_day and updated_day < created_day:
+                    report.error("I-16", "'updated: %s' is earlier than 'created: %s'"
+                                 % (updated, created), where=rel, line=at.get("updated"))
+        tf._created_day = created_day
+        tf._updated_day = updated_day
+
+        # I-17 / I-18 actors
+        for key, inv in (("created_by", "I-17"), ("completed_by", "I-17")):
+            who = fm.get(key)
+            if who is None:
+                continue
+            if not isinstance(who, str) or who == "":
+                report.error(inv, "'%s' is empty" % key, where=rel, line=at.get(key))
+                continue
+            if len(who) > 64 or "@" in who or (who != "unknown" and not re.match(RX_ACTOR, who)):
+                report.error(inv, "'%s: %s' is not a legal actor handle (lower-case, no '@')"
+                             % (key, who), where=rel, line=at.get(key))
+                continue
+            if cfg.actors and who != "unknown" and who not in cfg.actors:
+                report.error(inv, "'%s' is not declared in tasks.config.yml#actors (%s)"
+                             % (who, ", ".join(cfg.actors)), where=rel, line=at.get(key))
+        if fm.get("created_by") is None:
+            report.error("I-17", "'created_by' is missing", where=rel,
+                         hint="the allocator writes it; 'unknown' is legal for legacy tasks")
+        if fm.get("created_by") == "unknown":
+            ledger.unknown_created += 1
+        if fm.get("completed_by") == "unknown":
+            ledger.unknown_completed += 1
+
+        if cfg.present and cfg.migrated_on:
+            ratchet = is_real_date(cfg.migrated_on)
+            if ratchet and created_day and created_day >= ratchet:
+                for key in ("created_by", "completed_by"):
+                    if fm.get(key) == "unknown":
+                        report.error("I-18", "'%s: unknown' on a task created on or after "
+                                             "migrated_on (%s); the attribution debt may only "
+                                             "shrink" % (key, cfg.migrated_on), where=rel,
+                                     line=at.get(key))
+
+        # I-19 phase presence
+        phase = fm.get("phase")
+        if tf.stage == "triage":
+            if phase is not None:
+                report.error("I-19", "a task in triage/ carries no phase; it has not "
+                                     "graduated yet", where=rel, line=at.get("phase"))
+        else:
+            # `closed/` is the one terminal reachable straight from triage/, so
+            # it is the only stage that can legitimately hold a phase-less task:
+            # declining a matter must not cost more than declining it, and
+            # forcing a phase would file the decline on the roadmap as though
+            # someone meant to do the work. Present-if-it-had-one, validated
+            # either way.
+            if phase is None and tf.stage != "closed":
+                report.error("I-19", "'phase' is required outside triage/ and closed/",
+                             where=rel, hint="name the phase this task belongs to")
+            elif phase is not None and (
+                    not isinstance(phase, str) or not re.match(RX_PHASE, phase)):
+                report.error("I-19", "phase '%s' is not a legal phase id" % phase, where=rel,
+                             line=at.get("phase"))
+
+        # I-25 target
+        target = fm.get("target")
+        if cfg.targets:
+            items = as_list(target)
+            if target is None:
+                if tf.stage not in ("triage", "closed"):
+                    report.error("I-25", "'target' is required; this project declares %s"
+                                 % ", ".join(cfg.targets), where=rel)
+            elif items is None:
+                report.error("I-25", "'target' must be a flow list, for example "
+                                     "'target: [%s]'" % cfg.targets[0], where=rel,
+                             line=at.get("target"))
+            elif not items:
+                if tf.stage not in ("triage", "closed"):
+                    report.error("I-25", "'target' is empty; name at least one of %s"
+                                 % ", ".join(cfg.targets), where=rel, line=at.get("target"))
+            else:
+                for item in items:
+                    if not re.match(RX_TARGET, item):
+                        report.error("I-25", "'%s' is not a legal target value" % item,
+                                     where=rel, line=at.get("target"))
+                    elif item not in cfg.targets:
+                        report.error("I-25", "'%s' is not declared in "
+                                             "tasks.config.yml#targets (%s)"
+                                     % (item, ", ".join(cfg.targets)), where=rel,
+                                     line=at.get("target"))
+        else:
+            if target is not None:
+                report.error("I-25", "'target' is set but this project declares no targets",
+                             where=rel, line=at.get("target"),
+                             hint="declare the axis in tasks.config.yml#targets, or delete "
+                                  "the key")
+
+        # I-26 needs (shape only; resolution happens once every id is known)
+        needs = fm.get("needs")
+        tf._needs = []
+        if needs is not None:
+            items = as_list(needs)
+            if items is None:
+                report.error("I-26", "'needs' must be a flow list of task ids", where=rel,
+                             line=at.get("needs"))
+            else:
+                seen = set()
+                for item in items:
+                    if not re.match(RX_ID, item):
+                        report.error("I-26", "'%s' is not a legal task id" % item, where=rel,
+                                     line=at.get("needs"))
+                        continue
+                    if tid and item == tid:
+                        report.error("I-26", "a task cannot need itself", where=rel,
+                                     line=at.get("needs"))
+                        continue
+                    if item in seen:
+                        report.error("I-26", "'%s' is listed twice in 'needs'" % item,
+                                     where=rel, line=at.get("needs"))
+                        continue
+                    seen.add(item)
+                    tf._needs.append(item)
+
+        # I-29 / I-30 terminal fields
+        completed_by = fm.get("completed_by")
+        resolution = fm.get("resolution")
+        resolution_ref = fm.get("resolution_ref")
+        if tf.stage in TERMINAL_STAGES:
+            if completed_by is None:
+                report.error("I-29", "a task in %s/ records who finished it "
+                                     "('completed_by')" % tf.stage, where=rel)
+        else:
+            if completed_by is not None:
+                report.error("I-30", "'completed_by' belongs only in completed/ or closed/",
+                             where=rel, line=at.get("completed_by"))
+        if tf.stage == "closed":
+            if resolution is None:
+                report.error("I-29", "a task in closed/ records a 'resolution' (%s)"
+                             % ", ".join(RESOLUTIONS), where=rel)
+            elif resolution not in RESOLUTIONS:
+                report.error("I-29", "resolution '%s' is not one of %s"
+                             % (resolution, ", ".join(RESOLUTIONS)), where=rel,
+                             line=at.get("resolution"))
+            needs_ref = resolution in REF_RESOLUTIONS
+            if needs_ref and resolution_ref is None:
+                report.error("I-29", "'resolution: %s' names the task that replaced this one "
+                                     "('resolution_ref')" % resolution, where=rel)
+            if not needs_ref and resolution_ref is not None:
+                report.error("I-29", "'resolution_ref' is only carried when the resolution is "
+                                     "superseded or duplicate", where=rel,
+                             line=at.get("resolution_ref"))
+            if resolution_ref is not None:
+                if not isinstance(resolution_ref, str) or not re.match(RX_ID, resolution_ref):
+                    report.error("I-29", "'resolution_ref: %s' is not a legal task id"
+                                 % resolution_ref, where=rel, line=at.get("resolution_ref"))
+                elif tid and resolution_ref == tid:
+                    report.error("I-29", "a task cannot supersede itself", where=rel,
+                                 line=at.get("resolution_ref"))
+        else:
+            for key in ("resolution", "resolution_ref"):
+                if fm.get(key) is not None:
+                    report.error("I-30", "'%s' belongs only in closed/" % key, where=rel,
+                                 line=at.get(key))
+
+        # I-31 blocker section
+        if tf.stage == "blocked" and not tf.blocker_ok:
+            report.error("I-31", "a task in blocked/ carries a '## Blocker' heading with at "
+                                 "least one line of prose under it", where=rel)
+
+        # I-36 ageing in review
+        if tf.stage == "review" and updated_day is not None:
+            age = (today - updated_day).days
+            if age > REVIEW_AGE_LIMIT:
+                report.warn("I-36", "waiting in review/ for %d days (updated %s)"
+                            % (age, updated), where=rel)
+
+        # I-37 depth
+        ledger.stub_counts.setdefault(tf.stage, 0)
+        if tf.is_stub:
+            ledger.stub_counts[tf.stage] += 1
+            if tf.stage in ("review", "completed"):
+                report.warn("I-37", "stub depth in %s/: no '## Acceptance criteria' item was "
+                                    "ever written, so nothing records what was verified"
+                            % tf.stage, where=rel)
+
+
+def check_identity(ledger):
+    """I-05: no two task files share an id."""
+    report = ledger.report
+    groups = {}
+    for tf in ledger.tasks:
+        if tf.parsed and tf.tid:
+            groups.setdefault(tf.tid, []).append(tf)
+    for tid in sorted(groups):
+        group = groups[tid]
+        if len(group) > 1:
+            report.error("I-05", "id '%s' is used by %d files: %s"
+                         % (tid, len(group), ", ".join(sorted(t.rel for t in group))),
+                         hint="renumber all but one; bin/migrate-tasks does this and records "
+                              "the old value as x-legacy_id")
+        ledger.by_id[tid] = group[0]
+
+
+def check_graph(ledger):
+    """I-26 resolution, I-27 acyclicity, I-28 terminal dependencies."""
+    report = ledger.report
+    known = ledger.by_id
+    edges = {}
+    for tf in ledger.tasks:
+        if not tf.parsed or not tf.tid:
+            continue
+        resolved = []
+        for need in getattr(tf, "_needs", []):
+            if need not in known:
+                report.error("I-26", "'needs: %s' names a task that is not in this ledger"
+                             % need, where=tf.rel, line=tf.fm_lines.get("needs"))
+                continue
+            resolved.append(need)
+        edges[tf.tid] = resolved
+        if tf.stage == "completed":
+            for need in resolved:
+                other = known[need]
+                if other.stage not in TERMINAL_STAGES:
+                    report.warn("I-28", "this task is completed but needs %s, which is still "
+                                        "in %s/" % (need, other.stage), where=tf.rel)
+        if tf.stage == "closed":
+            ref = tf.fm.get("resolution_ref")
+            if isinstance(ref, str) and re.match(RX_ID, ref) and ref not in known:
+                report.error("I-29", "'resolution_ref: %s' names a task that is not in this "
+                                     "ledger" % ref, where=tf.rel,
+                             line=tf.fm_lines.get("resolution_ref"))
+
+    state = {}
+    stack = []
+    reported = set()
+
+    def walk(node):
+        state[node] = 1
+        stack.append(node)
+        for nxt in edges.get(node, []):
+            flag = state.get(nxt, 0)
+            if flag == 0:
+                walk(nxt)
+            elif flag == 1:
+                cycle = stack[stack.index(nxt):] + [nxt]
+                key = tuple(sorted(set(cycle)))
+                if key not in reported:
+                    reported.add(key)
+                    report.error("I-27", "'needs' forms a cycle: %s" % " -> ".join(cycle),
+                                 hint="one of these dependencies is not real; delete it")
+        stack.pop()
+        state[node] = 2
+
+    sys.setrecursionlimit(max(3000, len(edges) * 4 + 100))
+    for node in sorted(edges):
+        if state.get(node, 0) == 0:
+            walk(node)
+
+
+def check_phase_map(ledger, pm):
+    """I-20 through I-24."""
+    report = ledger.report
+    fixes = ledger.fixes
+    # Select on CARRYING a phase, not on stage: a closed/ task legitimately
+    # has none, and counting by stage over-reports in the "ROADMAP.md is
+    # absent" message.
+    phased = [t for t in ledger.tasks
+              if t.parsed and t.tid and t.stage != "triage" and t.fm.get("phase")]
+
+    if not pm.present:
+        if phased:
+            report.error("I-20", "tasks/ROADMAP.md is absent, so no phase can be declared and "
+                                 "%d phased tasks cannot be checked" % len(phased),
+                         hint="create tasks/ROADMAP.md with one '## Phase <id> - <name>' "
+                              "heading per phase")
+        return
+
+    for idx, pid in pm.dupes:
+        report.error("I-20", "phase id '%s' is declared by two headings" % pid,
+                     where=pm.rel, line=idx + 1)
+    for idx, text in pm.malformed:
+        report.warn("I-20", "'%s' declares no phase name, so it is not a usable phase heading"
+                    % text, where=pm.rel, line=idx + 1,
+                    hint="write it as '## Phase <id> - <name>'")
+
+    # I-21 scope prose
+    for pid in pm.order:
+        start, stop = phase_section_bounds(pm, pid)
+        has_scope = False
+        for idx in range(start + 1, stop):
+            line = pm.lines[idx]
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("#"):
+                continue
+            if re.match(r"^[-*][ \t]", stripped) or re.match(r"^\d+\.[ \t]", stripped):
+                continue
+            bare = stripped.lstrip("> ").strip()
+            bare = re.sub(r"^\*\*Scope\.\*\*", "Scope.", bare)
+            if bare == SCOPE_PLACEHOLDER or bare == "":
+                continue
+            if bare.endswith(":") and len(bare.split()) <= 8:
+                continue        # a lead-in to the list, not a scope paragraph
+            has_scope = True
+            break
+        if not has_scope:
+            report.warn("I-21", "phase '%s' has no scope paragraph; nobody can tell what "
+                                "belongs in it" % pid, where=pm.rel,
+                        line=pm.phases[pid]["line"] + 1,
+                        hint="write one sentence of scope under the heading")
+
+    # I-24 dangling entries
+    for entry in pm.entries:
+        if entry["id"] not in ledger.by_id:
+            report.error("I-24", "'%s' is listed here but no such task file exists"
+                         % entry["id"], where=pm.rel, line=entry["line"] + 1,
+                         hint="either the task was lost, or the line is a stale promise; "
+                              "only a human can say which")
+
+    # I-20 / I-22 / I-23 per task
+    for tf in phased:
+        phase = tf.fm.get("phase")
+        if not isinstance(phase, str) or not phase:
+            continue
+        if phase not in pm.phases:
+            report.error("I-20", "phase '%s' is not declared by any '## Phase' heading in %s"
+                         % (phase, pm.rel), where=tf.rel, line=tf.fm_lines.get("phase"),
+                         hint="declare the phase, or use one of: %s"
+                              % (", ".join(pm.order) if pm.order else "(none declared)"))
+            continue
+        entries = pm.entries_for(tf.tid)
+        correct = [e for e in entries if e["phase"] == phase]
+        wrong = [e for e in entries if e["phase"] != phase]
+        if not entries:
+            report.error("I-22", "%s is not listed under phase '%s' in %s"
+                         % (tf.tid, phase, pm.rel), where=tf.rel, fixable=True,
+                         hint="--fix appends the line to that phase's list")
+            fixes.map_insert.append((phase, tf.tid, tf.title or "(untitled)"))
+            continue
+        if not correct:
+            where = wrong[0]
+            report.error("I-22", "%s is listed under phase '%s' but its frontmatter says '%s'"
+                         % (tf.tid, where["phase"] or "(no phase)", phase), where=pm.rel,
+                         line=where["line"] + 1, fixable=True,
+                         hint="--fix moves the line to phase '%s'" % phase)
+            for entry in wrong:
+                fixes.map_remove.append(entry["line"])
+            fixes.map_insert.append((phase, tf.tid, tf.title or "(untitled)"))
+            continue
+        if len(entries) > 1:
+            doomed = correct[1:] + wrong
+            # Deleting a duplicate line is mechanical. Deleting the note somebody
+            # hand-wrote ON that line is a human judgement, and --fix promises it
+            # never makes one. A line carrying words the kept line does not have
+            # is therefore reported and left alone, not silently removed.
+            prose = [e for e in doomed
+                     if roadmap_line_residue(pm.lines[e["line"]], tf.tid, tf.title)]
+            if prose:
+                report.error(
+                    "I-22",
+                    "%s is listed %d times in %s, and %d of the extra line(s) carry text the "
+                    "kept line does not" % (tf.tid, len(entries), pm.rel, len(prose)),
+                    where=pm.rel, line=prose[0]["line"] + 1, fixable=False,
+                    hint="not auto-fixable: delete the duplicate yourself, moving anything "
+                         "worth keeping onto the line under phase '%s' first — e.g. %r"
+                         % (phase, pm.lines[prose[0]["line"]].strip()))
+                continue
+            report.error("I-22", "%s is listed %d times in %s" % (tf.tid, len(entries), pm.rel),
+                         where=pm.rel, line=entries[0]["line"] + 1, fixable=True,
+                         hint="--fix keeps the one under phase '%s' and deletes the rest"
+                              % phase)
+            for entry in doomed:
+                fixes.map_remove.append(entry["line"])
+        # I-23 title drift
+        if tf.title and correct[0]["title"] != tf.title:
+            report.warn("I-23", "the listed title differs from the task's own title\n"
+                                "        listed: %s\n        task:   %s"
+                        % (correct[0]["title"], tf.title), where=pm.rel,
+                        line=correct[0]["line"] + 1)
+
+
+def check_history(ledger, log):
+    """I-06, I-33, I-35."""
+    report = ledger.report
+    fixes = ledger.fixes
+    tasks = [t for t in ledger.tasks if t.parsed and t.tid]
+
+    if not log.present:
+        if tasks:
+            report.error("I-06", "tasks/history.tsv is absent; %d tasks have no recorded "
+                                 "transition" % len(tasks), where=log.rel, fixable=True,
+                         hint="--fix creates it and records one filing line per task")
+            for tf in tasks:
+                fixes.history_add.append(filed_line_for(tf, ledger.today))
+        return
+    if not log.well_formed:
+        report.info("I-33", "the transition log does not parse cleanly, so the stage-agrees-"
+                            "with-the-log check was skipped", where=log.rel)
+        return
+
+    filings = {}
+    for row in log.rows:
+        if row["from"] == "-":
+            filings.setdefault(row["id"], []).append(row)
+    for tid in sorted(filings):
+        if len(filings[tid]) > 1:
+            report.error("I-06", "%s is filed %d times in the log (lines %s); a task is filed "
+                                 "once" % (tid, len(filings[tid]),
+                                           ", ".join(str(r["line"]) for r in filings[tid])),
+                         where=log.rel)
+
+    for tf in tasks:
+        rows = log.by_id.get(tf.tid, [])
+        if not rows:
+            report.error("I-06", "%s never appears in the transition log" % tf.tid,
+                         where=tf.rel, fixable=True,
+                         hint="--fix records its filing line")
+            fixes.history_add.append(filed_line_for(tf, ledger.today))
+            continue
+        last = rows[-1]
+        if last["to"] != tf.stage:
+            report.error("I-33", "the log's last line for %s says '%s' but the file sits in "
+                                 "%s/" % (tf.tid, last["to"], tf.stage), where=tf.rel,
+                         fixable=True,
+                         hint="--fix records the move as happening today, attributed to "
+                              "'unknown'; it never invents a past date")
+            fixes.history_add.append((ledger.today.isoformat(), tf.tid, last["to"],
+                                      tf.stage, "unknown", "reconciled"))
+            if isinstance(tf.fm.get("updated"), str):
+                fixes.touch_fm(tf.path, ("set", "updated", ledger.today.isoformat()))
+        first = rows[0]
+        created = tf.fm.get("created")
+        if isinstance(created, str) and is_real_date(created) and first["date"] != created:
+            report.error("I-35", "'created: %s' disagrees with the first log line for %s "
+                                 "(%s)" % (created, tf.tid, first["date"]), where=tf.rel,
+                         line=tf.fm_lines.get("created"),
+                         hint="the log is the record; correct whichever one is wrong")
+        updated_day = getattr(tf, "_updated_day", None)
+        last_day = is_real_date(last["date"])
+        if updated_day and last_day and updated_day < last_day:
+            report.error("I-35", "'updated: %s' is earlier than the last recorded move (%s)"
+                         % (tf.fm.get("updated"), last["date"]), where=tf.rel,
+                         line=tf.fm_lines.get("updated"))
+
+    on_disk = set(ledger.by_id)
+    retired = sorted(set(log.by_id) - on_disk)
+    if retired:
+        report.info("I-06", "%d ids are recorded in the log with no file on disk; those "
+                            "numbers are retired and must never be issued again (%s%s)"
+                    % (len(retired), ", ".join(retired[:6]),
+                       ", ..." if len(retired) > 6 else ""), where=log.rel)
+
+
+def filed_line_for(tf, today):
+    created = tf.fm.get("created")
+    day = is_real_date(created) if isinstance(created, str) else None
+    when = created if (day is not None and day <= today) else today.isoformat()
+    who = tf.fm.get("created_by")
+    if not isinstance(who, str) or (who != "unknown" and not re.match(RX_ACTOR, who)):
+        who = "unknown"
+    return (when, tf.tid, "-", tf.stage, who, "filed")
+
+
+def accept_digests(path, tasks, tids):
+    """Record the CURRENT content hash for `tids` only, leaving every other row alone.
+
+    Used by --fix on I-34: the operator has been told the content moved and the
+    date has been reconciled, so that task's new content is now the baseline.
+    Deliberately surgical — a whole-ledger rewrite here would silently bless
+    staleness in tasks nobody looked at.
+    """
+    records, ok = load_digests(path)
+    if not ok:
+        records = {}
+    by_id = dict((t.tid, t) for t in tasks if t.parsed and t.tid)
+    done = []
+    for tid in sorted(tids):
+        tf = by_id.get(tid)
+        if tf is None:
+            continue
+        records[tid] = (tf.digest, tf.fm.get("updated") or "", tf.stage)
+        done.append("%s: accepted the new content as current in the digest ledger" % tid)
+    if not done:
+        return done
+    try:
+        directory = os.path.dirname(path)
+        if directory and not os.path.isdir(directory):
+            os.makedirs(directory)
+        with open(path, "w") as handle:
+            handle.write("id\tsha256\tupdated\tstage\n")
+            for tid in sorted(records):
+                sha, updated, stage = records[tid]
+                handle.write("%s\t%s\t%s\t%s\n" % (tid, sha, updated, stage))
+    except OSError as exc:
+        return ["could not update the digest ledger (%s)" % exc]
+    return done
+
+
+def check_digests(ledger, digest_path):
+    """I-34 and I-38."""
+    report = ledger.report
+    fixes = ledger.fixes
+    records, ok = load_digests(digest_path)
+    rel = ledger.rel(digest_path)
+    if not ok:
+        written, detail = write_digests(digest_path, ledger.tasks)
+        if written:
+            report.info("I-38", "ledger re-seeded: %d tasks (staleness unverifiable for this "
+                                "run)" % detail, where=rel)
+        else:
+            report.warn("I-38", "the digest ledger is absent and could not be written (%s); "
+                                "staleness is unverifiable" % detail, where=rel)
+        ledger.digest_note = "seeded"
+        return
+    for tf in ledger.tasks:
+        if not tf.parsed or not tf.tid:
+            continue
+        record = records.get(tf.tid)
+        if not record:
+            continue
+        old_sha, old_updated, _old_stage = record
+        if old_sha == tf.digest:
+            continue
+        current = tf.fm.get("updated")
+        if isinstance(current, str) and current == old_updated:
+            report.error("I-34", "the file changed but 'updated' still reads %s" % current,
+                         where=tf.rel, line=tf.fm_lines.get("updated"), fixable=True,
+                         hint="--fix sets 'updated' to today and accepts the new content")
+            fixes.touch_fm(tf.path, ("set", "updated", ledger.today.isoformat()))
+            # `updated` is a DATE. When the edit lands on the same day the task was
+            # last touched — the common case — setting it to today writes nothing,
+            # the recorded digest stays stale, and the error recurs on every run
+            # forever. Reconciling the date IS the repair, whether or not the value
+            # moved, so the new content has to be accepted along with it.
+            fixes.digest_accept.add(tf.tid)
+
+
+# ---------------------------------------------------------------------------
+# Applying the safe fixes
+# ---------------------------------------------------------------------------
+
+def apply_frontmatter_fixes(path, ops, label=None):
+    """Return a list of human-readable descriptions of what changed."""
+    done = []
+    label = label or path
+    with open(path, "rb") as handle:
+        raw = handle.read()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return done
+    lines = text.split("\n")
+    trailing = ""
+    if lines and lines[-1] == "":
+        lines.pop()
+        trailing = "\n"
+    fm_lines, first_lineno, close_index, err = split_frontmatter(lines)
+    if err:
+        return done
+    for op in ops:
+        if op[0] == "del":
+            key = op[1]
+            for idx in range(1, close_index):
+                m = re.match(RX_KEY_LINE, lines[idx])
+                if m and m.group(1) == key:
+                    del lines[idx]
+                    close_index -= 1
+                    done.append("%s: deleted '%s:'" % (label, key))
+                    break
+        elif op[0] == "set":
+            key, value = op[1], op[2]
+            for idx in range(1, close_index):
+                m = re.match(RX_KEY_LINE, lines[idx])
+                if m and m.group(1) == key:
+                    eol = "\r" if lines[idx].endswith("\r") else ""
+                    if (m.group(2) or "").rstrip("\r") != value:
+                        lines[idx] = "%s: %s%s" % (key, value, eol)
+                        done.append("%s: set '%s: %s'" % (label, key, value))
+                    break
+    if done:
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + trailing)
+    return done
+
+
+def apply_history_fixes(log_path, additions, label=None):
+    done = []
+    label = label or log_path
+    header = "\t".join(HISTORY_HEADER)
+    rows = []
+    if os.path.isfile(log_path):
+        with open(log_path, "rb") as handle:
+            text = handle.read().decode("utf-8", "replace")
+        existing = [ln for ln in text.split("\n") if ln.strip() != ""]
+        if existing and existing[0].split("\t") == HISTORY_HEADER:
+            existing = existing[1:]
+        rows = existing
+    seen = set(rows)
+    fresh = []
+    for item in additions:
+        line = "\t".join(item)
+        if line in seen:
+            continue
+        seen.add(line)
+        fresh.append(line)
+        done.append("%s: recorded '%s'" % (label, line.replace("\t", " | ")))
+    if not fresh:
+        return done
+    rows = rows + fresh
+    # keep the log ordered oldest first; a stable sort preserves same-day order
+    rows.sort(key=lambda ln: ln.split("\t")[0])
+    parent = os.path.dirname(log_path)
+    if parent and not os.path.isdir(parent):
+        os.makedirs(parent)
+    with open(log_path, "w", encoding="utf-8") as handle:
+        handle.write(header + "\n")
+        handle.write("\n".join(rows) + "\n")
+    return done
+
+
+def roadmap_line_residue(line, task_id, title):
+    """What a ROADMAP task line says beyond its id and title, if anything.
+
+    Used to tell a mechanically-removable duplicate from one somebody
+    annotated. Returns "" when the line is just `- <id> — <title>`.
+    """
+    text = (line or "").strip().lstrip("-*").strip()
+    for chunk in (task_id or "", title or ""):
+        if chunk:
+            text = text.replace(chunk, " ")
+    text = re.sub(r"[\s—–·:\-]+", " ", text).strip()
+    return text
+
+
+def apply_map_fixes(pm, removals, insertions):
+    done = []
+    if not pm.present or (not removals and not insertions):
+        return done
+    lines = list(pm.lines)
+    for idx in sorted(set(removals), reverse=True):
+        if 0 <= idx < len(lines):
+            done.append("%s: removed '%s'" % (pm.rel, lines[idx].strip()))
+            del lines[idx]
+    if insertions:
+        # recompute section bounds against the edited copy
+        fresh = PhaseMap(pm.path, pm.rel)
+        fresh.present = True
+        fresh.lines = lines
+        marks = fence_map(lines)
+        for idx, line in enumerate(lines):
+            if marks[idx]:
+                continue
+            m = re.match(RX_PHASE_HEADING, line)
+            if m:
+                pid = m.group(1)
+                name = re.sub(r"^[\s—–·:-]+", "", m.group(2) or "").strip()
+                if name and pid not in fresh.phases:
+                    fresh.phases[pid] = {"line": idx, "name": name}
+                    fresh.order.append(pid)
+        by_phase = {}
+        for pid, tid, title in insertions:
+            by_phase.setdefault(pid, []).append((tid, title))
+        planned = []
+        for pid, items in by_phase.items():
+            if pid not in fresh.phases:
+                continue
+            start, stop = phase_section_bounds(fresh, pid)
+            anchor = start
+            for idx in range(start + 1, stop):
+                if lines[idx].strip():
+                    anchor = idx
+            block = ["- %s — %s" % (tid, title) for tid, title in items]
+            is_entry = bool(re.match(RX_MAP_LINE, lines[anchor])) if anchor < len(lines) else False
+            if not is_entry:
+                block = [""] + block
+            planned.append((anchor + 1, block, pid, items))
+        for at, block, pid, items in sorted(planned, key=lambda p: -p[0]):
+            lines[at:at] = block
+            for tid, title in items:
+                done.append("%s: listed %s under phase '%s'" % (pm.rel, tid, pid))
+    if done:
+        with open(pm.path, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+    return done
+
+
+# ---------------------------------------------------------------------------
+# Reporting
+# ---------------------------------------------------------------------------
+
+def emit_text(ledger, out, args, elapsed, applied):
+    report = ledger.report
+    errors = report.count(ERROR)
+    warns = report.count(WARN)
+    infos = report.count(INFO)
+    total = len(ledger.tasks)
+
+    if not args.quiet:
+        out.write("check-tasks %s · rasa.module.tasks\n" % VERSION)
+        out.write("ledger: %s\n" % ledger.dir)
+        out.write("%d task files across %d stages\n\n"
+                  % (total, len([s for s in STAGES
+                                 if os.path.isdir(os.path.join(ledger.dir, s))])))
+        if applied:
+            out.write("APPLIED (%d)\n" % len(applied))
+            for line in applied:
+                out.write("  %s\n" % line)
+            out.write("\n")
+        for severity, label in ((ERROR, "ERRORS"), (WARN, "WARNINGS"), (INFO, "NOTES")):
+            group = [f for f in report.findings if f.severity == severity]
+            if not group:
+                continue
+            out.write("%s (%d)\n" % (label, len(group)))
+            by_inv = {}
+            for finding in group:
+                by_inv.setdefault(finding.inv, []).append(finding)
+            for inv in sorted(by_inv):
+                items = by_inv[inv]
+                out.write("  %s  (%d)\n" % (inv, len(items)))
+                shown = items if args.max_per <= 0 else items[:args.max_per]
+                for finding in shown:
+                    where = finding.where or "(ledger)"
+                    if finding.line:
+                        where = "%s:%d" % (where, finding.line)
+                    mark = " [--fix]" if finding.fixable else ""
+                    out.write("    %s\n        %s%s\n" % (where, finding.msg, mark))
+                    if finding.hint:
+                        out.write("        → %s\n" % finding.hint)
+                if len(items) > len(shown):
+                    out.write("    ... and %d more (use --max-per 0 to see them all)\n"
+                              % (len(items) - len(shown)))
+            out.write("\n")
+
+    stub_total = sum(ledger.stub_counts.values())
+    stub_detail = ", ".join("%s %d" % (s, ledger.stub_counts[s])
+                            for s in STAGES if ledger.stub_counts.get(s))
+    out.write("summary: %d tasks · %d errors · %d warnings · %d notes\n"
+              % (total, errors, warns, infos))
+    if ledger.unparsed:
+        out.write("         %d files were excluded before the schema checks (frontmatter "
+                  "does not parse)\n" % ledger.unparsed)
+    out.write("         attribution unknown: %d created_by, %d completed_by\n"
+              % (ledger.unknown_created, ledger.unknown_completed))
+    out.write("         stub depth: %d total%s\n"
+              % (stub_total, (" (%s)" % stub_detail) if stub_detail else ""))
+    out.write("         %.3fs\n" % elapsed)
+    if errors:
+        out.write("FAIL\n")
+    else:
+        out.write("OK\n")
+
+
+def emit_json(ledger, out, elapsed, applied):
+    report = ledger.report
+    payload = {
+        "tool": "check-tasks",
+        "version": VERSION,
+        "ledger": ledger.dir,
+        "tasks": len(ledger.tasks),
+        "unparsed": ledger.unparsed,
+        "errors": report.count(ERROR),
+        "warnings": report.count(WARN),
+        "notes": report.count(INFO),
+        "unknown_created_by": ledger.unknown_created,
+        "unknown_completed_by": ledger.unknown_completed,
+        "stub_depth": ledger.stub_counts,
+        "applied": applied,
+        "elapsed_seconds": round(elapsed, 4),
+        "findings": [f.as_dict() for f in report.findings],
+    }
+    json.dump(payload, out, indent=2, sort_keys=True)
+    out.write("\n")
+
+
+# ---------------------------------------------------------------------------
+# Driver
+# ---------------------------------------------------------------------------
+
+def locate_ledger(root):
+    root = os.path.abspath(root)
+    if os.path.basename(root) == "tasks" and os.path.isdir(root):
+        return root
+    candidate = os.path.join(root, "tasks")
+    if os.path.isdir(candidate):
+        return candidate
+    return None
+
+
+def run_pass(tasks_dir, today):
+    ledger = Ledger(tasks_dir, today)
+    cfg_path = os.path.join(tasks_dir, "tasks.config.yml")
+    map_path = os.path.join(tasks_dir, "ROADMAP.md")
+    log_path = os.path.join(tasks_dir, "history.tsv")
+    digest_path = os.path.join(tasks_dir, ".state", "digests.tsv")
+
+    cfg, fatal = load_config(cfg_path, ledger.rel(cfg_path), ledger.report)
+    if fatal:
+        return ledger, fatal, None, None
+    ledger.config = cfg
+
+    discover(ledger)
+    check_files(ledger)
+    check_identity(ledger)
+    check_graph(ledger)
+    pm = load_phase_map(map_path, ledger.rel(map_path), ledger.report)
+    check_phase_map(ledger, pm)
+    log = load_history(log_path, ledger.rel(log_path), ledger.report)
+    check_history(ledger, log)
+    check_digests(ledger, digest_path)
+    return ledger, None, pm, log_path
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        prog="check-tasks",
+        description="Validate a tasks/ ledger against the rasa.module.tasks v1.0.0 schema.")
+    parser.add_argument("root", nargs="?", default=".",
+                        help="the project root, or the tasks/ directory itself (default: .)")
+    parser.add_argument("--quiet", action="store_true", help="print the summary only")
+    parser.add_argument("--json", action="store_true", dest="as_json",
+                        help="print one machine-readable object and nothing else")
+    parser.add_argument("--fix", action="store_true",
+                        help="apply the mechanically safe repairs (I-06, I-10, I-22, I-33, "
+                             "I-34) and print exactly what changed")
+    parser.add_argument("--refresh-digests", action="store_true", dest="refresh",
+                        help="rewrite tasks/.state/digests.tsv from the files as they are "
+                             "now, and do nothing else")
+    parser.add_argument("--max-per", type=int, default=12, metavar="N",
+                        help="list at most N findings per invariant (0 = all; default 12)")
+    parser.add_argument("--today", metavar="YYYY-MM-DD",
+                        help="treat this as today's date (for reproducible checking)")
+    args = parser.parse_args(argv)
+
+    started = time.time()
+    out = sys.stdout
+
+    tasks_dir = locate_ledger(args.root)
+    if not tasks_dir:
+        sys.stderr.write("check-tasks: no tasks/ directory at %s\n"
+                         % os.path.abspath(args.root))
+        return 2
+
+    if args.today:
+        today = is_real_date(args.today)
+        if today is None:
+            sys.stderr.write("check-tasks: --today %s is not a real date\n" % args.today)
+            return 2
+    else:
+        today = date.today()
+
+    if args.refresh:
+        ledger = Ledger(tasks_dir, today)
+        discover(ledger)
+        digest_path = os.path.join(tasks_dir, ".state", "digests.tsv")
+        written, detail = write_digests(digest_path, ledger.tasks)
+        if not written:
+            sys.stderr.write("check-tasks: could not write %s (%s)\n" % (digest_path, detail))
+            return 2
+        out.write("digest ledger refreshed: %d tasks recorded in %s\n"
+                  % (detail, os.path.relpath(digest_path, os.path.dirname(tasks_dir))))
+        return 0
+
+    applied = []
+    ledger, fatal, pm, log_path = run_pass(tasks_dir, today)
+    if fatal:
+        sys.stderr.write("check-tasks: %s\n" % fatal)
+        return 2
+
+    if args.fix and not ledger.fixes.empty():
+        plan = ledger.fixes
+        base = os.path.dirname(tasks_dir.rstrip(os.sep))
+        for path in sorted(plan.frontmatter):
+            applied.extend(apply_frontmatter_fixes(path, plan.frontmatter[path],
+                                                   os.path.relpath(path, base)))
+        if plan.history_add:
+            applied.extend(apply_history_fixes(log_path, sorted(plan.history_add),
+                                               os.path.relpath(log_path, base)))
+        if plan.map_remove or plan.map_insert:
+            applied.extend(apply_map_fixes(pm, plan.map_remove, plan.map_insert))
+        ledger, fatal, pm, log_path = run_pass(tasks_dir, today)
+        # Accept digests only AFTER re-parsing. Doing it before meant recording
+        # the pre-fix hash of a file the fixes had just rewritten, so the very
+        # next pass saw a change and re-raised I-34 — converging only on a
+        # second --fix. The re-parsed tasks carry the post-fix content.
+        if plan.digest_accept and not fatal:
+            applied.extend(accept_digests(
+                os.path.join(tasks_dir, ".state", "digests.tsv"),
+                ledger.tasks, plan.digest_accept))
+            ledger, fatal, pm, log_path = run_pass(tasks_dir, today)
+        if fatal:
+            sys.stderr.write("check-tasks: %s\n" % fatal)
+            return 2
+
+    errors = ledger.report.count(ERROR)
+    if errors == 0 and ledger.digest_note != "seeded":
+        write_digests(os.path.join(tasks_dir, ".state", "digests.tsv"), ledger.tasks)
+
+    elapsed = time.time() - started
+    if args.as_json:
+        emit_json(ledger, out, elapsed, applied)
+    else:
+        emit_text(ledger, out, args, elapsed, applied)
+    return 1 if errors else 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(130)

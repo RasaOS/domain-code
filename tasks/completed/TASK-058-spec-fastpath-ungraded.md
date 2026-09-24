@@ -1,15 +1,15 @@
 ---
 id: TASK-058
-category: bug
+type: defect
+created: 2026-09-21
+created_by: chazzcoin
+updated: 2026-09-21
 phase: P3
-status: completed
-owner: unassigned
-blocked_by:
-outcome: shipped
-filed: 2026-09-21 05:00 UTC
-origin: manual
+completed_by: chazzcoin
+x-origin: manual
+x-outcome: shipped
+x-owner: unassigned
 ---
-
 # TASK-058: the spec fast-path's allowlist is never actually checked
 
 **User story.** As an **operator**, I want **the spec-only merge carve-out

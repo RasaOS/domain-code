@@ -1,10 +1,12 @@
 ---
 id: TASK-012
-category: bug
+type: defect
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P1
-status: completed
+completed_by: chazzcoin
 ---
-
 # TASK-012: The test gate cannot pass vacuously
 
 **User story.** As a **release engineer**, I want **the production test gate to

@@ -1,10 +1,11 @@
 ---
 id: TASK-042
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P7
-status: backlog
 ---
-
 # TASK-042: Content digest in rasa.json, bin/init --ref, expected_sha
 
 **User story.** As an **operator**, I want **to install a known version of the Element rather than whatever is on disk** so that **the governance layer has the same supply-chain discipline as any other dependency**.

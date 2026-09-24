@@ -1,4 +1,11 @@
-# TASK-010 — Lightweight todo queue (phaseless task-style backlog)
+---
+id: TASK-010
+type: change
+created: 2026-05-17
+created_by: claude
+updated: 2026-05-17
+---
+# TASK-010: TASK-010 — Lightweight todo queue (phaseless task-style backlog)
 
 **User story.** As a developer, I want a lightweight todo queue that
 works like the task system but without phases — a flat backlog of

@@ -53,13 +53,20 @@ jobs:
       - name: No bash 4+ syntax in shipped shell
         run: bash bin/check-bash32
 
+      # Each executable is parsed by the interpreter its shebang names:
+      # bin/migrate-ledger and bin/migrate-tasks, and content/bin/task and
+      # content/bin/check-tasks (vendored from rasa.module.tasks), are Python.
       - name: Scripts parse
         run: |
           set -euo pipefail
           fail=0
           while IFS= read -r f; do
-            bash -n "$f" || { echo "parse error: $f"; fail=1; }
-          done < <(find content -name '*.sh' -type f; find bin -type f -perm -u+x)
+            case "$(head -1 "$f")" in
+              '#!'*python*) python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' "$f" \
+                              || { echo "parse error: $f"; fail=1; } ;;
+              *)            bash -n "$f" || { echo "parse error: $f"; fail=1; } ;;
+            esac
+          done < <(find content -name '*.sh' -type f; find bin content/bin -type f -perm -u+x)
           exit "$fail"
 
       # The contract lock under mawk — the awk most Linux consumers get.

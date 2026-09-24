@@ -198,6 +198,47 @@ for rel in sorted(set(kept)):
 PYEOF
 fi
 
+# ---------- Upgrade a pre-1.0 task ledger ----------
+# From 0.53.0 the task system is rasa.module.tasks v1.0.0 (vendored). A
+# project installed from an earlier version keeps a 0.x ledger — status:
+# fields, five stages, categories — that the new .claude/bin/check-tasks
+# rejects outright. A re-run of this script is the update path, so it
+# migrates that ledger here, BEFORE the seeds below.
+#
+# The order is load-bearing. tasks/tasks.config.yml carries the schema
+# marker migrate-tasks reads as "already converted"; seeding it over an
+# unconverted ledger would hide that ledger from the migration for good.
+# So if the migration cannot run, every tasks/ seed is held back instead.
+#
+# bin/migrate-ledger applies only over a clean tasks/: the result is left
+# uncommitted, one reviewable diff, with git as the undo.
+HOLD_TASK_SEEDS=false
+LEDGER_NOTE=""
+if [[ -d "$TARGET/tasks" ]] \
+   && ! grep -qs '^schema: rasa.module.tasks/1.0.0' "$TARGET/tasks/tasks.config.yml"; then
+  legacy=false
+  for st in triage backlog active review blocked completed done; do
+    [[ -d "$TARGET/tasks/$st" ]] && legacy=true
+  done
+  if [[ "$legacy" == true ]]; then
+    echo "  Task ledger: pre-1.0 shape found — migrating to rasa.module.tasks v1.0.0..."
+    set +e
+    ml_out="$(python3 "$ELEMENT_DIR/bin/migrate-ledger" --apply "$TARGET" 2>&1)"
+    ml_rc=$?
+    set -e
+    printf '%s\n' "$ml_out" | grep -E '^(  prepare:|migrate-ledger:|summary:|The migrated|migrate-tasks: (abort|refusing))' \
+      | sed 's/^ *//; s/^/    · /' || true
+    case "$ml_rc" in
+      0) LEDGER_NOTE="migrated to rasa.module.tasks v1.0.0 — uncommitted; read tasks/MIGRATION-REVIEW.md, review, commit" ;;
+      1) LEDGER_NOTE="migrated, but .claude/bin/check-tasks still reports errors — run it, fix, then commit" ;;
+      *) HOLD_TASK_SEEDS=true
+         LEDGER_NOTE="NOT migrated — tasks/ seeds held back. Fix what is named above, then run: $ELEMENT_DIR/bin/migrate-ledger --apply $TARGET"
+         printf '%s\n' "$ml_out" | grep -vE '^(  prepare:|migrate-ledger:|summary:|The migrated)' \
+           | tail -n 8 | sed 's/^/      /' >&2 || true ;;
+    esac
+  fi
+fi
+
 # ---------- Apply seed.files[] ----------
 
 count_seed="$(python3 -c "import json; print(len(json.load(open('$MANIFEST')).get('seed', {}).get('files', [])))")"
@@ -210,12 +251,14 @@ else
   echo "  Applying $count_seed seed.files[] entries..."
   python3 - "$MANIFEST" "$ELEMENT_DIR" "$TARGET" \
     "$ELEMENT_NAME" "$ELEMENT_KIND" "$ELEMENT_VERSION" \
-    "$ELEMENT_REPO" "$ELEMENT_BRANCH" "$ELEMENT_SHA" "$TODAY" <<'PYEOF'
+    "$ELEMENT_REPO" "$ELEMENT_BRANCH" "$ELEMENT_SHA" "$TODAY" \
+    "$HOLD_TASK_SEEDS" <<'PYEOF'
 import json, os, shutil, sys
 
 (manifest_path, element_dir, target,
  elem_name, elem_kind, elem_version,
- elem_repo, elem_branch, elem_sha, today) = sys.argv[1:11]
+ elem_repo, elem_branch, elem_sha, today, hold_tasks) = sys.argv[1:12]
+hold_tasks = (hold_tasks == 'true')
 
 manifest = json.load(open(manifest_path))
 
@@ -271,7 +314,20 @@ for entry in manifest.get('seed', {}).get('files', []):
     dst = os.path.join(target, entry['to'])
     policy = entry['policy']
 
+    if hold_tasks and entry['to'].startswith('tasks/'):
+        print(f"    · hold (pre-1.0 ledger not migrated): {entry['to']}")
+        continue
+
     if policy == 'skip-if-exists' and os.path.exists(dst):
+        print(f"    · skip (exists): {entry['to']}")
+        continue
+
+    # The re-stamp below merges JSON, and exists for the lockfile. Any other
+    # init-only-with-sha file (tasks/tasks.config.yml) is written once and is
+    # the project's afterwards — a re-run must not try to parse it as JSON
+    # and then tell the consumer to delete it.
+    if (policy == 'init-only-with-sha' and os.path.exists(dst)
+            and not dst.endswith('.json')):
         print(f"    · skip (exists): {entry['to']}")
         continue
 
@@ -415,5 +471,6 @@ PYEOF
 echo ""
 echo "✓ $ELEMENT_NAME @ $ELEMENT_VERSION installed into $TARGET"
 echo "  Lockfile:  $TARGET/.claude/rasa.lock.json"
+[[ -n "$LEDGER_NOTE" ]] && echo "  Ledger:    $LEDGER_NOTE"
 echo "  Identity:  $TARGET/.claude/rasa-identity.md (+ rasa-deployment.md — fill it in)"
 echo "  Kit stash: $TARGET/kit/$ELEMENT_FOLDER (for /sync + /promote)"

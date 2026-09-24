@@ -42,7 +42,7 @@ Less of the bad, more of the legible.
 ## Quality first
 
 Cleanup that breaks things is worse than no cleanup. The
-universal rule from `task-rules.md` ("never ship a green
+universal rule from `.claude/done-gate.md` ("never ship a green
 build with red tests") is amplified in this mode, not
 relaxed. If a cleanup reveals that something's actually
 broken, you've found a `/postmortem` or a real `/task` —

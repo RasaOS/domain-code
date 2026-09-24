@@ -1,10 +1,11 @@
 ---
 id: TASK-027
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P4
-status: backlog
 ---
-
 # TASK-027: 60-verify.sh post-deploy verification stage
 
 **User story.** As a **release engineer**, I want **the smoke suite to run against the deployed target after the deploy** so that **"deploy succeeded" means the thing works, not that a shell process exited 0**.

@@ -34,13 +34,14 @@ Code. That's the **normal** state.
 ## Modes shipped
 
 - **`task`** — clear the backlog. Pull work in batches, close
-  the loop, drive the user to keep going. Counts tasks closed.
+  the loop, drive the user to keep going. Counts tasks
+  completed.
 - **`cleanup`** — make the codebase nicer to live in. Improve
   in place, narrow scope, no new features. Counts time and
   activations (cleanup work resists per-unit scoring).
 - **`project-manager`** — refine the backlog into a roadmap
   that's ready to ship. Walk phase by phase, stub by stub;
-  push every stub through `/task` Op 3's full recon flow;
+  push every stub through `/task`'s Expand recon flow;
   surface phase-level shape questions; log to
   `docs/refinement/<date>.md`. Counts stubs refined.
 - **`normal`** — the absence of a mode. Just Claude Code.
@@ -93,8 +94,8 @@ The drive primes appetite. That means:
 - **Short.** Aim for 30-50 lines. Long mode docs become
   wallpaper; Claude skims them.
 - **Don't lecture about quality.** Mode is about *focus*,
-  not *speed*. Quality is universal — the kit's
-  `task-rules.md` owns that. Modes never override it.
+  not *speed*. Quality is universal — `task-rules.md` and
+  `.claude/done-gate.md` own that. Modes never override it.
 - **Don't list every skill.** A few key ones, named in
   context. The full catalog lives in `/skills`.
 

@@ -24,6 +24,116 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.53.0 — 2026-09-23
+
+### The task system is `rasa.module.tasks` v1.0.0 — BREAKING: every installed ledger migrates
+
+`rasa.module.tasks` was distilled from this Element in June, then rebuilt
+for v1.0.0 against 558 real task files. That survey is the case for this
+release: `status:` disagreed with its own directory in 301 of 536 files,
+the spine declared ~15 invariants and checked none, and the state machine
+had no operation at all for start, block, unblock or completion. This
+Element kept shipping the shape the module replaced. From 0.53.0 it ships
+the module.
+
+**⚠️ BREAKING.** A 0.52-shaped ledger — `status:`, `category:`, five
+stages, `HOTFIX-` ids — does not validate under the new
+`.claude/bin/check-tasks`, and is not meant to. The update path converts it.
+This is a minor bump by this repository's own precedent (v0.36.0, the last
+task-status overhaul, and v0.49.0 were both breaking minors), though the
+rule at the top of this file would call it major.
+
+#### Upgrading an installed project
+
+The `/sync` a 0.52 project has cannot run (it reads `.claude/foundation.json`,
+which has not existed since the canon lock). From the project root, with
+`tasks/` committed:
+
+```sh
+git clone https://github.com/RasaOS/domain-code /tmp/domain-code
+/tmp/domain-code/bin/migrate-ledger .     # optional: preview
+/tmp/domain-code/bin/init .
+.claude/bin/check-tasks
+```
+
+`bin/init` migrates the ledger **before** it seeds anything under `tasks/`
+— `tasks/tasks.config.yml` carries the schema marker the converter reads as
+"already migrated", so seeding it first would hide an old ledger for good.
+If `tasks/` has uncommitted changes the migration is refused and every
+`tasks/` seed is held back, with the command to finish printed. The result
+is left uncommitted: read `tasks/MIGRATION-REVIEW.md`, fix what
+`check-tasks` reports, commit the ledger on its own.
+
+Tried against clones of five real consumers — vsi-web (123 tasks), vsi-ios
+(140), kernel (256), rasa-console (350), rasa-website: all converted, with
+real dates and authors read from git. kernel and rasa-website validate with
+zero errors; the rest are left with dangling ROADMAP lines (1, 1 and 5) —
+a line naming a task file that does not exist, which the module never
+auto-fixes because only a person knows whether the task was lost or the
+line is stale. Each is listed in that project's review file.
+
+#### What ships
+
+- **Vendored from the module, byte-identical to its `v1.0.0` tag
+  (`f0ce5e1`):** `.claude/task-rules.md` (the spine), `.claude/bin/task`
+  (twelve verbs — each one atomic write of frontmatter, `tasks/history.tsv`
+  line and move), `.claude/bin/check-tasks` (every invariant the spine
+  states, by id), `.claude/task-templates/`, `/task` `/backlog` `/roadmap`,
+  and the `tasks/` seeds. `vendored.json` records every file's sha256;
+  `bin/check-manifest` now fails on a vendored file edited in place, and
+  `--vendor-from <checkout>` lists what moved upstream when re-vendoring.
+- **The engineering half the module leaves to its parent domain:**
+  `.claude/code-task-rules.md` (one task per PR; `review/` = an open PR,
+  `completed/` = gate passed + merged; hotfixes as `priority: now`; gated
+  files; the change ledger; postmortems; the parade) and a seeded
+  `.claude/done-gate.md` (build, headless suite, paired test, run check,
+  merged).
+- **Retired:** `task-template{,-bug,-hotfix,-stub}.md` and
+  `intake-template.md` (replaced by `task-templates/` and `tasks/intake.md`),
+  and the `HOTFIX-` id space (a hotfix is a `defect` with `priority: now`).
+  `/sync` archives and removes them from a project that never edited them.
+
+#### Everything that files or moves a task now goes through `bin/task`
+
+- **`/task-enforce`** files into `triage/` through `bin/task new` with
+  `x-origin: auto-fallback`. It used to mint the file itself with seven
+  keys the new validator rejects, and its allocator released the id lock
+  before the file existed — the window kernel's duplicate TASK-170..175
+  came through. `stamp` writes only this domain's `x-` keys plus
+  `priority`, bumps `updated` and re-records the task's digest (so its own
+  write never reads as an unrecorded edit, I-34), and refuses the keys the
+  lifecycle owns with the command to use instead.
+- **`/task-guard`** files through `bin/task new` too (it used to file into
+  `active/` with no phase, which v1.0.0 forbids); it links to the current
+  task first, then to anything in `active/` or `review/`.
+- **The spec-only fast-path** allowlist admits `tasks/history.tsv`, which
+  every filing appends to; `tasks/tasks.config.yml` stays out.
+- **~45 skills, modes and rules** that described `git mv` + `status:`
+  moves, categories or the retired templates now name the verbs.
+
+#### `/sync` works again
+
+Rewritten around `sync.sh`: `fetch` (fresh clone; corrects lockfiles that
+still point at the pre-rename `github.com/rasa-os/` URL), `plan` (releases
+since the pin with ⚠ BREAKING flags; per-file update / new / **local edit**
+/ kept / retired; the ledger's state), `keep`, and `apply` — which archives
+every local edit it would overwrite (or `--hold`s them for the run),
+archives and removes retired files, then runs the Element's `bin/init`.
+`/sync-all` is the same with every local edit held. TASK-041 (the full
+port with `/promote`) is unchanged.
+
+#### Also
+
+- `bin/init`: an `init-only-with-sha` seed that is not JSON
+  (`tasks/tasks.config.yml`) is skipped on a re-run instead of being parsed
+  as a lockfile and reported "unmergeable — fix or delete the file".
+- `tasks/.gitignore` is seeded: the module ships none, so every install
+  left the validator's `tasks/.state/` cache untracked.
+- This repository's own ledger is migrated (61 tasks, zero errors), and this
+  work is `TASK-062`.
+
+---
+
 ## v0.52.1 — 2026-09-23
 
 ### A locked contract now stays locked, whatever bytes its stamp holds

@@ -1,4 +1,11 @@
-# TASK-008 — Design & branding folder structure
+---
+id: TASK-008
+type: change
+created: 2026-05-17
+created_by: claude
+updated: 2026-05-17
+---
+# TASK-008: TASK-008 — Design & branding folder structure
 
 **User story.** As a designer/developer, I want a dedicated design
 and branding folder structure to keep design mockups — HTML

@@ -1,10 +1,11 @@
 ---
 id: TASK-044
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P7
-status: backlog
 ---
-
 # TASK-044: Behavior evals for shipped skills
 
 **User story.** As a **maintainer**, I want **a test that proves a skill still does what it claims** so that **a skill regression is caught before it ships to every repo**.

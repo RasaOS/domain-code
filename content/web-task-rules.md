@@ -1,13 +1,15 @@
 # Web task rules (platform extensions)
 
-Platform-specific extensions to `task-rules.md` for web projects. Read
-this when working on web code or any task that touches a web frontend.
+Platform-specific extensions to `code-task-rules.md` (which extends
+`task-rules.md`) for web projects. Read this when working on web
+code or any task that touches a web frontend.
 
-The universal `task-rules.md` is generic and references "the project's
-verification command," "the project's protected files," etc. This file
-fills those in for any web project on the kit's default stack
-(`web-conventions.md`). **Project-specific values (site name, scheme
-flags, env-var names, etc.) still live in `CLAUDE.md`.**
+`code-task-rules.md` and `.claude/done-gate.md` are generic and reference
+"the project's build command," "the project's test command," the gated
+files (`code-task-rules.md` §9), etc. This file fills those in for any
+web project on the default stack (`web-conventions.md`).
+**Project-specific values (site name, scheme flags, env-var names,
+etc.) still live in `CLAUDE.md`.**
 
 ## Scope of "web project" for this file
 

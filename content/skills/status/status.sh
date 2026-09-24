@@ -329,24 +329,30 @@ render_active_tasks() {
   echo ""
   echo "## In flight"
   echo ""
-  local root tasks_dir
+  local root
   root="$(project_root)" || return 1
-  tasks_dir="$root/tasks/active"
-  if [ ! -d "$tasks_dir" ]; then
+  if [ ! -d "$root/tasks/active" ] && [ ! -d "$root/tasks/review" ]; then
     echo "_No \`tasks/active/\` directory in this project._"
     return
   fi
-  local found=0
-  for f in "$tasks_dir"/*.md; do
-    [ -e "$f" ] || continue
-    found=1
-    local title
-    # Skip a leading frontmatter block before looking for the H1. A `#` line
-    # INSIDE frontmatter is a YAML comment, not the title — without this, a
-    # commented field reads back as the task's name on the status board.
-    title="$(awk 'NR==1 && $0=="---" {infm=1; next} infm && $0=="---" {infm=0; next} !infm && /^# / {sub(/^# */,""); print; exit}' "$f" 2>/dev/null | tr -d '\r' | cut -c1-80)"
-    [ -z "$title" ] && title="$(basename "$f" .md)"
-    echo "- **${title}** — \`tasks/active/$(basename "$f")\`"
+  # active/ is being worked; review/ is finished work waiting on the
+  # done-gate — in this domain, an open PR. Both are in flight.
+  local found=0 stage f title
+  for stage in active review; do
+    for f in "$root/tasks/$stage"/*.md; do
+      [ -e "$f" ] || continue
+      found=1
+      # Skip a leading frontmatter block before looking for the H1. A `#` line
+      # INSIDE frontmatter is a comment, not the title — without this, a
+      # commented field reads back as the task's name on the status board.
+      title="$(awk 'NR==1 && $0=="---" {infm=1; next} infm && $0=="---" {infm=0; next} !infm && /^# / {sub(/^# */,""); print; exit}' "$f" 2>/dev/null | tr -d '\r' | cut -c1-80)"
+      [ -z "$title" ] && title="$(basename "$f" .md)"
+      if [ "$stage" = "review" ]; then
+        echo "- **${title}** — in review · \`tasks/review/$(basename "$f")\`"
+      else
+        echo "- **${title}** — \`tasks/active/$(basename "$f")\`"
+      fi
+    done
   done
   if [ "$found" -eq 0 ]; then
     echo "_No active tasks._"

@@ -1,0 +1,26 @@
+# Intake
+
+Pre-triage capture. Half-ideas, observations, irritations and things you
+noticed in passing. No id, no file, no obligation beyond having written it
+down. This is the cheapest layer in the lifecycle and it only works while it
+stays cheap -- if writing a line here starts to feel like filing something,
+the layer has failed.
+
+An entry either matures into a task in `tasks/triage/` or gets struck out.
+Sweep this file on a cadence you can actually keep; an intake list nobody
+prunes is a list nobody reads.
+
+## How an entry looks
+
+```
+  ## YYYY-MM-DD
+
+  - **Short bolded subject** -- one sentence of context, so that future-you
+    remembers why this was worth writing down at all.
+```
+
+Add today's date heading if there is not one already, newest at the top. The
+two-space indent above is only there to keep the example out of the live
+list.
+
+---

@@ -41,9 +41,9 @@ proportional to its honesty about the messy parts.
 - **One handoff per day.** If `docs/handoff/<YYYY-MM-DD>.md`
   already exists, ask whether to update in place, append, or
   date-suffix.
-- **Doesn't move tasks.** Tasks in `tasks/active/` stay where
-  they are. The handoff describes their state; it doesn't
-  reorganize them.
+- **Doesn't move tasks.** Tasks in `tasks/active/` and
+  `tasks/review/` stay where they are. The handoff describes
+  their state; it doesn't reorganize them.
 
 ## Process
 
@@ -54,7 +54,8 @@ In parallel:
 - `git branch -vv` — local branches, remote tracking, ahead/behind.
 - `git log --oneline -10` — recent commits.
 - `git stash list` — stashed work.
-- `tasks/active/*.md` — in-flight tasks (read each).
+- `tasks/active/*.md`, `tasks/review/*.md` — in-flight tasks
+  (read each); `tasks/blocked/*.md` — each one's `## Blocker`.
 - `tasks/backlog/*.md` — top 5 by recency, brief.
 - `docs/decisions/*.md` — last 3.
 - `docs/postmortems/*.md` — last 3.
@@ -202,14 +203,15 @@ PR:
 
 ## 🚧 Active tasks
 
-For each task in `tasks/active/`:
+For each task in `tasks/active/` or `tasks/review/`:
 
 ### TASK-NNN — <title>
-- **State:** <one line — what's done, what's left>
+- **State:** <one line — what's done, what's left; "PR open,
+  done-gate pending" for `review/`>
 - **Last touched:** <date from git log of the task file or
   source it covers>
 - **Blocked on:** <if applicable>
-- **Path:** [`tasks/active/<file>`](../../tasks/active/<file>)
+- **Path:** [`tasks/<stage>/<file>`](../../tasks/<stage>/<file>)
 
 ---
 
@@ -332,9 +334,9 @@ handoff is dated and additive.*
 - **Don't omit the messy parts.** A handoff that says "all
   going great" is worse than no handoff. The next person needs
   the friction points.
-- **Don't reorganize tasks.** Active tasks stay in
-  `tasks/active/`. Don't move them to backlog or completed as
-  part of handoff.
+- **Don't reorganize tasks.** In-flight tasks stay where they
+  are. Don't `park`, `pass` or `close` them as part of
+  handoff.
 - **Don't capture secrets.** If the user mentions an API key,
   password, or credential while answering tacit-knowledge
   questions, **flag it and refuse to write it down**. Suggest

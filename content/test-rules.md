@@ -6,7 +6,7 @@ The kit provides **structure** and **stamps**. Tests themselves live where their
 
 ## Core principle
 
-**Tasks need tests.** Every completed task should have at least one test stamp that proves it out. This is documented as a rule for now; enforcement (e.g. `/task done` refusing without a stamp) is opt-in later.
+**Tasks need tests.** Every completed task should have at least one test stamp that proves it out. This is documented as a rule for now; enforcement (e.g. a `.claude/done-gate.md` gate refusing `/task`'s `pass` without a stamp) is opt-in later.
 
 ## Folder structure
 

@@ -312,7 +312,7 @@ updates for free.
 - **`src/firebase/paths.js`** holds canonical path strings (RTDB or
   Firestore). **Never hardcode a path inline in a hook or component**
   — go through `paths.js`. This is the schema-discipline rule from
-  `task-rules.md` applied at the file level.
+  `code-task-rules.md` §8 applied at the file level.
 - **One module per collection** under `src/firebase/` (e.g.
   `inspections.js`, `vehicles.js`). Each module exports CRUD + query
   helpers for that collection.
@@ -321,7 +321,7 @@ updates for free.
   consistent across collections.
 - **Cross-platform schema.** If an iOS app or another client mirrors
   the same Firebase schema, treat field names as a *contract*. The
-  rule from `task-rules.md` ("never invent or rename a field")
+  rule from `code-task-rules.md` §8 ("never invent or rename a field")
   applies. `paths.js` is among the most-protected files in the repo.
 
 ## Styling — Tailwind + design tokens

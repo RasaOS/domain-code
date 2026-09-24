@@ -1,10 +1,11 @@
 ---
 id: TASK-035
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P5
-status: backlog
 ---
-
 # TASK-035: Cross-repo change set with landing order and joint revert
 
 **User story.** As a **tech lead**, I want **a change spanning N repos expressed as one unit** so that **a breaking API change with five consumers is not five uncoordinated, locally-green PRs**.

@@ -1,6 +1,6 @@
 ---
 name: contribute
-description: Package a local edit to a kit-managed file (a fix to `task-rules.md`, a tweak to a skill, an improved template) into a clean PR back to the upstream claude-kit repo. Detects drift in kit-managed files since the last sync, classifies each as portable improvement vs project-specific override, drafts a PR title + body, and either opens the PR (if GitHub tooling is available) or prints the exact manual steps. Closes the kit ↔ project loop. Triggered when the user has improved something in `.claude/` and wants it to flow back upstream — e.g. "/contribute", "push this back to the kit", "this fix should be in claude-kit", "contribute this skill upstream".
+description: Package a local edit to a kit-managed file (a fix to `code-task-rules.md`, a tweak to a skill, an improved template) into a clean PR back to the upstream claude-kit repo. Detects drift in kit-managed files since the last sync, classifies each as portable improvement vs project-specific override, drafts a PR title + body, and either opens the PR (if GitHub tooling is available) or prints the exact manual steps. Closes the kit ↔ project loop. Triggered when the user has improved something in `.claude/` and wants it to flow back upstream — e.g. "/contribute", "push this back to the kit", "this fix should be in claude-kit", "contribute this skill upstream".
 ---
 
 # /contribute — Push improvements back to claude-kit
@@ -30,6 +30,12 @@ upstream.
     add to `overrides` in `foundation.json`, leave in place.
   - **Mistaken edit** — meant for a project file, not a
     kit-managed one; revert locally.
+- **Vendored files go to their own upstream.** `task-rules.md`,
+  `task-templates/`, `bin/task`, `bin/check-tasks` and the
+  `/task` `/backlog` `/roadmap` skills are vendored byte-for-byte
+  from `rasa.module.tasks` (the Element's `vendored.json` lists
+  them); a PR that edits one here fails `bin/check-manifest`. A
+  portable fix to one belongs in `RasaOS/module-tasks`.
 - **Group by theme into one or more PRs.** A PR that fixes a
   typo + adds a new skill + tightens a rule is three PRs. Ask
   before splitting.
@@ -112,7 +118,7 @@ Wait for an answer per file. Don't bulk-default.
 ### Step 5 — Group portable edits into PR(s)
 
 Default: one PR per coherent theme. Examples:
-- "Fix typo in task-rules + clarify the same rule" → one PR.
+- "Fix typo in code-task-rules + clarify the same rule" → one PR.
 - "Add /handoff skill + fix /onboard's broken link" → two PRs.
 
 Ask the user how to group if there are 3+ portable files. Show
@@ -211,7 +217,7 @@ the new pinned SHA into the project.
 - **Diffs ≤ 20 lines in chat.** Truncate with "…" and offer to
   expand.
 - **PR title is imperative, no scope tag.** "Clarify postmortem
-  ownership rule" not "[task-rules] update postmortem section".
+  ownership rule" not "[code-task-rules] update postmortem section".
 - **PR body grounds the change in real use.** "How this came
   up" forces the user to articulate the real-world signal, which
   is the thing the kit maintainer cares about.

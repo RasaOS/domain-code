@@ -59,7 +59,8 @@ has a platform constraint that changes practical semantics.}}
 ### Lifecycle states
 
 {{Override if your project tracks task state somewhere other than
-the `tasks/{backlog,active,done}/` directories.}}
+the `tasks/{triage,backlog,active,review,blocked,completed,closed}/`
+directories.}}
 
 **Example — issue tracker is the source of truth:**
 
@@ -69,8 +70,11 @@ the `tasks/{backlog,active,done}/` directories.}}
 > - **Backlog** — Linear status `Backlog` or `Todo`.
 > - **Active** — Linear status `In Progress`. The agent owns the
 >   ticket while working it.
+> - **Review** — Linear status `In Review`, while the PR is open.
 > - **Done** — Linear status `Done`, set when the PR merges to
 >   `main`.
+> - **Closed** — Linear `Canceled` or `Duplicate`: ended without
+>   being done.
 >
 > **Rationale.** The team coordinates priorities in Linear; the
 > filesystem-only flow doesn't match how non-engineering
@@ -79,7 +83,8 @@ the `tasks/{backlog,active,done}/` directories.}}
 ### Verification gate
 
 {{Override if your project's gate includes more than the headless
-test command.}}
+test command. The gates themselves live in `.claude/done-gate.md` —
+change them there; this entry only redefines the term.}}
 
 **Example — gate is test + lint + type-check:**
 

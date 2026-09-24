@@ -1,10 +1,11 @@
 ---
 id: TASK-024
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P3
-status: backlog
 ---
-
 # TASK-024: Coverage-floor gate for autonomous change
 
 **User story.** As an **operator**, I want **autonomous change refused on a surface with no executable behavioral evidence** so that **an agent cannot silently rewrite ten years of untested behavior**.

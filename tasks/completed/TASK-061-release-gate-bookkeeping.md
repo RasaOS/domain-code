@@ -1,15 +1,15 @@
 ---
 id: TASK-061
-category: spec
+type: change
+created: 2026-09-23
+created_by: chazzcoin
+updated: 2026-09-23
 phase: P1
-status: completed
-owner: unassigned
-blocked_by:
-outcome: unrecorded
-filed: 2026-09-23 20:14 UTC
-origin: manual
+completed_by: chazzcoin
+x-origin: manual
+x-outcome: unrecorded
+x-owner: unassigned
 ---
-
 # TASK-061: make the release record and the release gate tell the truth
 
 **User story.** As an **operator**, I want **every shipped version tagged,

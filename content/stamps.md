@@ -223,34 +223,47 @@ feature can resolve who publishes and who depends on each contract.
 
 ## Stamp: task
 
-**Where it lives:** `tasks/triage/<name>.md`, `tasks/backlog/<name>.md`, `tasks/active/<name>.md`, `tasks/blocked/<name>.md`, `tasks/completed/<name>.md`
+**Where it lives:** `tasks/<stage>/<id>-<slug>.md`, where `<stage>` is one of `triage/`, `backlog/`, `active/`, `review/`, `blocked/`, `completed/`, `closed/`. The directory **is** the state — there is no `status` field.
 **Purpose:** Declare a unit of tracked work — what it is, where it sits in the lifecycle, who is accountable, and how it ended up.
-**Shipped in:** v0.50.0
+**Shipped in:** v0.50.0; reshaped to the `rasa.module.tasks` v1.0.0 frontmatter after v0.52.
+
+**Authoritative schema:** `.claude/task-rules.md` §3 (every key but the `x-` ones, and the invariants `.claude/bin/check-tasks` enforces). This domain's `x-` keys: `.claude/code-task-rules.md` §7. The table summarizes both; where it disagrees with them, they win.
 
 | Field | Required | Type | Description |
 |---|---|---|---|
-| `id` | yes | string | `TASK-NNN`, or `HOTFIX-NNN` for the hotfix category. Must match the filename prefix — **the filename is authoritative**; the id allocators parse it from there and a disagreeing `id:` is ignored. |
-| `category` | yes | enum | `stub` / `spec` / `bug` / `hotfix`. This model's discriminator, in place of the universal `kind` — see the exception note. Absent = `spec`. |
-| `status` | yes | enum | `triage` / `backlog` / `active` / `blocked` / `completed`. Must equal the directory the file lives in. **The directory wins** on disagreement. Absent = the directory name. |
-| `phase` | no | string | Phase id, or `null` for hotfix and triage. A denormalized convenience copy — **`tasks/ROADMAP.md` is authoritative** and wins on disagreement. Absent = resolve from ROADMAP. |
-| `owner` | no | string | The accountable human, team or agent identity. Durable and single-valued. Absent = `unassigned`; never guessed. **Not** the per-run actor — see `Stamp: run`. |
-| `blocked_by` | no | array (one line, comma-separated) | Task ids this task waits on, e.g. `TASK-012, TASK-014`. A task-graph edge — distinct from the *external* dependency named in the mandatory `## Blocker` prose section. Absent = no declared dependency. |
-| `outcome` | no | enum | Disposition of the work: `unrecorded` / `shipped` / `reverted` / `superseded`. Absent = `unrecorded`. **Never inferred** from `status: completed` or from residence in `completed/`. Does not move the file. |
-| `filed` | no | date (`YYYY-MM-DD HH:MM UTC`) | When the task file was created. Absent = unknown; never synthesized. |
-| `origin` | no | enum | How the file came to exist: `manual` / `auto-fallback` (minted by the `task-enforce` PreToolUse guard) / `auto-guard` (minted by the `task-guard` pre-commit hook). Absent = `manual`. |
-| `severity` | conditional | enum | Bug: `low` / `medium` / `high`. Hotfix: `high` / `critical`. Required on `bug` and `hotfix`; not meaningful on `stub` or `spec`. |
+| `id` | yes | string | `TASK-[SERIES-]NNN[a]`. Written once by `.claude/bin/task new`. Equals the filename prefix and the H1 prefix (`# <id>: <title>`) — `bin/check-tasks` errors on any disagreement (I-07, I-08). |
+| `type` | yes | enum | `change` / `defect` / `upkeep` / `inquiry` / `record`. The one value a person types at filing. This model's discriminator, in place of the universal `kind` — see the exception note. |
+| `created` | yes | date (`YYYY-MM-DD`) | Written once by the allocator; never in the future. |
+| `created_by` | yes | string | Actor handle, or `unknown`. Written once by the allocator. |
+| `updated` | yes | date (`YYYY-MM-DD`) | Bumped by every `bin/task` write; after a hand edit to the body, `bin/check-tasks --fix` bumps it (I-34). |
+| `phase` | conditional | string | A phase id declared as `## Phase <id> — <name>` in `tasks/ROADMAP.md`. Required in `backlog/` `active/` `review/` `blocked/` `completed/`; **forbidden** in `triage/`; in `closed/` iff the task had one (I-19, I-20, I-22). Written by `bin/task graduate` (or `new --phase`). |
+| `target` | conditional | array (one-line flow list) | Required iff `tasks/tasks.config.yml#targets` is non-empty, and then wherever `phase` is; forbidden otherwise (I-25). |
+| `completed_by` | conditional | string | Actor handle. In `completed/` and `closed/` only. Written by `bin/task pass` / `close`. |
+| `resolution` | conditional | enum | `superseded` / `duplicate` / `obsolete` / `wont-do`. In `closed/` only. Written by `bin/task close`. A task that got done carries none. |
+| `resolution_ref` | conditional | string | The id that replaced this one, iff `resolution` is `superseded` or `duplicate`. Written by `bin/task close --ref`. |
+| `priority` | no | enum | `now` / `high` / `normal` / `low`. Absent = `normal`. `now` is a route, never in `triage/` or `backlog/` (I-14). |
+| `needs` | no | array (one-line flow list) | Ids that must reach `completed/` before this one can, e.g. `[TASK-012, TASK-014]`. Acyclic (I-26 – I-28). The only dependency field — distinct from the *external* stop a `## Blocker` section names in `blocked/`. |
+| `x-origin` | no | enum | How the file came to exist: `manual` / `auto-fallback` (minted by the `task-enforce` PreToolUse guard) / `auto-guard` (minted by the `task-guard` pre-commit hook). Absent = `manual`. |
+| `x-owner` | no | string | The accountable human, team or agent identity. Durable and single-valued; never guessed. **Not** the per-run actor — see `Stamp: run`. |
+| `x-outcome` | no | enum | What happened after `completed/`: `shipped` / `reverted`. Absent = not recorded. **Never inferred** from residence in `completed/`. Does not move the file. |
+| `x-severity` | no | enum | `critical` / `high` / `medium` / `low` — for a `defect`, how bad. Urgency is `priority`, not this. |
+
+Who writes what: `bin/task` stamps `id`, `created`, `created_by`, `updated`, `completed_by`, `resolution` and `resolution_ref`. A person chooses `type`, `phase`, `target` and `priority` and passes them as flags (`bin/task new`, `graduate`). The four `x-` keys, and `priority` later on, are written with `.claude/skills/task-enforce/task-enforce.sh stamp <id> <key> <value>`. `needs` is written by hand, followed by `bin/check-tasks --fix`. Any other bare key is an error (I-11), and `status` is an error anywhere (I-10).
 
 > **Universal-field exception.** This model ships neither `name` nor
-> `kind`. Identity is the **filename** plus `id` — a third copy would be
-> a third drift surface, and the allocators already derive the id from
-> the basename. The discriminator is `category`, which four templates,
-> `task-enforce.sh` and ~20 skills hard-code; renaming it to `kind`
-> would be breaking under "Evolution rules" for no gain.
+> `kind`. Identity is the **filename** plus `id` plus the H1 — three
+> copies, all machine-written and checked against each other (I-07,
+> I-08). The discriminator is `type`, fixed by the `rasa.module.tasks`
+> spine; renaming it to `kind` would be breaking under "Evolution rules"
+> and is not this Element's call.
 
-> **Frontmatter is optional in `triage/`.** A triage task is filed with
-> an id and little else by design. Every reader treats an absent field
-> as its declared default — see `task-rules.md` "Backwards
-> compatibility" for the full absence table.
+> **No absence defaults.** A task in `triage/` carries the five required
+> keys like any other — `bin/task new` writes four, the filer supplies
+> `type` — and must **not** carry `phase` (I-19). The ≤ v0.52 fields map
+> one way: `category` → `type`, `status` → the directory, `owner` /
+> `outcome` / `origin` / `severity` → their `x-` forms, `blocked_by` →
+> `needs`, `filed` → `created`. `HOTFIX-NNN` ids are retired: a hotfix is
+> a `defect` with `priority: now` (`code-task-rules.md` §4).
 
 **Run identity is deliberately absent from this model.** `actor`, `run_id`
 and `attempts` describe an *episode of work*, not the work itself, and the
@@ -271,7 +284,7 @@ fields live on `Stamp: run`.
 | `run_id` | yes | string | `RUN-YYYYMMDD-HHMMSS-<short>`. Matches the filename. |
 | `kind` | yes | enum | `mission` / `auto-task` / `auto-develop` / `auto-test` / `auto-phase` / `auto-bug` / `auto-hotfix` / `manual`. The invoked entry point. |
 | `actor` | yes | string | Who or what ran it. Resolved in one fixed order: `RASA_ACTOR`, then the clone's git identity, then the OS user. `RASA_ACTOR` is the knob a runner, CI job or agent harness sets to identify itself. |
-| `actor_kind` | yes | enum | `human` / `agent`. Distinct from the task's `origin`, which records how a *file* came to exist. |
+| `actor_kind` | yes | enum | `human` / `agent`. Distinct from the task's `x-origin`, which records how a *file* came to exist. |
 | `status` | yes | enum | `in-flight` / `completed` / `stopped` / `failed`. Opened `in-flight` **before** the work and sealed after. |
 | `outcome` | no | enum | `completed` / `stopped-at-gate` / `failed` / `abandoned`. Absent while `in-flight`. |
 | `gate` | no | string | The hard gate that stopped the run, when `outcome` is `stopped-at-gate`. |

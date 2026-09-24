@@ -1,10 +1,11 @@
 ---
 id: TASK-028
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P4
-status: backlog
 ---
-
 # TASK-028: /rollback skill
 
 **User story.** As an **operator**, I want **a first-class rollback verb** so that **an agent facing a bad release has a sanctioned action available**.

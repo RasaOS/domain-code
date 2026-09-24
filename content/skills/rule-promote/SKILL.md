@@ -1,14 +1,14 @@
 ---
 name: rule-promote
-description: Find rules that have crystallized in two or more projects' `CLAUDE.md` files (or kit-managed rule files) and surface them as candidates for promotion to kit-level `task-rules.md`. Takes a list of project paths from the user, scans each `CLAUDE.md` for rule-shaped statements, clusters semantically equivalent rules across repos, and proposes the shared ones for graduation. Drafts the kit edit; routes through `/contribute` for the actual PR. The kit gets stronger as patterns repeat across projects. Triggered when the user wants to find shared conventions worth standardizing — e.g. "/rule-promote", "what rules are duplicated across my projects", "promote shared rules to the kit", "find conventions worth graduating".
+description: Find rules that have crystallized in two or more projects' `CLAUDE.md` files (or Element-managed rule files) and surface them as candidates for promotion to Element-level `code-task-rules.md`. Takes a list of project paths from the user, scans each `CLAUDE.md` for rule-shaped statements, clusters semantically equivalent rules across repos, and proposes the shared ones for graduation. Drafts the Element edit; routes through `/contribute` for the actual PR. The Element gets stronger as patterns repeat across projects. Triggered when the user wants to find shared conventions worth standardizing — e.g. "/rule-promote", "what rules are duplicated across my projects", "promote shared rules to the kit", "find conventions worth graduating".
 ---
 
 # /rule-promote — Graduate cross-project rules to the kit
 
 Find rules the user has written into multiple projects'
-`CLAUDE.md` files and propose promoting them to kit-level
-`task-rules.md`. The kit is meant to crystallize patterns; this
-skill is how patterns get noticed.
+`CLAUDE.md` files and propose promoting them to Element-level
+`code-task-rules.md`. The Element is meant to crystallize patterns;
+this skill is how patterns get noticed.
 
 Per CLAUDE.md ethos: a rule that exists in one project might be
 project-specific. A rule that exists in two or more, in similar
@@ -20,8 +20,9 @@ words, is a kit candidate. **Two is the threshold, not one.**
   project paths supplied by the user. There's no implicit
   registry — keep it boring and explicit.
 - **Read CLAUDE.md per project.** That's the canonical home for
-  project-level rules. Optionally also read `.claude/task-rules.md`
-  if a project has overridden the kit version (rare, but legal).
+  project-level rules. Optionally also read `.claude/done-gate.md`,
+  the project's own seam. `.claude/task-rules.md` is vendored from
+  `rasa.module.tasks` and never overridden per project.
 - **Cluster semantically.** Exact-match would miss "always run
   `npm test` before push" vs "run tests before pushing". Use
   rough semantic equivalence — same imperative, same scope,
@@ -129,8 +130,8 @@ in ≥2 projects.
 > <one or two lines, normalized wording, phrased to apply
 > universally>
 
-**Where it goes:** `kit/task-rules.md` — section "<which
-section, e.g. 'Testing & verification'>"
+**Where it goes:** `content/code-task-rules.md` — section "<which
+section, e.g. '§10 Branches, PRs and the completion report'>"
 
 ---
 
@@ -177,15 +178,18 @@ call.>
 
 For each cluster the user picks:
 
-1. Locate the right section of `kit/task-rules.md` (or a
+1. Locate the right section of `content/code-task-rules.md` (or a
    platform-prefixed variant if the rule is platform-specific —
-   e.g. `kit/ios-task-rules.md`). Ask the user if uncertain.
+   e.g. `content/ios-task-rules.md`). Ask the user if uncertain.
+   Never target `content/task-rules.md`: it is vendored from
+   `rasa.module.tasks` and byte-pinned, so a rule that belongs in
+   the portable lifecycle is a change to that module, not here.
 2. Draft the addition: a single bullet or short paragraph in the
    normalized wording shown in the report.
 3. Show the user the proposed diff:
 
 ```markdown
-**Proposed edit to `kit/task-rules.md`:**
+**Proposed edit to `content/code-task-rules.md`:**
 ```diff
 @@ section: <section name> @@
  ...existing rules...
@@ -206,8 +210,8 @@ its local copy. Three options per project:
 1. **Remove it** — rely on the kit. Cleaner CLAUDE.md.
 2. **Keep it as-is** — redundant but explicit. Useful if the
    project has a stronger version.
-3. **Replace with a one-liner pointer** — "See kit task-rules
-   §<section>" or similar.
+3. **Replace with a one-liner pointer** — "See
+   `.claude/code-task-rules.md` §<n>" or similar.
 
 Which for `<project>`?
 ```
@@ -269,13 +273,14 @@ update.
 - **A "rule" turns out to be a quoted external rule** (e.g.
   pointing to RFC 7231). Don't promote external standards as
   kit rules.
-- **The kit already has the rule** in `task-rules.md`. Mark the
+- **The Element already has the rule** in `code-task-rules.md`
+  (or `task-rules.md`). Mark the
   cluster as "already in kit; consider removing per-project
   copies".
 - **Platform-specific rules across platform-mismatched projects**
   (e.g. an iOS rule appears in an iOS project + a web project's
-  iOS-section). Promote to `kit/ios-task-rules.md`, not the
-  universal one.
+  iOS-section). Promote to `content/ios-task-rules.md`, not
+  `code-task-rules.md`.
 - **Many small clusters** (>10). Group by section and let the
   user pick by section, not item.
 
@@ -285,7 +290,8 @@ update.
 - **Pushing one specific local edit upstream** →
   `/contribute`.
 - **Pulling kit updates into a project** → `/sync`.
-- **Reviewing what's in `task-rules.md`** → just read it.
+- **Reviewing what's in `task-rules.md` or `code-task-rules.md`**
+  → just read it.
 - **You only have one project on the kit** → wait until you
   have two.
 

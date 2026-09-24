@@ -1,10 +1,11 @@
 ---
 id: TASK-054
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P9
-status: backlog
 ---
-
 # TASK-054: Turn and cost ceiling at the Stop hook seam
 
 **User story.** As an **operator**, I want **a per-run ceiling enforced inside the Element** so that **runaway cost is bounded even where the kernel is not the runtime**.

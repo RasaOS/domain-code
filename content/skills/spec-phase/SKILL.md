@@ -17,7 +17,7 @@ This is the "commit to a whole phase" flow. Companion to
 ## The honest tradeoff
 
 The default doctrine, encoded in most project ROADMAPs and in
-`/task` Operation 3, is **just-in-time spec expansion**: stubs
+`/task`'s Expand, is **just-in-time spec expansion**: stubs
 become full specs *as you approach implementation*, not before,
 because speccing too far ahead means rewriting work when earlier
 phases teach us things.
@@ -42,15 +42,18 @@ legible. Then do what they say.
 ## Behavior contract
 
 - **Read state first.** `tasks/ROADMAP.md` for the phase
-  registry; `tasks/backlog/`, `tasks/active/`, `tasks/completed/` for
+  registry; `tasks/backlog/`, `tasks/active/`, `tasks/review/`,
+  `tasks/blocked/`, `tasks/completed/`, `tasks/closed/` for
   current state. Never spec from memory.
 - **One phase per session.** If the user wants more than one
   phase prep'd, do them sequentially. Don't multiplex.
-- **Stubs only.** Tasks already in `tasks/active/` or
-  `tasks/completed/`, or backlog tasks already in full-spec form,
-  are skipped. Show them in the rollup but don't re-spec them.
+- **Stubs only.** Tasks already in `tasks/active/`,
+  `tasks/review/`, `tasks/completed/` or `tasks/closed/`, or
+  backlog tasks already in full-spec form, are skipped. Show them
+  in the rollup but don't re-spec them.
 - **Don't commit during the session.** Drafts are written to
-  `tasks/backlog/<file>.md` (overwriting the stub in place).
+  `tasks/backlog/<file>.md` (overwriting the stub in place), each
+  followed by `.claude/bin/check-tasks --fix` (I-34).
   Show the user the result; they decide when to commit.
 - **Don't open branches or PRs.** That's per-task work, done
   outside this skill. The deliverable here is filesystem state
@@ -82,7 +85,7 @@ Produce a one-screen rollup:
 
 **Scope.** <copy the phase's scope paragraph from ROADMAP.md>
 
-| ID | Title | State | Type |
+| ID | Title | State | Depth |
 |---|---|---|---|
 | TASK-... | ... | ✅ Done | — |
 | TASK-... | ... | 🚧 Active | 📄 Spec |
@@ -98,8 +101,8 @@ confirm before starting.
 ### Step 3 — Expand each stub, one at a time
 
 For each stub, in the order the phase lists them in ROADMAP.md,
-**run the full `/task` Operation 3 flow** — not just the
-questions. That includes:
+**run the full `/task` Expand flow** (`task/expanding-a-task.md`)
+— not just the questions. That includes:
 
 - **Internal reconnaissance** — read CLAUDE.md, the stub,
   referenced files, existing patterns, likely-touched files.
@@ -112,11 +115,12 @@ questions. That includes:
 - **Requirements drilling** — sharpen acceptance bar, edge
   cases, constraints, test scenarios.
 - **Per-file rationale** — what changes WHERE and WHY.
-- **Draft the full spec** via `task-template.md`.
-- **Show, sign-off, write** to `tasks/backlog/<file>.md`.
+- **Draft the full spec** in the shape of
+  `.claude/task-templates/<type>.md`.
+- **Show, sign-off, write** to `tasks/backlog/<file>.md`, then
+  `.claude/bin/check-tasks --fix` (I-34).
 
-See `/task` Operation 3 for the detailed sub-steps and concrete
-doc-source examples per platform.
+See `task/expanding-a-task.md` for the detailed sub-steps.
 
 This is **heavier than the original `/spec-phase` flow**.
 That's intentional — Chazz's task-builder→task-developer
@@ -196,8 +200,9 @@ vX.Y / vX.Y+1 / piecemeal>
 **Uncommitted.** Run `git status` to see the draft state. Commit
 when you're ready to lock in the batch.
 
-**Next step**: start TASK-<first-in-order> via `/task` or just
-begin the implementation.
+**Next step**: start TASK-<first-in-order> via `/task` (or
+`.claude/bin/task start TASK-<first-in-order>`), then begin the
+implementation.
 ```
 
 ## What you must NOT do
@@ -222,7 +227,7 @@ begin the implementation.
 
 ## When NOT to use this skill
 
-- **Single task** → `/task` (Operation 3: expand one stub).
+- **Single task** → `/task` (Expand: one stub).
 - **Strategic phase shaping** (renaming, re-scoping, splitting
   into multiple phases) → `/plan`.
 - **Just viewing a phase's tasks** → `/roadmap` or `/backlog`.

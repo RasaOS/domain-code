@@ -1,0 +1,146 @@
+{
+  "_doc": "Files this Element ships verbatim from another Element. Each is byte-identical to `upstream` at `commit`; bin/check-manifest recomputes every sha256 and fails on any difference. Never edit a vendored file in place - change it upstream, release it, then re-vendor (bin/check-manifest --vendor-from <checkout> prints what moved). Exists because no installer resolves requires.elements[] yet: until one does, the only way a consumer of rasa.domain.code receives rasa.module.tasks is inside this Element.",
+  "rasa.module.tasks": {
+    "version": "1.0.0",
+    "tag": "v1.0.0",
+    "commit": "f0ce5e15e741704114a2e4ee8d6bc96fb392a53e",
+    "repo": "https://github.com/RasaOS/module-tasks",
+    "files": [
+      {
+        "path": "content/task-rules.md",
+        "upstream": "content/task-rules.md",
+        "sha256": "9f8b0b1bd8cf25334a8fb983859274444bde42ffd0c3d9c6254b7a15fc885412"
+      },
+      {
+        "path": "content/task-templates/README.md",
+        "upstream": "content/task-templates/README.md",
+        "sha256": "c6c36a4da00eaf1d40cbaa56936d58bd6524906de590421a651b9833fd9f257e"
+      },
+      {
+        "path": "content/task-templates/change.md",
+        "upstream": "content/task-templates/change.md",
+        "sha256": "8e9f71a30a06f9c6442e26e6fa80fb4f327be8b18c9e6a7481a342071cf4e65e"
+      },
+      {
+        "path": "content/task-templates/defect.md",
+        "upstream": "content/task-templates/defect.md",
+        "sha256": "0fa65ad78b72e3d8f16a461027a95871927b928214a324b310e589a69ee5fd9e"
+      },
+      {
+        "path": "content/task-templates/inquiry.md",
+        "upstream": "content/task-templates/inquiry.md",
+        "sha256": "24e60d64b539bce8e4e3f0edc0c1a131905d92e8f92b2bdd5130d460000cd180"
+      },
+      {
+        "path": "content/task-templates/record.md",
+        "upstream": "content/task-templates/record.md",
+        "sha256": "aff0964077456b60176f993b8d545157f5d4d997678788ff404e9408a24eed23"
+      },
+      {
+        "path": "content/task-templates/stub.md",
+        "upstream": "content/task-templates/stub.md",
+        "sha256": "86d121b61221f92fe4a04a7769921cc17ffe3fb2e3dea367cdbe9a8b90379303"
+      },
+      {
+        "path": "content/task-templates/upkeep.md",
+        "upstream": "content/task-templates/upkeep.md",
+        "sha256": "6ead4ef7753b9a975bbfb187955461b5237c0a22fb2062255f31dfacd236d3ec"
+      },
+      {
+        "path": "content/skills/task/SKILL.md",
+        "upstream": "content/skills/task/SKILL.md",
+        "sha256": "d2e35682699c0772de42dfe9b0c06ed5275bfc38209fe64cea0f2ca21e70bef5"
+      },
+      {
+        "path": "content/skills/task/expanding-a-task.md",
+        "upstream": "content/skills/task/expanding-a-task.md",
+        "sha256": "f3b83fa62e3de3b935e1d0a53d67776cc06426610bdc13c6c93231c9cb0d6c0d"
+      },
+      {
+        "path": "content/skills/backlog/SKILL.md",
+        "upstream": "content/skills/backlog/SKILL.md",
+        "sha256": "c1c870b762197856ff525867078c06dace8d1afe3ad3ff04cca6429fbc763282"
+      },
+      {
+        "path": "content/skills/roadmap/SKILL.md",
+        "upstream": "content/skills/roadmap/SKILL.md",
+        "sha256": "23f3565d77c9ede08d30e72713627365a7cb36643ff37f9c024cd1f05555a4e0"
+      },
+      {
+        "path": "content/bin/task",
+        "upstream": "content/bin/task",
+        "sha256": "bd16c4d87b6e6af938cbcd335e1ad415361bec8c982c32c5e730f442925a7309"
+      },
+      {
+        "path": "content/bin/check-tasks",
+        "upstream": "content/bin/check-tasks",
+        "sha256": "6e68289393548984e2eaaa8dffa8ed8ff2b8eaa50062d652e179184b6c645223"
+      },
+      {
+        "path": "bin/migrate-tasks",
+        "upstream": "bin/migrate-tasks",
+        "sha256": "1bdad29cf52c4a1623c28306936f88a9383a91022f83bcb9417a18273f534ea2"
+      },
+      {
+        "path": "seed/tasks/README.md.template",
+        "upstream": "seed/tasks/README.md.template",
+        "sha256": "bf08c41daceccdbe738f1b01d05bdc0b33a1e8ded9b6cbd5be7ef4684d261c42"
+      },
+      {
+        "path": "seed/tasks/intake.md.template",
+        "upstream": "seed/tasks/intake.md.template",
+        "sha256": "009480226e3a4753e32ad60fc365bf5dbb2e21d7fa687f059fc4c475726a64fb"
+      },
+      {
+        "path": "seed/tasks/ROADMAP.md.template",
+        "upstream": "seed/tasks/ROADMAP.md.template",
+        "sha256": "b36a0f62f8c30b3191e4e96702e4d8ba76e00d910ca014fcf26f84fa797f48c5"
+      },
+      {
+        "path": "seed/tasks/tasks.config.yml.template",
+        "upstream": "seed/tasks/tasks.config.yml.template",
+        "sha256": "73acf3841515648467d950952803e2209f7541ee38747aa3f0ff84c916c8185f"
+      },
+      {
+        "path": "seed/tasks/history.tsv.template",
+        "upstream": "seed/tasks/history.tsv.template",
+        "sha256": "569bc5bfd83e2bb43b6ac12d1146aa56db2c28d7e67759cad1ad3707bad50603"
+      },
+      {
+        "path": "seed/tasks/triage/.keep",
+        "upstream": "seed/tasks/triage/.keep",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "seed/tasks/backlog/.keep",
+        "upstream": "seed/tasks/backlog/.keep",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "seed/tasks/active/.keep",
+        "upstream": "seed/tasks/active/.keep",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "seed/tasks/review/.keep",
+        "upstream": "seed/tasks/review/.keep",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "seed/tasks/blocked/.keep",
+        "upstream": "seed/tasks/blocked/.keep",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "seed/tasks/completed/.keep",
+        "upstream": "seed/tasks/completed/.keep",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "seed/tasks/closed/.keep",
+        "upstream": "seed/tasks/closed/.keep",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ]
+  }
+}

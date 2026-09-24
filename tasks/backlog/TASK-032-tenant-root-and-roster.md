@@ -1,10 +1,11 @@
 ---
 id: TASK-032
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P5
-status: backlog
 ---
-
 # TASK-032: tenant_root in rasa.lock.json and a /roster skill
 
 **User story.** As an **agent in a member repo**, I want **to see the other repos in my company** so that **a repo can participate in work that spans repos**.

@@ -73,7 +73,7 @@ quoted. No quotes if the mode definition is missing.>
 
 - Started: <ISO timestamp>
 - Time in mode so far: <duration>
-- <Mode-specific live counter, e.g. "Tasks closed so far: 3
+- <Mode-specific live counter, e.g. "Tasks completed so far: 3
   (backlog: 37 → 34)" for task mode; "Time-in-mode" only
   for cleanup mode.>
 
@@ -127,9 +127,11 @@ activations.">
        in `.claude/mode.md`. For `tasks_done_count`:
        `(current count of files in tasks/completed/) − units_at_start`.
        For `stubs_remaining_count`: `units_at_start − (current
-       count of *.md files under tasks/backlog/ containing the
-       string "STATUS: STUB")`. (Direction is inverted because
-       refining a stub *removes* the STATUS: STUB header, so the
+       count of stub-depth *.md files under tasks/backlog/)` — a
+       task is stub depth while its `## Acceptance criteria` holds
+       no `- [ ]` / `- [x]` item with real text after the checkbox
+       (`.claude/task-templates/README.md`). (Direction is inverted
+       because refining a stub *gives it* real criteria, so the
        remaining-stubs count drops; the delta = stubs refined.)
        For `none`: skip.
    - Append a row to `.claude/mode-stats.md`'s **Activation
@@ -187,7 +189,7 @@ To exit: `/mode normal`. To switch: `/mode <other>`.
 ## 🎯 Mode ended: <NAME>
 
 - Time in mode: <duration>
-- <Units-specific summary, e.g. "Tasks closed: 4. Backlog:
+- <Units-specific summary, e.g. "Tasks completed: 4. Backlog:
   37 → 33." for task; "Time-in-mode logged. Activations:
   N total." for cleanup; "Stubs refined: 5 (8 → 3
   remaining). Session log: docs/refinement/<date>.md." for
@@ -206,7 +208,7 @@ hardcodes the detection logic per mode:
 |---|---|---|
 | `task` | `tasks_done_count` | Number of `*.md` files in `tasks/completed/` (excluding `.gitkeep`). Activation records the baseline; finalization computes the delta. |
 | `cleanup` | `none` | Time-in-mode only; no per-unit counting. |
-| `project-manager` | `stubs_remaining_count` | Number of `*.md` files under `tasks/backlog/` containing the string `STATUS: STUB`. Activation records the baseline; finalization computes the inverse delta (`baseline - current` = stubs refined this session). Refining a stub removes the `STATUS: STUB` header, so the remaining count drops. |
+| `project-manager` | `stubs_remaining_count` | Number of stub-depth `*.md` files under `tasks/backlog/` — no `## Acceptance criteria` item (`- [ ]` / `- [x]`) with real text after the checkbox. Activation records the baseline; finalization computes the inverse delta (`baseline - current` = stubs refined this session). Refining a stub gives it real criteria, so the remaining count drops. |
 | `normal` | n/a | Not a mode — represented by `.claude/mode.md` absence. |
 | New modes | varies | Author chooses. If the unit isn't in this table, the skill must be extended to detect it. |
 
@@ -252,7 +254,7 @@ this file, so the prose loads transitively.
 
 ## Active
 
-**TASK** — started 2026-05-01T09:14:32Z. Tasks closed so far:
+**TASK** — started 2026-05-01T09:14:32Z. Tasks completed so far:
 0 (baseline: 47 in `tasks/completed/`).
 
 *(If no mode active: "No mode active.")*
@@ -261,7 +263,7 @@ this file, so the prose loads transitively.
 
 | Mode | Activations | Total time | Units |
 |---|---|---|---|
-| task | 5 | 12h 30m | 12 closed |
+| task | 5 | 12h 30m | 12 completed |
 | cleanup | 2 | 4h | — |
 
 *(Empty when no activations have completed yet.)*
@@ -272,8 +274,8 @@ Append-only. Most recent first.
 
 - 2026-05-01T09:14 → (active) | task
 - 2026-04-29T14:00 → 18:00 (4h) | cleanup
-- 2026-04-29T08:00 → 09:30 (1h 30m) | task | +2 closed
-- 2026-04-28T10:00 → 12:00 (2h) | task | +3 closed
+- 2026-04-29T08:00 → 09:30 (1h 30m) | task | +2 completed
+- 2026-04-28T10:00 → 12:00 (2h) | task | +3 completed
 - ...
 ```
 
@@ -295,7 +297,7 @@ When that file is absent, render "No mode active."
   frontmatter and log lines. Renderable everywhere.
 - **Backlog count is the dopamine.** When in task mode, every
   status render that mentions tasks should include the
-  backlog count and how it's moved. "37 → 34" beats "3 closed."
+  backlog count and how it's moved. "37 → 34" beats "3 completed."
 
 ## What you must NOT do
 

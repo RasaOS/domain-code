@@ -57,7 +57,7 @@ the underlying rule.
   phase from `tasks/ROADMAP.md`. "Working through a batch" =
   working through a phase. Not "any group of PRs." Not "a
   sprint." A phase. The `/spec-phase` skill prepares a batch; the
-  Batch handoff in `task-rules.md` ships one. If the user says
+  Batch handoff in `batch-handoff.md` ships one. If the user says
   "let's batch up Phase N," they mean "treat Phase N's tasks as
   the unit of work."
 
@@ -78,29 +78,51 @@ the underlying rule.
 
 ## Lifecycle states
 
-The state machine for task spec files:
+The state machine for task files — seven directories under
+`tasks/`, and the directory **is** the state (there is no
+`status:` field; see `.claude/task-rules.md` §1–§2):
 
 ```
-tasks/backlog/  →  tasks/active/  →  tasks/completed/
+triage/ → backlog/ → active/ → review/ → completed/
+              ↕          ↕        ↕
+              └──── blocked/ ─────┘
+   (any state) ──────────────────→ closed/
 ```
 
-- **Backlog** — task is filed but not yet being worked. Lives in
+A task moves **only** through `.claude/bin/task <verb>` (or `/task`)
+— never `git mv`, never `mv`, never a frontmatter edit. The verb
+writes the frontmatter, appends to `tasks/history.tsv` and moves
+the file in one act.
+
+- **Triage** — filed, has an id, nothing promised yet. Lives in
+  `tasks/triage/` with no phase. `/task graduate` gives it one.
+- **Backlog** — task is phased but not yet being worked. Lives in
   `tasks/backlog/`. May be a stub or a full spec (see "Stub vs
   spec" below).
-- **Active** — task is being worked right now. Lives in
-  `tasks/active/`. **At most one task at a time per agent.** Move
-  the file with `git mv` as you transition states.
-- **Blocked** — task was active but hit an external dependency
-  (missing credential, waiting on another team, third-party
-  outage, undecided product call). Lives in `tasks/blocked/` with
-  a `## Blocker` section naming what's blocking and what would
-  unblock. Returns to `active/` when unblocked. *Not* for "I
+- **Active** — a branch is being worked (no PR, or a draft).
+  Lives in `tasks/active/`. Keep it small — one task at a time
+  per agent is the advice.
+- **Review** — the PR is open and ready; the done-gate
+  (`.claude/done-gate.md`) has not passed yet. Lives in
+  `tasks/review/`. `bin/task submit` puts it here when the PR
+  opens; `bin/task reject` sends it back to `active/`.
+- **Blocked** — task hit an external dependency (missing
+  credential, waiting on another team, third-party outage,
+  undecided product call). Enterable from backlog, active or
+  review. Lives in `tasks/blocked/` with a `## Blocker` section
+  naming what's blocking and what would unblock. `bin/task
+  unblock` returns it to wherever it came from. *Not* for "I
   don't know how" (that's a recon problem) or "this is hard"
-  (that's just work). See `task-rules.md` "The blocked state".
-- **Completed** — task has shipped: PR merged to `main`. Lives
-  in `tasks/completed/`. Open-but-unmerged PRs stay in `active/`
-  — `completed` means *merged*, not *opened*. (Renamed from
-  `done` in kit v0.36.0; `done` was the prior term.)
+  (that's just work). See `task-rules.md` §10.
+- **Completed** — the done-gate passed **and** the PR merged to
+  `main`. Lives in `tasks/completed/`, moved there by `bin/task
+  pass`. An open-but-unmerged PR is `review/` — `completed`
+  means *merged*, not *opened*. (Renamed from `done` in
+  v0.36.0; `done` was the prior term.)
+- **Closed** — ended *without* being done: superseded,
+  duplicate, obsolete, or wont-do. Lives in `tasks/closed/`,
+  moved there by `bin/task close --resolution <R>`. Never folded
+  into `completed/`.
 
 > Override in `.claude/vocabulary-overrides.md` if your project
 > tracks task state somewhere else (issue tracker, kanban tool,
@@ -108,26 +130,30 @@ tasks/backlog/  →  tasks/active/  →  tasks/completed/
 
 ## Stub vs. spec
 
-Two maturity levels for a task file. Both are valid lifecycle
-states; the one you write depends on whether implementation is
-imminent.
+Two maturity levels (depths) for a task file. Both are valid at
+any stage; the one you write depends on whether implementation is
+imminent. Depth is **derived, not declared** — there is no stub
+type, no depth field and no marker string. A task is a stub until
+its `## Acceptance criteria` holds a real checkbox.
 
-- **Stub** — minimal placeholder. Title + 1-line user story +
-  1-line "why" + `STATUS: STUB — full spec drafted before
-  implementation`. Anything more is speculative. The default when
-  a task is filed without a priority signal — full specs are
-  expanded *close to implementation*, not at filing time. See
-  `.claude/task-rules.md` "Adding tasks to the backlog (priority
-  rule)" for what triggers a full spec at filing time.
+- **Stub** — minimal placeholder (`/task` calls it an outline).
+  Title + 1-line user story + 1-line "why", no real acceptance
+  criterion yet (`.claude/task-templates/stub.md`). Anything more
+  is speculative. The default when a task is filed without a
+  priority signal — full specs are expanded *close to
+  implementation*, not at filing time. See
+  `.claude/code-task-rules.md` §11 ("Filing: stub first") for
+  what triggers a full spec at filing time.
 
 - **Spec** — full implementation contract per
-  `.claude/task-template.md`. Self-sufficient: a developer reading
-  only the spec, with no chat context, should be able to
-  implement. Includes user story, scope (in/out), references
-  (internal patterns + external doc URLs), files-expected-to-
-  change with WHAT/WHY per file, acceptance criteria, test plan,
-  manual verification steps, and open questions / risks. Stubs
-  expand into specs via `/task` Operation 3 or `/spec-phase`.
+  `.claude/task-templates/<type>.md`. Self-sufficient: a
+  developer reading only the spec, with no chat context, should be
+  able to implement. Includes user story, scope (in/out),
+  references (internal patterns + external doc URLs), files-
+  expected-to-change with WHAT/WHY per file, acceptance criteria,
+  test plan, manual verification steps, and open questions /
+  risks. Stubs expand into specs via `/task` ("flesh out TASK-N")
+  or `/spec-phase`.
 
 > Override in `.claude/vocabulary-overrides.md` if your project
 > uses different maturity levels (e.g., "draft / RFC / spec") or
@@ -135,10 +161,11 @@ imminent.
 
 ## Phase
 
-Phases are first-class organizational units. **Every task belongs
-to exactly one phase** — no orphans, no "we'll figure out where
-this fits later." Per `.claude/task-rules.md` "Phase structure",
-each phase has three things:
+Phases are first-class organizational units. **Every task outside
+`triage/` belongs to exactly one phase** — no orphans. "We'll
+figure out where this fits later" is exactly what `triage/` is
+for, and a triage task carries no phase. Per
+`.claude/task-rules.md` §4, each phase has three things:
 
 1. **A name.** "Phase N: <short noun-phrase>". Communicates the
    scope at a glance — e.g. "Phase 3: Core module CRUD",
@@ -152,9 +179,11 @@ each phase has three things:
    paragraph in ROADMAP. Order matters — top-down implies
    suggested ship order.
 
-`tasks/ROADMAP.md` is the registry. Phase membership lives there,
-nowhere else. Tasks don't declare their phase in their own spec
-file (that would drift).
+`tasks/ROADMAP.md` declares the phases (`## Phase <id> — <name>`)
+and lists each task under its phase. The task file carries the
+same fact as `phase: <id>`, written by `/task graduate`. The two
+copies are proven to agree — `.claude/bin/check-tasks` fails on
+a mismatch (I-20, I-22) — rather than one being forbidden.
 
 > Override in `.claude/vocabulary-overrides.md` if your project
 > uses a different organizational unit (epic, milestone, sprint,
@@ -165,7 +194,8 @@ file (that would drift).
 The project's contract test command — the headless / non-
 interactive test invocation that **must** pass before a PR is
 opened. The specific command lives in `CLAUDE.md` under
-"Commands." The contract is the same across projects:
+"Commands"; `.claude/done-gate.md` names it as the "Verification
+suite" gate. The contract is the same across projects:
 
 - **Headless / non-interactive.** Agents must run the version
   that doesn't require a display. Watched / headed variants are
@@ -186,10 +216,10 @@ opened. The specific command lives in `CLAUDE.md` under
 
 A file or directory that **requires explicit permission to
 modify**. Touching it without approval = blocker, not autonomous
-work. The kit lists generic categories in `.claude/task-rules.md`
-"Files that require explicit permission to modify"; the
-authoritative project-specific list lives in `CLAUDE.md` under
-"Gated files."
+work. The Element lists generic categories in
+`.claude/code-task-rules.md` §9 ("Files that need permission to
+change"); the authoritative project-specific list lives in
+`CLAUDE.md` under "Gated files."
 
 Common categories (kit defaults):
 - Infrastructure / deploy config (`firebase.json`, `*.tf`, CI
@@ -212,11 +242,14 @@ Common categories (kit defaults):
 
 An emergency production fix that bypasses the integration-batch
 buffer and goes straight to a tagged release after user
-confirmation. Per `.claude/task-rules.md` "Hotfix path":
+confirmation. Per `.claude/code-task-rules.md` §4 and
+`.claude/release-rules.md` "Hotfix path":
 
-- Branch from `main` as `hotfix/HOTFIX-NNN-slug`. HOTFIX numbering
-  is independent of TASK numbering, restarts at 001 for the
-  project, increments per incident.
+- A hotfix is a `defect` with `priority: now` — there is no
+  separate `HOTFIX-` id space. File it with `.claude/bin/task new
+  --type defect --priority now --phase <P> "<what is broken>"`,
+  which lands it in `tasks/active/`.
+- Branch from `main` as `hotfix/TASK-NNN-slug`.
 - Single concern per hotfix branch — no "while I'm here" bundling.
 - Verification gate is still required.
 - Deploy is **patch-bump only** (`vX.Y.Z` → `vX.Y.Z+1`). Major or
@@ -271,17 +304,19 @@ SKILL.md / script for skill integration.
 
 ## Closing report
 
-The mandatory completion report posted in chat when a task's PR is
-opened (or a release ships, or a chore PR opens). Shape per
-`.claude/task-rules.md` "Closing report (mandatory)" and "Closing
-report after deploy". The point is one-glance status — the
-reviewer scans the table in 5 seconds and decides whether to dig
-in.
+The mandatory completion report — written into the task file as a
+`## Completion report` section before `.claude/bin/task pass`
+moves it, and posted in chat when a task's PR is opened (or a
+release ships, or a chore PR opens). Shape per
+`.claude/task-rules.md` §11 and `.claude/code-task-rules.md` §10,
+plus `.claude/release-rules.md` "Closing report after deploy".
+The point is one-glance status — the reviewer scans the table in
+5 seconds and decides whether to dig in.
 
 The report is non-negotiable for shipping work. The
-`What you need to do next` section is non-negotiable for every
-task. Three status states only: ✅ Ready for review / ⚠️ Blocked
-/ ❌ Failed. No "almost ready," no "mostly done."
+`What to do next` section is non-negotiable for every
+task. Three outcomes only: ✅ done / ⚠️ blocked / ❌ failed.
+No "almost ready," no "mostly done."
 
 > Override in `.claude/vocabulary-overrides.md` if your project
 > has additional required sections, a different status state set,

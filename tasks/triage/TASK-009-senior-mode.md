@@ -1,4 +1,11 @@
-# TASK-009 — Senior architect mode (developer-monitoring drive)
+---
+id: TASK-009
+type: change
+created: 2026-05-17
+created_by: claude
+updated: 2026-05-17
+---
+# TASK-009: TASK-009 — Senior architect mode (developer-monitoring drive)
 
 **User story.** As a solo developer, I want a "senior" mode where
 the project acts as a senior architect monitoring and nudging

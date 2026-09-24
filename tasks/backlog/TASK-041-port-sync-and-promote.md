@@ -1,10 +1,11 @@
 ---
 id: TASK-041
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P7
-status: backlog
 ---
-
 # TASK-041: Port domain-core's /sync and /promote; retire /contribute
 
 **User story.** As a **maintainer**, I want **a lesson learned in one repo to reach the Element and then every other repo** so that **improvement compounds across the fleet instead of dying where it was found**.

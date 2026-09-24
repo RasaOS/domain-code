@@ -63,11 +63,11 @@ deliberate pace or hand off:
   `tasks/ROADMAP.md`, `tasks/PHASES.md`, and stub files in
   `tasks/backlog/`. Show the user the diff. Don't auto-commit.
 - **Stubs, not specs.** The task files written by `/mvp` are
-  one-line stubs per the kit's priority rule. Full specs are
-  `/spec-phase` or `/task` Operation 3 work, done later when the
-  phase comes up.
+  one-line stubs per `code-task-rules.md` §11 (stub first). Full
+  specs are `/spec-phase` or `/task` Expand work, done later when
+  the phase comes up.
 - **Rule updates are surfaced, not silent.** If the MVP implies
-  changes to `kit/task-rules.md`, project-level `CLAUDE.md`, or
+  changes to `.claude/done-gate.md`, project-level `CLAUDE.md`, or
   any other rule file, propose them explicitly and wait for
   consent before writing.
 - **No code, ever.** This skill produces planning artifacts only.
@@ -212,8 +212,9 @@ For each phase, propose:
 - **Name** (short, evocative).
 - **Scope** (one paragraph: what this phase proves or unlocks).
 - **Task stubs** (the 3-8 unit-of-work items the phase
-  contains). Stubs only — one-line title + one-line "what" +
-  `STATUS: STUB` per the kit's priority rule.
+  contains). Stubs only — one-line title + one-line "what", no
+  acceptance criteria yet (depth is derived: a task is a stub
+  until it has one — `code-task-rules.md` §3, §11).
 
 Show the full proposed phase set in chat. Iterate with the
 user. **Don't write to disk yet.** A phase structure is the
@@ -229,8 +230,10 @@ all of these in one pass, then surface a summary diff:
 1. **`docs/mvp/<slug>.md`** — the canonical MVP doc. See
    "MVP doc shape" below.
 
-2. **`tasks/ROADMAP.md`** — phase listing with task stubs
-   under each phase. If a ROADMAP already exists, *merge*: don't
+2. **`tasks/ROADMAP.md`** — one `## Phase <id> — <name>`
+   heading per phase with its scope paragraph (the grammar is in
+   the file's own header). Its task lines are written by step 4,
+   not by hand. If a ROADMAP already exists, *merge*: don't
    blow away existing phases. Surface the merge intent before
    writing.
 
@@ -238,34 +241,22 @@ all of these in one pass, then surface a summary diff:
    rule.
 
 4. **`tasks/backlog/TASK-NNN-slug.md`** — one stub file per
-   task identified in Step 3. Auto-assign IDs starting from the
-   next available `TASK-NNN`. Stub format per the kit's task
-   rules:
-   ```markdown
-   ---
-   id: TASK-NNN
-   category: stub
-   phase: <phase-id>
-   status: backlog
-   owner: unassigned
-   blocked_by:
-   outcome: unrecorded
-   filed: <YYYY-MM-DD HH:MM UTC>
-   origin: manual
-   ---
-
-   # TASK-NNN: <Title>
-
-   > STATUS: STUB — full spec drafted before implementation
-
-   <One-line user story.>
-
-   <One-line "why".>
+   task identified in Step 3, each filed with the command, in
+   phase order:
+   ```sh
+   .claude/bin/task new --type <type> --phase <phase-id> "<Title>"
    ```
+   It allocates the next `TASK-NNN`, stamps the frontmatter, logs
+   the filing in `tasks/history.tsv`, and places the task's line
+   under its phase in `tasks/ROADMAP.md`. Then replace the body
+   with the stub — one-line user story, one-line "why" — and run
+   `.claude/bin/check-tasks --fix` once at the end.
 
-   The frontmatter is not optional. `/mvp` is the first skill a greenfield
-   repo runs, so a frontmatter-free stub here makes *untracked* the default
-   starting state of every new project. See `stamps.md` → `Stamp: task`.
+   Never create a task file or write its frontmatter by hand.
+   `/mvp` is the first skill a greenfield repo runs, so a
+   hand-made stub here — absent from `tasks/history.tsv` (I-06) —
+   makes an invalid ledger the default starting state of every new
+   project. See `stamps.md` → `Stamp: task`.
 
 5. **`CLAUDE.md` updates (with consent)** — if the MVP implies
    project-specific rules (e.g. "this project uses Realm and
@@ -275,7 +266,7 @@ all of these in one pass, then surface a summary diff:
    populated one from the MVP doc.
 
 6. **Rule update proposals (with consent)** — if the MVP implies
-   changes to `kit/task-rules.md` or other shared rules, propose
+   changes to `code-task-rules.md` or other shared rules, propose
    them in chat with rationale. Hand off to `/codify` or
    `/rule-promote` for the actual write — `/mvp` doesn't own
    shared-rule edits.
@@ -394,7 +385,7 @@ should have a designated answer-by date or trigger.>
   blow away an existing roadmap. Read first; merge with
   explicit consent.
 - **Don't draft full specs.** Step 4 produces stubs. Full specs
-  belong to `/spec-phase` or `/task` Operation 3, done later
+  belong to `/spec-phase` or `/task` Expand, done later
   when the phase comes up.
 - **Don't pad the "in" scope.** An MVP with 10+ capabilities is
   not an MVP. Push back, even if the user resists. Naming the

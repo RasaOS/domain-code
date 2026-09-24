@@ -1,14 +1,14 @@
 ---
 name: codify
-description: Capture a rule that emerged from the current conversation ("from now on do X", "we just decided Y") into a durable place — either project `CLAUDE.md` (project-specific) or kit `task-rules.md` (kit-level, via `/contribute` PR). Confirms the exact wording with the user, asks scope, drafts the edit, shows the diff, applies on approval. The fix for tribal knowledge that evaporates into transcript history. Triggered when the user wants to write down a rule mid-session — e.g. "/codify", "from now on do X", "let's add this as a rule", "make this a rule", "we just decided this — write it down".
+description: Capture a rule that emerged from the current conversation ("from now on do X", "we just decided Y") into a durable place — either project `CLAUDE.md` (project-specific) or the Element's `code-task-rules.md` (Element-level, via `/contribute` PR). Confirms the exact wording with the user, asks scope, drafts the edit, shows the diff, applies on approval. The fix for tribal knowledge that evaporates into transcript history. Triggered when the user wants to write down a rule mid-session — e.g. "/codify", "from now on do X", "let's add this as a rule", "make this a rule", "we just decided this — write it down".
 ---
 
 # /codify — Capture a session rule into durable storage
 
 Take a rule that emerged from the current conversation and put
 it where it survives session boundaries. Either the project's
-`CLAUDE.md` (default) or the kit's `task-rules.md` (when the rule
-is general enough to apply across projects).
+`CLAUDE.md` (default) or the Element's `code-task-rules.md` (when
+the rule is general enough to apply across projects).
 
 Per CLAUDE.md ethos: a vague rule is worse than no rule.
 Confirm exact wording with the user before writing anything.
@@ -70,9 +70,10 @@ Where does this rule belong?
 1. **Project** — only applies to this project. Goes in
    `CLAUDE.md`.
 2. **Kit (universal)** — applies to every project. Goes in
-   `kit/task-rules.md` (via `/contribute` PR back to claude-kit).
+   `content/code-task-rules.md` (via `/contribute` PR back to
+   `rasa.domain.code`).
 3. **Kit (platform-specific)** — applies to all projects on a
-   given platform. Goes in `kit/<platform>-task-rules.md`.
+   given platform. Goes in `content/<platform>-task-rules.md`.
 
 Default: project.
 ```
@@ -91,9 +92,13 @@ For `CLAUDE.md`:
   discipline", "Testing", "Process", "Gotchas", "Working
   rules".
 
-For `kit/task-rules.md`:
+For `content/code-task-rules.md`:
 - Whatever sections exist in the file. Don't invent new ones
   without asking.
+- Never codify into `task-rules.md`. It is vendored byte-for-byte
+  from `rasa.module.tasks` and `bin/check-manifest` fails on any
+  local edit; a lifecycle rule is a change to that module,
+  upstream.
 
 If no section fits cleanly, surface the options:
 
@@ -204,7 +209,7 @@ upstream.
   Don't create it silently.
 - **The user wants a rule that's about the kit itself**
   (e.g. "/sync should check X first"). That's not a rule for
-  `task-rules.md`; that's a feature request for a skill. Route
+  `code-task-rules.md`; that's a feature request for a skill. Route
   to a normal conversation about the skill.
 - **Working tree is dirty in the file being edited.** Warn
   before writing — the user may be in the middle of an unrelated

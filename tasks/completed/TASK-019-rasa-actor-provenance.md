@@ -1,15 +1,15 @@
 ---
 id: TASK-019
-category: bug
+type: defect
+created: 2026-09-21
+created_by: chazzcoin
+updated: 2026-09-21
 phase: P2
-status: completed
-owner: unassigned
-blocked_by:
-outcome: shipped
-filed: 2026-09-21 04:00 UTC
-origin: manual
+completed_by: chazzcoin
+x-origin: manual
+x-outcome: shipped
+x-owner: unassigned
 ---
-
 # TASK-019: Thread RASA_ACTOR through every provenance site
 
 **User story.** As an **auditor**, I want **the ledger to record which actor

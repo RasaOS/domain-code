@@ -1,10 +1,12 @@
 ---
 id: TASK-015
-category: bug
+type: defect
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P1
-status: completed
+completed_by: chazzcoin
 ---
-
 # TASK-015: Wire project-map.md into the seeded CLAUDE.md imports
 
 **User story.** As a **session starting in an onboarded repo**, I want **the

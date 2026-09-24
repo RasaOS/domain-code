@@ -72,8 +72,10 @@ In parallel, collect:
 
 1. **Notes** — `docs/notes/<date>-*.md` files where
    `<date>` ≥ start. Read each.
-2. **Tasks done** — `tasks/completed/*.md` modified in the window.
-   Read each (just title + outcome line).
+2. **Tasks done** — tasks with a `tasks/history.tsv` line whose
+   `to` is `completed`, dated in the window (the log, not file
+   modification times). Read each in `tasks/completed/` (just
+   title + the completion report's outcome).
 3. **AUDIT.md entries** — recent shipped items at the top of
    `tasks/AUDIT.md` whose date falls in the window.
 4. **Decisions** — `docs/decisions/<date>-*.md` in the window.

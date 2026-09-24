@@ -1,0 +1,63 @@
+# Roadmap
+
+The phase registry for this project. Every phase this project has is
+declared here, and every task outside `tasks/triage/` is listed under
+exactly one of them.
+
+Two facts are kept in step mechanically, so neither can drift:
+
+- a task's `phase:` must equal a phase id declared here, and
+- every task carrying a phase must appear under that phase in this file.
+  (`triage/` tasks have no phase yet; a task closed straight out of triage
+  keeps none, so neither appears here.)
+
+Tasks in `tasks/triage/` are deliberately phase-less and do **not** appear
+here. Putting one here, or giving one a `phase:`, is an error -- graduate it
+first.
+
+---
+
+## The heading format, exactly
+
+Get this wrong and nothing matches anything, so here it is spelled out. Each
+phase is one `##` heading followed by a scope paragraph and a list of tasks:
+
+```
+  ## Phase DISC — Discovery
+
+  Scope. Two to four sentences: what is in, what is out, and what finishing
+  this phase looks like. This paragraph is the contract for the phase.
+
+  - TASK-001 — Draft the first-contact questionnaire
+  - TASK-002 — Agree the retention schedule
+```
+
+> **The two leading spaces in that block are not part of the format.** They
+> are there so the example is not read as a real phase. Write your real
+> headings and task lines flush against the left margin, with no indent.
+
+The pieces:
+
+- **`## Phase `** -- literally that, at the start of the line.
+- **`<id>`** -- one word, no spaces: `1`, `2.1`, `INTAKE`, `DISC`. This is
+  the string that goes in a task's `phase:` field, and it is matched
+  **case-sensitively**. Two headings that yield the same id is an error.
+- **A separator, then the name.** An em dash (as above), an en dash, a single
+  plain hyphen, or a colon straight after the id. A doubled `--` is **not** a
+  separator and will not be read as one. The name must not be empty.
+- **The scope paragraph** -- at least one real line before the next heading.
+  A phase with no scope is a label, not a plan, and the validator says so.
+- **The task lines** -- the id, a separator, the title; one per task, each
+  starting with `-` or `*`, exactly as shown above. Their order is your
+  suggested order of work, and nothing ever re-sorts them.
+
+Do not put a task id under two phases, and do not leave a line here naming a
+task that no longer exists. Both are errors, and the second one is never
+fixed automatically -- a line naming a missing file is either a lost task or
+a promise nobody kept, and only you know which.
+
+---
+
+_No phases yet. Write the first one when there is real work to put under it:
+a phase created speculatively is a heading that sits empty for a year and
+teaches everyone to ignore the file._

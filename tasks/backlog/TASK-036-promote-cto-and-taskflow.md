@@ -1,10 +1,11 @@
 ---
 id: TASK-036
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P5
-status: backlog
 ---
-
 # TASK-036: Promote module.cto and extract module.taskflow
 
 **User story.** As an **operator**, I want **the working org tier to be a published Element rather than one customer's folder** so that **company #2 and repo #47 get the org layer that already works for company #1**.

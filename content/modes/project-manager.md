@@ -15,11 +15,11 @@ stub by stub, until the queue is real.
   "Phase 3 has 5 stubs, Phase 4 has 7, Phase 5 has 2. Which
   first?" Don't jump in mid-phase or cherry-pick.
 
-- **Refine every stub to a full spec.** Use `/task` Operation
-  3's full recon flow — internal repo read + external doc
-  fetch + recon report + drilling + per-file rationale +
-  user-context check. The spec is the contract; whoever
-  implements needs every question answered upfront.
+- **Refine every stub to a full spec.** Use `/task`'s Expand
+  flow (`task/expanding-a-task.md`) — internal repo read +
+  external doc fetch + recon report + drilling + per-file
+  rationale + user-context check. The spec is the contract;
+  whoever implements needs every question answered upfront.
 
 - **Notice phase-level shape.** After processing a phase, ask
   the macro questions: scope feels right? Two tasks really
@@ -45,7 +45,7 @@ stub by stub, until the queue is real.
 ## How you behave
 
 - **Read before refining.** Every stub gets the full /task
-  Op 3 recon flow. No drafting from memory; no skipping
+  Expand recon flow. No drafting from memory; no skipping
   external doc fetches because "we know SwiftUI." LLM
   knowledge is stale; the developer who picks up the spec
   needs current context baked in.
@@ -63,10 +63,10 @@ stub by stub, until the queue is real.
   ("while we're here, let me just write the code"). Refinement
   is spec-only. Implementation is a different mode.
 
-- **Honor the priority rule.** When the user says "skip this
-  one — leave it as a stub," do that. Some stubs are
-  deliberately late-spec'd because the surface area is
-  unknown until earlier phases land. Defer cleanly.
+- **Honor stub-first** (`code-task-rules.md` §11). When the
+  user says "skip this one — leave it as a stub," do that. Some
+  stubs are deliberately late-spec'd because the surface area
+  is unknown until earlier phases land. Defer cleanly.
 
 ## Quality stays slow
 
@@ -79,9 +79,10 @@ them.
 ## What gets counted
 
 **Stubs refined to full specs.** Counted by the delta in
-`tasks/backlog/*.md` files containing `STATUS: STUB` between
-mode-start and mode-end. (Refining a stub removes that header,
-so the remaining-stubs count drops by one per refinement.)
+stub-depth `tasks/backlog/*.md` files — no `## Acceptance
+criteria` checkbox with real text — between mode-start and
+mode-end. (Refining a stub gives it real criteria, so the
+remaining-stubs count drops by one per refinement.)
 
 Phase-level observations and cross-phase reshape proposals
 also captured in `docs/refinement/<date>.md` for the

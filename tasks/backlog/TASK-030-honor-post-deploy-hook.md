@@ -1,10 +1,11 @@
 ---
 id: TASK-030
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P4
-status: backlog
 ---
-
 # TASK-030: Make content/build/deploy honor [hooks] post_deploy
 
 **User story.** As an **operator**, I want **the post-deploy hook I configured to actually run** so that **configuration that reads as supported is supported**.

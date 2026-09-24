@@ -1,10 +1,11 @@
 ---
 id: TASK-047
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P8
-status: backlog
 ---
-
 # TASK-047: License-compatibility gate in the dependency sweep
 
 **User story.** As a **legal**, I want **dependency legality checked alongside dependency security** so that **an agent cannot pull a copyleft package into a proprietary product**.
