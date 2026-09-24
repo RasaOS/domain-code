@@ -102,6 +102,32 @@ the transition log `.claude/bin/task` appends to on every filing and
 move. Anything else, `tasks/tasks.config.yml` included, refuses the
 fast-path. There is no flag or variable that skips it.
 
+### Check every record — read-only
+
+```bash
+task-enforce.sh doctor               # this install's project
+task-enforce.sh doctor <root>        # any project: a clone, before it takes a release
+```
+
+Reads every record this Element writes — task files, run records, deploy
+and env-transfer records and `DEPLOYS.md`, contract, env-var and test
+stamps, and `tasks/RELEASES.md` — and **writes nothing**: no `--fix`, no
+cache, no state file (`check-tasks` writes `tasks/.state`; this does not).
+
+- **FAIL** (exit 1) on what a reader or writer outside the frontmatter
+  contract gets wrong: a BOM, a CR, a blank after a fence, a block that
+  never closes, the body line that exposes, a duplicated key, a literal
+  `\n` or a control character in a value, an `auto-*` run recorded as
+  `actor_kind: human`, a `DEPLOYS.md` row with no id, a release with a
+  second **Approved.** line.
+- **WARN** on drift: one id on two records, an id or name that disagrees
+  with its file, a value outside its set, a task carrying `status:`, an
+  outcome on an open task, a second frontmatter block.
+
+It prints keys, ids, files and line numbers — never a value — so its report
+can be shared from any project. It repairs nothing: fix a finding by hand,
+or with the verb that owns the record.
+
 ## When an edit gets denied
 
 The deny reason names the task that was just filed. Do this, in order:

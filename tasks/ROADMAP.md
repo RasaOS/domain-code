@@ -89,7 +89,6 @@ program, and unblocks four of the others.
 - TASK-020 — The autonomy report appends a machine-readable run line instead of only rendering to chat
 - TASK-021 — `rasa.module.telemetry`: roll per-repo run lines into a fleet view
 - TASK-057 — `/wrangle`'s remediation plan is filed into `tasks/`, not only rendered to chat
-- TASK-071 — A read-only record checker: task-enforce.sh doctor
 - TASK-072 — The shipped outcome is written by nothing that knows a release shipped
 - TASK-073 — bin/init --plan: show what an install would change before it changes it
 - TASK-074 — release.sh attributes every approval to "<actor> via invocation"
@@ -98,6 +97,7 @@ program, and unblocks four of the others.
 - TASK-067 — Convert the live writers first: release.sh and task-guard's ledger
 - TASK-068 — Convert the dormant writers: runs, task-enforce, deploys, contract
 - TASK-069 — Sweep the remaining readers and writers; one actor lookup
+- TASK-071 — A read-only record checker: task-enforce.sh doctor
 
 ## Phase P3 — Verification independence
 

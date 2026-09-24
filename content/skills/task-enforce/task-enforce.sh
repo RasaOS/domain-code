@@ -38,6 +38,7 @@
 #   task-enforce.sh stamp <id> <key> <v>  set an x- key (code-task-rules.md §7)
 #   task-enforce.sh who                   the actor handle for bin/task --by
 #   task-enforce.sh classify <path>       show how a path classifies
+#   task-enforce.sh doctor [<root>]       check every record, read-only (doctor.py)
 #
 # Tasks are filed through .claude/bin/task (rasa.module.tasks v1.0.0), never
 # written by hand: it allocates the id, writes tasks/history.tsv and records
@@ -729,7 +730,13 @@ main() {
       [ $# -ge 1 ] || { echo "error: classify needs a path" >&2; return 2; }
       local r; r="$(repo_root)" || return 1
       printf '%s\t%s\n' "$1" "$(classify_path "$r" "$1")" ;;
-    -h|--help|help|"") sed -n '3,46p' "$0" | sed 's/^# \{0,1\}//' ;;
+    doctor)
+      # Read-only: it writes nothing, not even a cache (-B). An explicit root
+      # checks another project's records — a clone, before it takes a release.
+      command -v python3 >/dev/null 2>&1 || { echo "error: doctor needs python3" >&2; return 1; }
+      local r; r="$(rasa_root "${1:-}")" || return 1
+      python3 -B "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/doctor.py" "$r" ;;
+    -h|--help|help|"") sed -n '3,47p' "$0" | sed 's/^# \{0,1\}//' ;;
     *) echo "error: unknown action: $action" >&2; return 2 ;;
   esac
 }

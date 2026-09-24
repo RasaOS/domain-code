@@ -20,6 +20,9 @@
 #   environment   (needs PyYAML) a stamp with a BOM has its environments
 #                 checked; a stamp that does not parse is named, not skipped
 #   runtime       (needs PyYAML) a runtime stamp with a BOM is read
+#   doctor        `task-enforce.sh doctor` passes a project written by the
+#                 Element's own scripts, names every damaged record of every
+#                 kind, prints no value, and writes nothing at all
 #
 # The Python readers get a BOM rather than only CRLF: Python's text mode
 # turns CRLF into LF on read, so the old ones survived CRLF.
@@ -173,6 +176,63 @@ if [ "$YAML" = 1 ]; then
 else
   skip "runtime check" "PyYAML is not installed"
 fi
+
+# ── doctor (task-enforce.sh doctor): read-only, every record kind ────────────
+echo "doctor"
+D="$T/doctor"; install "$D"
+doc() { ( cd "$D" && bash .claude/skills/task-enforce/task-enforce.sh doctor "$@" ); }
+# One clean record of every kind, written by the Element's own scripts.
+( cd "$D" || exit 1
+  python3 .claude/bin/task new --root "$D" --quiet --type change --by test-person "clean task" >/dev/null
+  rid="$(RASA_ACTOR=ci-bot bash .claude/skills/runs/runs.sh open auto-task)" && bash .claude/skills/runs/runs.sh close "$rid" completed >/dev/null
+  id="$(bash .claude/skills/deploys/deploys.sh open staging nonprod deploy v1)" && bash .claude/skills/deploys/deploys.sh close "$id" success 3 >/dev/null
+  bash .claude/skills/contract/contract.sh init >/dev/null 2>&1
+  printf '# Orders API\n' > body.md
+  bash .claude/skills/contract/contract.sh new orders-api --kind doc --why t --from body.md >/dev/null 2>&1
+  bash .claude/skills/import-env/import-env.sh add API_TOKEN --purpose secret --required true >/dev/null 2>&1
+  mkdir -p tests/stamps
+  printf -- '---\nname: smoke\nstatus: active\n---\n\n# smoke\n' > tests/stamps/20260924_001_smoke.md
+) >/dev/null 2>&1
+cp "$here/../test/release/expect.RELEASES.md" "$D/tasks/RELEASES.md"
+rc=0; out="$(doc 2>&1)" || rc=$?
+check "a project written by the Element's own scripts is clean (rc $rc)" has "$out" "0 failure(s), 0 warning(s)"
+check "…and every record kind was read (the install seeds one test stamp)" has "$out" "read: tasks 1 · runs 1 · deploy records 1 · deploy index 1 · contract stamps 1 · env stamps 1 · test stamps 2 · release tracker 1"
+
+# One damaged record per finding.
+printf -- '---\nid: TASK-901\ntype: change\n---\n# TASK-901: bom\n' > "$D/tasks/active/TASK-901-bom.md"; bom "$D/tasks/active/TASK-901-bom.md"
+printf -- '---\nrun_id: RUN-20260101-000000\nkind: manual\nactor: a\nactor_kind: human\nstatus: completed\n---\n' > "$D/tasks/runs/RUN-20260101-000000.md"
+crlf "$D/tasks/runs/RUN-20260101-000000.md"
+printf -- '---\nname: fence\nversion: 1.0.0\nis_locked: false\n--- \n\nversion: 9.9.9\n' > "$D/contracts/stamps/fence.md"
+printf -- '---\nname: open\nvar_name: OPEN\n\n# never closed\n' > "$D/env/stamps/open.md"
+printf -- '---\nid: DEP-20260101-000000-x\nkind: deploy\nstatus: in-flight\nstatus: success\n---\n' > "$D/deploys/records/DEP-20260101-000000-x.md"
+printf -- '---\nid: TASK-902\ntype: change\nx-owner: a\\nstatus: forged\n---\n# TASK-902: escaped\n' > "$D/tasks/backlog/TASK-902-escaped.md"
+printf -- '---\nrun_id: RUN-20260101-000001\nkind: auto-task\nactor: someone\nactor_kind: human\nstatus: completed\n---\n' > "$D/tasks/runs/RUN-20260101-000001.md"
+printf '| 2026-01-01 00:00:00 UTC | deploy | x | y | `` | a | ? | | `` |\n' >> "$D/deploys/DEPLOYS.md"
+awk '{ print } /^\*\*Approved\.\*\*/ && !d { print "**Approved.** someone-else via invocation"; d = 1 }' "$D/tasks/RELEASES.md" > "$D/tasks/RELEASES.md.x"
+mv "$D/tasks/RELEASES.md.x" "$D/tasks/RELEASES.md"
+first="$(ls "$D"/tasks/triage/TASK-*.md | head -1)"
+sed 's/^# TASK-/# copy of TASK-/' "$first" > "$D/tasks/completed/$(basename "$first")"
+printf -- '---\nid: TASK-903\ntype: change\n---\n\n---\nid: TASK-903\n---\n# TASK-903: twice\n' > "$D/tasks/triage/TASK-903-twice.md"
+
+snap() { ( cd "$D" && find . -type f -exec cksum {} + | LC_ALL=C sort ); }
+s0="$(snap)"
+rc=0; out="$(doc 2>&1)" || rc=$?
+check "damage fails the check (rc $rc)" same "$rc" 1
+finding() { printf '%s\n' "$out" | grep -qE "(FAIL|WARN)  $1 +$2"; }
+check "a BOM" finding bom "tasks/active/TASK-901-bom.md"
+check "a CR" finding cr "tasks/runs/RUN-20260101-000000.md"
+check "a blank after the closing fence" finding fence "contracts/stamps/fence.md"
+check "…and the body line it exposes" finding body-kv "contracts/stamps/fence.md"
+check "a block that never closes" finding fence "env/stamps/open.md"
+check "a duplicated key" finding dup-key "deploys/records/DEP-20260101-000000-x.md"
+check "a literal \\n in a value" finding escaped "tasks/backlog/TASK-902-escaped.md"
+check "an auto-* run recorded as human" finding actor "tasks/runs/RUN-20260101-000001.md"
+check "a blank index row" finding blank-row "deploys/DEPLOYS.md"
+check "a second approval line" finding approval "tasks/RELEASES.md"
+check "a duplicated task id (a warning)" finding dup-id "tasks/"
+check "a second frontmatter block (a warning)" finding second-fm "tasks/triage/TASK-903-twice.md"
+check "the check wrote nothing — not a byte, not a file" same "$(snap)" "$s0"
+check "no value is printed" hasnt "$out" "forged"
 
 echo
 echo "test-readers: $pass passed, $fail failed, $skip skipped"
