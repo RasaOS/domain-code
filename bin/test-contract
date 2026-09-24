@@ -237,8 +237,11 @@ want mode "$(ls -l "$S/p7.md" | cut -c1-10)" "-rw-r--r--"
 end
 
 # ── 22: no temp files left behind ────────────────────────────────────
+# Writes go through the shared library since 0.54.0, whose temp files are
+# .rfm.*; .contract.* is what 0.52.1 left. Both names are checked, or this
+# case would pass vacuously.
 begin "no temp files left in stamps/"
-want leftovers "$(ls -a "$S" | grep -c '^\.contract\.' || true)" 0
+want leftovers "$(ls -a "$S" | grep -cE '^\.(contract|rfm)\.' || true)" 0
 end
 
 # ── 23-24: a DUPLICATED is_locked is treated as locked, in either order
@@ -424,6 +427,23 @@ if [ "$(id -u)" != 0 ]; then
   want rc "$rc" 1
   want fast "$([ $((t1 - t0)) -lt 3 ] && echo yes || echo no)" yes
   want honest "$(printf '%s' "$msg" | grep -c 'is contracts/ writable')" 1
+else
+  echo "      (running as root — permissions cannot be tested)"
+fi
+end
+
+# ── 38: an unreadable stamp is damage, not a duplicated key ──────────
+# The shared library answers rc 4 both for a file it cannot read and for a
+# key that appears twice under a strict read; lock_state must tell them apart.
+begin "unreadable stamp: reported as damaged, lock refused"
+if [ "$(id -u)" != 0 ]; then
+  c new ur --kind doc --why t --from body1.md >/dev/null 2>&1
+  chmod 000 "$S/ur.md"
+  msg="$(c lock ur --why t 2>&1)"; rc=$?
+  chmod 644 "$S/ur.md"
+  want rc "$rc" 3
+  want damaged "$(printf '%s' "$msg" | grep -c 'no readable frontmatter')" 1
+  want not-duplicate "$(printf '%s' "$msg" | grep -c 'more than once')" 0
 else
   echo "      (running as root — permissions cannot be tested)"
 fi

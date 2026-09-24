@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+# bin/check-reader-parity — do the library's readers give the answers the
+# readers they replaced gave? Repo tooling: lives in bin/, is not registered
+# in rasa.json, and is never installed into a consumer.
+#
+# 0.54.0 moved deploys.sh, runs.sh, task-enforce.sh and contract.sh onto the
+# shared reader (content/lib/domain-code/frontmatter.sh). On a well-formed
+# record the answer must not change. This compares, key by key, the reader
+# each script shipped in 0.53.1 — kept below verbatim as the reference — with
+# the library call that replaced it, over every markdown file under the given
+# paths:
+#
+#   deploys       field()     vs rfm_get
+#   runs          field()     vs rfm_get
+#   task-enforce  fm_field()  vs rfm_get_scalar
+#   contract      fm_get()    vs rfm_get
+#
+# A file with a BOM, a CR, a blank after a fence or no closing fence is where
+# the old readers were wrong (W1, W2), so a difference there is expected and
+# counted apart. It is not a failure.
+#
+# One change is deliberate and also counted apart: task-enforce's reader now
+# unquotes a quoted value (`k: "1.5.0 (proposed)"` reads as 1.5.0 (proposed),
+# as YAML reads it); 0.53.1 kept the quotes. It is counted only when the old
+# answer was exactly the quoted value — an old answer that was cut short, or
+# otherwise wrong, stays a difference.
+#
+# The synthetic corpus (test/frontmatter/fixtures) is not a default path: it
+# is built to probe edges, and check-frontmatter asserts the library's answer
+# for every row of it. The old readers differ from the library there on three
+# well-formed lines, each a deliberate change — task-enforce read
+# `k:   # ids` as `# ids` (YAML: empty) and cut `k: "a: b # c"` to `"a: b`
+# (now unquoted); deploys did not find `k : v` (the other readers did).
+# `bin/check-reader-parity --list test/frontmatter/fixtures` shows them.
+#
+# Usage: bin/check-reader-parity [--list] [<path>...]
+#   Default paths: tasks/ and test/writers/ (records the writers produced).
+#   Prints counts, never record text, so it can be pointed at another
+#   project's ledger; --list also names each difference by file and key —
+#   still never a value.
+#
+# Exit 0 when every comparison on a well-formed file agrees.
+
+set -u
+here="$(cd "$(dirname "$0")" && pwd -P)"
+root="$(cd "$here/.." && pwd -P)"
+# shellcheck source=../content/lib/domain-code/frontmatter.sh
+. "$root/content/lib/domain-code/frontmatter.sh"
+
+LIST=0
+[ "${1:-}" = "--list" ] && { LIST=1; shift; }
+if [ $# -eq 0 ]; then
+  cd "$root" || exit 2
+  set -- tasks test/writers
+fi
+
+# ── the readers 0.53.1 shipped, verbatim ────────────────────────────────────
+old_deploys() {   # content/skills/deploys/deploys.sh field()
+  local file="$1" key="$2"
+  awk -v k="$key" '
+    NR==1 && $0=="---" { infm=1; next }
+    infm && $0=="---"   { exit }
+    infm {
+      i = index($0, ":")
+      if (i > 0 && substr($0, 1, i-1) == k) {
+        v = substr($0, i+1)
+        sub(/^[ \t]+/, "", v)
+        print v
+        exit
+      }
+    }
+  ' "$file"
+}
+
+old_runs() {      # content/skills/runs/runs.sh field()
+  awk -v k="$2" '
+    NR==1 && $0=="---" { fm=1; next }
+    fm && $0=="---"    { exit }
+    fm {
+      if ($0 ~ "^"k"[[:space:]]*:") {
+        sub("^"k"[[:space:]]*:[[:space:]]*", "")
+        sub(/[[:space:]]+$/, "")
+        print; exit
+      }
+    }
+  ' "$1" 2>/dev/null
+}
+
+old_task_enforce() {   # content/skills/task-enforce/task-enforce.sh fm_field()
+  awk -v k="$2" '
+    NR==1 && $0=="---" { fm=1; next }
+    fm && $0=="---"    { exit }
+    fm {
+      if ($0 ~ "^"k"[[:space:]]*:") {
+        sub("^"k"[[:space:]]*:[[:space:]]*", "")
+        sub(/[[:space:]]+#.*$/, "")
+        sub(/[[:space:]]+$/, "")
+        print; exit
+      }
+    }
+  ' "$1" 2>/dev/null
+}
+
+# content/skills/contract/contract.sh fm_get() (0.52.1's hardened copy)
+FM_BOM="$(printf '\357\273\277')"; export FM_BOM
+FM_AWK_NORM='
+  { raw = $0; line = $0
+    if (NR == 1 && substr(line, 1, 3) == ENVIRON["FM_BOM"]) line = substr(line, 4)
+    cr = ""; if (line ~ /\r$/) { cr = "\r"; sub(/\r$/, "", line) } }
+  function is_fence(l) { return l ~ /^---[ \t]*$/ }
+  function key_of(l,   k, r) {
+    k = ENVIRON["FM_K"]
+    if (substr(l, 1, length(k)) != k) return 0
+    r = substr(l, length(k) + 1)
+    return (r ~ /^[ \t]*:/)
+  }
+'
+old_contract() {
+  FM_K="$2" LC_ALL=C awk "$FM_AWK_NORM"'
+    NR == 1 { if (!is_fence(line)) exit; open = 1; next }
+    open && is_fence(line) { closed = 1; exit }
+    open && key_of(line) {
+      if (found++) next
+      v = line; sub(/^[^:]*:[ \t]*/, "", v); sub(/[ \t]+$/, "", v)
+      val = v
+    }
+    END {
+      if (!closed) exit 3
+      if (!found)  exit 1
+      if (found > 1 && ENVIRON["FM_STRICT"] == "1") exit 4
+      print val
+    }
+  ' "$1"
+}
+
+# ── the comparison ──────────────────────────────────────────────────────────
+# damaged <file> — rc 0 when the frontmatter carries what 0.54.0 fixes: a BOM,
+# a CR, a blank after a fence, or no closing fence.
+damaged() {
+  LC_ALL=C awk '
+    NR == 1 {
+      if (substr($0, 1, 3) == "\357\273\277") { bad = 1; $0 = substr($0, 4) }
+      if ($0 ~ /\r$/) { bad = 1; sub(/\r$/, "") }
+      if ($0 !~ /^---[ \t]*$/) { nofm = 1; exit }
+      if ($0 != "---") bad = 1
+      next
+    }
+    { if ($0 ~ /\r$/) { bad = 1; sub(/\r$/, "") } }
+    /^---[ \t]*$/ { if ($0 != "---") bad = 1; closed = 1; exit }
+    END { if (!nofm && !closed) bad = 1; exit bad ? 0 : 1 }
+  ' "$1"
+}
+
+# keys_of <file> — every top-level key in the frontmatter, once each.
+keys_of() {
+  rfm_block "$1" 2>/dev/null | LC_ALL=C sed -n 's/^\([A-Za-z_][A-Za-z0-9_.-]*\)[ 	]*:.*/\1/p' | sort -u
+}
+
+files=0; broken=0; n=0; diffs=0; expected=0; unquoted=0
+while IFS= read -r f; do
+  files=$((files + 1))
+  dmg=0
+  if damaged "$f"; then dmg=1; broken=$((broken + 1)); fi
+  for k in $(keys_of "$f") parity-absent-key; do
+    new="$(rfm_get "$f" "$k" 2>/dev/null)"
+    scalar="$(rfm_get_scalar "$f" "$k" 2>/dev/null)"
+    for r in deploys runs task-enforce contract; do
+      case "$r" in
+        deploys)      o="$(old_deploys "$f" "$k" 2>/dev/null)";  w="$new" ;;
+        runs)         o="$(old_runs "$f" "$k")";                 w="$new" ;;
+        task-enforce) o="$(old_task_enforce "$f" "$k")";         w="$scalar" ;;
+        contract)     o="$(old_contract "$f" "$k" 2>/dev/null)"; w="$new" ;;
+      esac
+      n=$((n + 1))
+      [ "$o" = "$w" ] && continue
+      if [ "$dmg" = 1 ]; then
+        kind=expected; expected=$((expected + 1))
+      elif [ "$r" = task-enforce ] && [ "$o" = "$new" ] && case "$o" in \"*\"|\'*\') true ;; *) false ;; esac; then
+        kind=unquoted; unquoted=$((unquoted + 1))
+      else
+        kind=DIFF; diffs=$((diffs + 1))
+      fi
+      [ "$LIST" = 1 ] && printf '  %-8s %-12s %s · %s\n' "$kind" "$r" "$f" "$k"
+    done
+  done
+done < <(find "$@" -type f -name '*.md' 2>/dev/null | LC_ALL=C sort)
+
+echo "check-reader-parity: $files file(s), $broken with a BOM, CR, blank after a fence or no closing fence"
+echo "  $n comparisons · $diffs unexplained difference(s)"
+echo "  $unquoted where task-enforce now unquotes a quoted value (intended)"
+echo "  $expected on the damaged files (what 0.54.0 fixes)"
+[ "$diffs" -eq 0 ]

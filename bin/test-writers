@@ -3,18 +3,42 @@
 # an installed project. Repo tooling: lives in bin/, is not registered in
 # rasa.json, and is never installed into a consumer.
 #
-# Every section installs this checkout into a fresh project with bin/init and
+# Every section installs an Element into a fresh project with bin/init and
 # drives the real skills there, the way a consumer's session would.
 #
-#   task-guard   the change-ledger row keeps its shape for a clean actor; an
-#                actor carrying a newline cannot add a row; removing the hook
-#                block keeps the hook file's mode and the other hooks in it.
+#   golden        on clean input, deploys, runs and the task-enforce writers
+#                 write the bytes 0.53.1 wrote (test/writers/*.md, made by
+#                 0.53.1's own scripts; times, hosts and SHAs masked).
+#   deploys       a hostile actor, tag or environment reserves nothing; close
+#                 works through a BOM or CRLF and keeps the mode; a trailing
+#                 space on the fence cannot reach the body; free text stays one
+#                 line; a path-shaped id and a duplicated key are refused.
+#   runs          the same for the run ledger, and started_epoch never reaches
+#                 shell arithmetic unchecked.
+#   task-enforce  stamp works through a BOM or CRLF, never writes into the
+#                 body, refuses a duplicated key and a glob for an id; a filed
+#                 stub keeps the ledger valid; a path cannot forge change rows.
+#   task-guard    the change-ledger row keeps its shape for a clean actor; an
+#                 actor carrying a newline cannot add a row; removing the hook
+#                 block keeps the hook file's mode and the other hooks in it.
+#
+# Usage:
+#   bin/test-writers
+#   TEST_WRITERS_ELEMENT=<tree> bin/test-writers [--emit <dir>]
+# The variable runs the suite against another Element tree: a control run
+# against an older release shows which cases it failed. --emit writes the
+# golden scenario's masked records to <dir> instead of comparing them — how
+# test/writers/*.md were made, from v0.53.1.
 #
 # Portable on purpose: bash 3.2, POSIX tools. Exit 0 only if every case passes.
 
 set -u
 here="$(cd "$(dirname "$0")" && pwd -P)"
-ELEMENT="$(cd "$here/.." && pwd -P)"
+ELEMENT="${TEST_WRITERS_ELEMENT:-$here/..}"
+ELEMENT="$(cd "$ELEMENT" && pwd -P)"
+GOLDEN="$here/../test/writers"
+EMIT=""
+[ "${1:-}" = "--emit" ] && EMIT="${2:?--emit needs a directory}"
 
 T="$(mktemp -d "${TMPDIR:-/tmp}/test-writers.XXXXXX")" || exit 2
 T="$(cd "$T" && pwd -P)"
@@ -26,8 +50,28 @@ unset RASA_ROOT RASA_ACTOR
 pass=0; fail=0
 ok()  { pass=$((pass + 1)); printf '  ✓ %s\n' "$1"; }
 bad() { fail=$((fail + 1)); printf '  ✗ %s\n' "$1"; }
+# check <label> <cmd...> — ok when the command succeeds
+check() { local l="$1"; shift; if "$@"; then ok "$l"; else bad "$l"; fi; }
 
-# install <dir> — a fresh git project with this Element installed into it.
+sum()  { cksum < "$1"; }
+mode() { ls -l "$1" | cut -c1-10; }
+same() { [ "$1" = "$2" ]; }
+# lines of <file> that do NOT end in CR
+lf_lines() { LC_ALL=C grep -c -v "$(printf '\r')\$" "$1" || true; }
+to_crlf()  { LC_ALL=C awk '{ printf "%s\r\n", $0 }' "$1" > "$1.x"; mv "$1.x" "$1"; }
+to_bom()   { { printf '\357\273\277'; cat "$1"; } > "$1.x"; mv "$1.x" "$1"; }
+# key <file> <key> — the value of <key> in the frontmatter (CR and BOM aware)
+key() {
+  K="$2" LC_ALL=C awk '{ sub(/\r$/, "") } NR == 1 { next } /^---[ \t]*$/ { exit }
+    index($0, ENVIRON["K"] ":") == 1 { v = substr($0, length(ENVIRON["K"]) + 2); sub(/^[ \t]+/, "", v); sub(/[ \t]+$/, "", v); print v; exit }' "$1"
+}
+# nkey <file> <key> — how many times <key> appears in the frontmatter
+nkey() {
+  K="$2" LC_ALL=C awk '{ sub(/\r$/, "") } NR == 1 { next } /^---[ \t]*$/ { exit }
+    index($0, ENVIRON["K"] ":") == 1 { n++ } END { print n + 0 }' "$1"
+}
+
+# install <dir> — a fresh git project with the Element installed into it.
 install() {
   mkdir -p "$1" && git -C "$1" init -q
   git -C "$1" config user.name "Test Person"; git -C "$1" config user.email t@t
@@ -36,6 +80,245 @@ install() {
   git -C "$1" add -A >/dev/null 2>&1; git -C "$1" commit -qm install >/dev/null 2>&1
 }
 
+# mask — what legitimately differs between two runs: times, the commit, the
+# branch name git defaults to, the host.
+mask() {
+  LC_ALL=C sed -E \
+    -e 's/[0-9]{8}-[0-9]{6}/YYYYMMDD-HHMMSS/g' \
+    -e 's/[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}(:[0-9]{2})? UTC/TIME UTC/g' \
+    -e 's/^(created|updated): [0-9]{4}-[0-9]{2}-[0-9]{2}$/\1: DATE/' \
+    -e 's/^(sha|branch|host|started_epoch|duration_s): .+$/\1: MASKED/'
+}
+
+# ── golden ───────────────────────────────────────────────────────────────────
+# golden_run <project> <outdir> — one clean pass through every writer.
+golden_run() {
+  ( cd "$1" || exit 1
+    O="$2"
+    id="$(bash .claude/skills/deploys/deploys.sh open staging nonprod deploy v1.2.3 invocation)" || exit 1
+    mask < "deploys/records/$id.md" > "$O/deploy-open.md"
+    bash .claude/skills/deploys/deploys.sh close "$id" success 42 >/dev/null || exit 1
+    mask < "deploys/records/$id.md" > "$O/deploy-closed.md"
+    rid="$(bash .claude/skills/runs/runs.sh open auto-task TASK-001)" || exit 1
+    mask < "tasks/runs/$rid.md" > "$O/run-open.md"
+    bash .claude/skills/runs/runs.sh close "$rid" completed >/dev/null || exit 1
+    mask < "tasks/runs/$rid.md" > "$O/run-closed.md"
+    bash .claude/skills/task-enforce/task-enforce.sh on >/dev/null 2>&1 || exit 1
+    # A fixed template, so this golden follows the writers and not the
+    # wording of the template the Element ships.
+    mkdir -p .claude/task-templates
+    printf '# {{TITLE}}\n\nBody line: key: value\n\n## Notes\n' > .claude/task-templates/change.md
+    mkdir -p src; echo 'a = 1' > src/a.py
+    printf '{"tool_input":{"file_path":"%s"}}' "$1/src/a.py" \
+      | bash .claude/skills/task-enforce/task-enforce.sh guard >/dev/null 2>&1
+    f="$(ls tasks/triage/TASK-*.md 2>/dev/null | head -1)"
+    [ -n "$f" ] || exit 1
+    mask < "$f" > "$O/task-filed.md"
+    bash .claude/skills/task-enforce/task-enforce.sh stamp "$(basename "$f" | cut -d- -f1-2)" x-owner bob >/dev/null || exit 1
+    mask < "$f" > "$O/task-stamped.md"
+  )
+}
+
+GOLDEN_FILES="deploy-open.md deploy-closed.md run-open.md run-closed.md task-filed.md task-stamped.md"
+
+if [ -n "$EMIT" ]; then
+  mkdir -p "$EMIT"
+  install "$T/emit"
+  golden_run "$T/emit" "$(cd "$EMIT" && pwd -P)" || { echo "the golden scenario failed" >&2; exit 1; }
+  echo "wrote $GOLDEN_FILES to $EMIT"
+  exit 0
+fi
+
+echo "golden"
+install "$T/golden"; mkdir -p "$T/golden-out"
+if golden_run "$T/golden" "$T/golden-out"; then
+  for g in $GOLDEN_FILES; do
+    if cmp -s "$GOLDEN/$g" "$T/golden-out/$g"; then ok "$g is what 0.53.1 wrote"
+    else bad "$g differs from 0.53.1's: $(diff "$GOLDEN/$g" "$T/golden-out/$g" | head -4 | tr '\n' ' ')"; fi
+  done
+else
+  bad "the clean scenario did not run to the end"
+fi
+
+# ── deploys ──────────────────────────────────────────────────────────────────
+echo "deploys"
+P="$T/dep"; install "$P"
+R="$P/deploys/records"
+dep()  { ( cd "$P" && bash .claude/skills/deploys/deploys.sh "$@" ); }
+nrec() { ls -1 "$R" 2>/dev/null | grep -c '\.md$' || true; }
+dep index >/dev/null 2>&1
+n0="$(nrec)"
+rc=0; RASA_ACTOR="$(printf 'bot\nstatus: success')" dep open staging nonprod deploy v1 >/dev/null 2>&1 || rc=$?
+check "an actor carrying a newline is refused (rc $rc) and reserves no record" same "$rc:$(nrec)" "2:$n0"
+rc=0; dep open staging nonprod deploy "$(printf 'v1\nstatus: success')" >/dev/null 2>&1 || rc=$?
+check "a tag carrying a newline is refused (rc $rc) and reserves no record" same "$rc:$(nrec)" "2:$n0"
+rc=0; dep open "a/b" nonprod deploy v1 >/dev/null 2>&1 || rc=$?
+check "a path-shaped environment is refused (rc $rc)" same "$rc:$(nrec)" "2:$n0"
+
+id="$(dep open staging nonprod deploy v1 2>/dev/null)"; f="$R/$id.md"
+chmod 644 "$f" "$P/deploys/DEPLOYS.md"
+dep close "$id" success 42 >/dev/null 2>&1
+check "close sets the status" same "$(key "$f" status):$(key "$f" duration_s)" "success:42"
+check "close keeps the record's mode ($(mode "$f"))" same "$(mode "$f")" "-rw-r--r--"
+check "the index keeps its mode ($(mode "$P/deploys/DEPLOYS.md"))" same "$(mode "$P/deploys/DEPLOYS.md")" "-rw-r--r--"
+
+id="$(dep open staging nonprod deploy v2 2>/dev/null)"; f="$R/$id.md"; to_crlf "$f"
+dep close "$id" success 5 >/dev/null 2>&1
+check "a CRLF record closes (status: $(key "$f" status))" same "$(key "$f" status)" success
+check "a CRLF record keeps CRLF on every line" same "$(lf_lines "$f")" 0
+
+id="$(dep open staging nonprod deploy v3 2>/dev/null)"; f="$R/$id.md"; to_bom "$f"
+dep close "$id" success 5 >/dev/null 2>&1
+check "a record with a BOM closes (status: $(key "$f" status))" same "$(key "$f" status)" success
+check "the BOM is kept" same "$(head -c 3 "$f" | od -An -tx1 | tr -d ' \n')" efbbbf
+
+id="$(dep open staging nonprod deploy v4 2>/dev/null)"; f="$R/$id.md"
+LC_ALL=C awk '/^---$/ { n++; if (n == 2) { print "--- "; next } } { print }' "$f" > "$f.x"; mv "$f.x" "$f"  # rfm-ok: builds the damaged fixture
+printf 'status: body-line\n' >> "$f"
+dep close "$id" failed 7 >/dev/null 2>&1
+check "a trailing space on the fence: the body line is untouched" same "$(grep -c '^status: body-line$' "$f")" 1
+check "…and the frontmatter status is set" same "$(key "$f" status)" failed
+
+id="$(dep open staging nonprod deploy v5 2>/dev/null)"; f="$R/$id.md"
+dep close "$id" failed 3 'x\nstatus: success' >/dev/null 2>&1
+check "a literal \\n in error_stage stays literal — one status key" same "$(nkey "$f" status):$(key "$f" error_stage)" '1:x\nstatus: success'
+id="$(dep open staging nonprod deploy v6 2>/dev/null)"; f="$R/$id.md"
+dep close "$id" failed 3 "$(printf 'build\nstatus: success')" >/dev/null 2>&1
+check "a newline in error_stage is made one line — one status key" same "$(nkey "$f" status):$(key "$f" error_stage)" "1:build status: success"
+
+id="$(dep open staging nonprod deploy v7 2>/dev/null)"; f="$R/$id.md"; h="$(sum "$f")"
+rc=0; dep close "$id" success soon >/dev/null 2>&1 || rc=$?
+check "a duration that is not whole seconds is refused (rc $rc), record untouched" same "$rc:$(sum "$f")" "2:$h"
+LC_ALL=C awk '{ print } /^status: / && !d { print "status: in-flight"; d = 1 }' "$f" > "$f.x"; mv "$f.x" "$f"
+h="$(sum "$f")"
+rc=0; dep close "$id" success 1 >/dev/null 2>&1 || rc=$?
+check "a duplicated key is refused (rc $rc), record byte-identical" same "$([ "$rc" -ne 0 ] && echo refused):$(sum "$f")" "refused:$h"
+
+printf -- '---\nstatus: keep\n---\n\noutside\n' > "$P/outside.md"; h="$(sum "$P/outside.md")"
+rc=0; dep close ../../outside success 1 >/dev/null 2>&1 || rc=$?
+check "a path-shaped id is refused (rc $rc), the file it names untouched" same "$rc:$(sum "$P/outside.md")" "2:$h"
+
+stuck() { dep check 2>&1 | sed -n 's/^⚠ \([0-9]*\) deploy.*/\1/p'; }
+dep index >/dev/null 2>&1
+s0="$(stuck)"
+id="$(dep open staging nonprod deploy v8 2>/dev/null)"; f="$R/$id.md"
+dep close "$id" success 1 >/dev/null 2>&1
+printf '\nstatus: in-flight\n' >> "$f"
+check "check counts in-flight from each record's frontmatter, not its notes" same "$(stuck)" "$s0"
+
+# ── runs ─────────────────────────────────────────────────────────────────────
+echo "runs"
+P="$T/runs"; install "$P"
+RD="$P/tasks/runs"
+run()  { ( cd "$P" && bash .claude/skills/runs/runs.sh "$@" ); }
+nrun() { ls -1 "$RD" 2>/dev/null | grep -c '\.md$' || true; }
+n0="$(nrun)"
+rc=0; RASA_ACTOR="$(printf 'bot\nstatus: completed')" run open auto-task >/dev/null 2>&1 || rc=$?
+check "an actor carrying a newline is refused (rc $rc) and reserves no record" same "$rc:$(nrun)" "2:$n0"
+rc=0; run open auto-task "$(printf 'TASK-001\nstatus: completed')" >/dev/null 2>&1 || rc=$?
+check "task refs carrying a newline are refused (rc $rc) and reserve no record" same "$rc:$(nrun)" "2:$n0"
+
+id="$(run open auto-task TASK-001 2>/dev/null)"; f="$RD/$id.md"; chmod 644 "$f"
+run close "$id" completed >/dev/null 2>&1
+check "close seals the run" same "$(key "$f" status):$(key "$f" outcome)" "completed:completed"
+check "close keeps the record's mode ($(mode "$f"))" same "$(mode "$f")" "-rw-r--r--"
+rc=0; run close "$id" failed >/dev/null 2>&1 || rc=$?
+check "a sealed run is not rewritten (rc $rc)" same "$rc:$(key "$f" status)" "1:completed"
+
+id="$(run open auto-task 2>/dev/null)"; f="$RD/$id.md"; to_crlf "$f"
+run close "$id" failed >/dev/null 2>&1
+check "a CRLF run closes (status: $(key "$f" status))" same "$(key "$f" status)" failed
+check "a CRLF run keeps CRLF on every line" same "$(lf_lines "$f")" 0
+
+id="$(run open auto-task 2>/dev/null)"; f="$RD/$id.md"
+run close "$id" stopped-at-gate 'deploy\nstatus: completed' >/dev/null 2>&1
+check "a literal \\n in the gate stays literal — one status key" same "$(nkey "$f" status):$(key "$f" gate)" '1:deploy\nstatus: completed'
+id="$(run open auto-task 2>/dev/null)"; f="$RD/$id.md"
+run close "$id" stopped-at-gate "$(printf 'deploy\nstatus: completed')" >/dev/null 2>&1
+check "a newline in the gate is made one line — one status key" same "$(nkey "$f" status):$(key "$f" status)" "1:stopped"
+
+# BASH_VERSINFO is always set, so `set -u` does not stop the subscript being
+# expanded: on stock macOS bash 3.2, 0.53.1's close ran the command.
+id="$(run open auto-task 2>/dev/null)"; f="$RD/$id.md"
+LC_ALL=C awk -v p="$T/pwned" '/^started_epoch:/ { print "started_epoch: BASH_VERSINFO[$(touch " p ")]"; next } { print }' "$f" > "$f.x"  # rfm-ok: builds the hostile fixture
+mv "$f.x" "$f"
+run close "$id" completed >/dev/null 2>&1
+check "started_epoch never reaches shell arithmetic unchecked" same "$([ -e "$T/pwned" ] && echo ran || echo not-run)" not-run
+check "…and the run still closes, with no duration" same "$(key "$f" status):$(key "$f" duration_s)" "completed:"
+
+printf -- '---\nstatus: in-flight\n---\n\noutside\n' > "$P/outside.md"; h="$(sum "$P/outside.md")"
+rc=0; run close ../../outside completed >/dev/null 2>&1 || rc=$?
+check "a path-shaped id is refused (rc $rc), the file it names untouched" same "$rc:$(sum "$P/outside.md")" "2:$h"
+
+# ── task-enforce ─────────────────────────────────────────────────────────────
+echo "task-enforce"
+P="$T/te"; install "$P"
+te()   { ( cd "$P" && bash .claude/skills/task-enforce/task-enforce.sh "$@" ); }
+newt() { python3 "$P/.claude/bin/task" new --root "$P" --quiet --type change --by test-person "$1" | awk 'NR == 2 { sub(/^[[:space:]]+/, ""); print }'; }
+tid()  { basename "$1" | cut -d- -f1-2; }
+# i34 <task-file> — I-34 findings (a same-day edit bin/task did not record)
+# that check-tasks reports for this task. Empty if check-tasks gave no JSON.
+i34() {
+  python3 "$P/.claude/bin/check-tasks" --json "$P" 2>/dev/null | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+print(sum(1 for f in d.get("findings", [])
+          if f.get("invariant") == "I-34" and "/" + sys.argv[1] + "-" in "/" + f.get("file", "")))' "$(tid "$1")" 2>/dev/null
+}
+
+f="$(newt "hand-edit target")"; printf '\nhand edit\n' >> "$f"
+check "the I-34 probe sees a hand edit bin/task did not record ($(i34 "$f"))" same "$(i34 "$f")" 1
+
+f="$(newt "crlf target")"; to_crlf "$f"
+rc=0; te stamp "$(tid "$f")" x-owner bob >/dev/null 2>&1 || rc=$?
+check "stamp works on a CRLF task (rc $rc, x-owner: $(key "$f" x-owner))" same "$rc:$(key "$f" x-owner)" "0:bob"
+check "…and keeps CRLF on every line" same "$(lf_lines "$f")" 0
+
+f="$(newt "bom target")"; to_bom "$f"
+rc=0; te stamp "$(tid "$f")" x-owner bob >/dev/null 2>&1 || rc=$?
+check "stamp works on a task with a BOM (rc $rc)" same "$rc:$(key "$f" x-owner)" "0:bob"
+
+f="$(newt "fence target")"
+LC_ALL=C awk '/^---$/ { n++; if (n == 2) { print "--- "; next } } { print }' "$f" > "$f.x"; mv "$f.x" "$f"  # rfm-ok: builds the damaged fixture
+printf '\nx-owner: body-line\n\n---\n\nmore\n' >> "$f"
+te stamp "$(tid "$f")" x-owner bob >/dev/null 2>&1
+check "a trailing space on the fence: the body line is untouched" same "$(grep -c '^x-owner: body-line$' "$f")" 1
+check "…and x-owner lands in the frontmatter" same "$(key "$f" x-owner)" bob
+
+f="$(newt "duplicate target")"
+LC_ALL=C awk '{ print } /^updated: / && !d { print "updated: 1999-01-01"; d = 1 }' "$f" > "$f.x"; mv "$f.x" "$f"
+h="$(sum "$f")"
+rc=0; te stamp "$(tid "$f")" x-owner bob >/dev/null 2>&1 || rc=$?
+check "a duplicated key is refused (rc $rc), task byte-identical" same "$([ "$rc" -ne 0 ] && echo refused):$(sum "$f")" "refused:$h"
+
+all_tasks() { cat "$P"/tasks/*/TASK-*.md | cksum; }
+h="$(all_tasks)"
+rc=0; te stamp '*' x-owner bob >/dev/null 2>&1 || rc=$?
+check "a glob for an id is refused (rc $rc), no task touched" same "$rc:$(all_tasks)" "2:$h"
+
+f="$(newt "clean target")"
+te stamp "$(tid "$f")" x-owner bob >/dev/null 2>&1
+check "a clean stamp re-records the digest (I-34 for $(tid "$f"): $(i34 "$f"))" same "$(i34 "$f")" 0
+
+te on >/dev/null 2>&1
+mkdir -p "$P/src"; echo 'a = 1' > "$P/src/a.py"
+before="$(ls "$P"/tasks/triage/ | sort)"
+printf '{"tool_input":{"file_path":"%s"}}' "$P/src/a.py" | te guard >/dev/null 2>&1
+f="$(comm -13 <(printf '%s\n' "$before") <(ls "$P"/tasks/triage/ | sort) | head -1)"; f="$P/tasks/triage/$f"
+check "an unlinked code edit files a stub (x-origin: $(key "$f" x-origin))" same "$(key "$f" x-origin)" auto-fallback
+h1="$(grep -n '^# ' "$f" | head -1 | cut -d: -f1)"
+check "the stub's note sits under its heading" same "$(sed -n "$((h1 + 1))p;$((h1 + 2))p" "$f" | cut -c1-24 | tr '\n' '|')" '|> **Filed automatically*|'
+check "the stub's digest is recorded (I-34 for $(tid "$f"): $(i34 "$f"))" same "$(i34 "$f")" 0
+
+CH="$P/tasks/changes/$(date -u '+%Y-%m-%d')-$(tid "$f").md"
+rows0="$(grep -c '^| [0-9]' "$CH" 2>/dev/null || echo 0)"
+chmod 644 "$P/tasks/CHANGES.md"
+printf '{"tool_input":{"file_path":"src/x\\n| 00:00:00 | docs | `forged` |"}}' | te guard >/dev/null 2>&1
+check "a newline in a path adds exactly one change row" same "$(grep -c '^| [0-9]' "$CH")" "$((rows0 + 1))"
+check "…and forges none" same "$(grep -c '^| 00:00:00 |' "$CH" || true)" 0
+check "CHANGES.md keeps its mode ($(mode "$P/tasks/CHANGES.md"))" same "$(mode "$P/tasks/CHANGES.md")" "-rw-r--r--"
+
+# ── task-guard ───────────────────────────────────────────────────────────────
 echo "task-guard"
 P="$T/tg"; install "$P"
 ( cd "$P" && bash .claude/skills/task-guard/task-guard.sh on >/dev/null 2>&1 )

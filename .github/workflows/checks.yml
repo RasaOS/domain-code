@@ -103,7 +103,9 @@ jobs:
           PATH="$shim:$PATH" bash bin/test-root
 
       # The record writers: the release tracker's golden history and hostile
-      # values, and the writers driven inside a real bin/init install.
+      # values, the writers driven inside a real bin/init install (with
+      # 0.53.1's output as the golden), and the library's readers against the
+      # readers they replaced, on this repo's own ledger.
       - name: Record writers (mawk)
         run: |
           set -euo pipefail
@@ -111,6 +113,7 @@ jobs:
           ln -s "$(command -v mawk)" "$shim/awk"
           PATH="$shim:$PATH" bash bin/test-release
           PATH="$shim:$PATH" bash bin/test-writers
+          PATH="$shim:$PATH" bash bin/check-reader-parity
 
   macos:
     name: runs on stock macOS bash
@@ -146,6 +149,7 @@ jobs:
         run: |
           /bin/bash bin/test-release
           /bin/bash bin/test-writers
+          /bin/bash bin/check-reader-parity
 
       # The approval gate must (a) auto-approve under FORCE_APPROVAL=1 and
       # (b) fail CLOSED with no controlling terminal. A CI runner has no

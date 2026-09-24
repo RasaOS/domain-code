@@ -58,6 +58,7 @@ _rfm="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../lib/domain-code" 2>/dev/null &&
 # shellcheck source=../../lib/domain-code/frontmatter.sh
 . "$_rfm"
 rfm_require 1 || exit 70
+rfm_trap_cleanup   # an interrupted write leaves no temp file beside a task
 
 CONFIG_REL=".claude/task-enforcement.json"
 CC_TARGET=".claude/settings.json"
@@ -174,77 +175,114 @@ actor_handle() {
 }
 
 # task_annotate <root> <file> <key> <value> [<note>]
-# Upsert one frontmatter key, set `updated` to today, optionally put a note
-# under the H1, then re-record the task's digest row — what a bin/task verb
-# does after it writes. Without the re-digest, the validator would read this
-# write as an unrecorded same-day edit (I-34) on its next run.
+# Upsert one frontmatter key and set `updated` to today — one rename, through
+# the library — optionally put a note under the task's `# ` heading, then
+# re-record the task's digest row: what a bin/task verb does after it writes.
+# Without the re-digest, the validator would read this write as an unrecorded
+# same-day edit (I-34) on its next run.
+#
+# Before 0.54.0 this was a Python rewrite that matched the fences exactly: a
+# task with a BOM was refused as having no frontmatter, a CRLF task was
+# rewritten with LF line endings throughout, a trailing space on the closing
+# fence made it rewrite a BODY line, a key that appeared twice was rewritten
+# at its first copy only, and the file was rewritten in place.
 task_annotate() {
+  local root="$1" file="$2" key="$3" value="$4" note="${5:-}" today tid
+  today="$(date '+%Y-%m-%d')"
+  if [ -n "$note" ]; then
+    rfm_value_ok "$note" || [ $? -eq 3 ] || {
+      echo "error: refusing a task note with a newline or control character" >&2
+      return 2; }
+  fi
+  rfm_set "$file" "$key" "$value" updated "$today" || return $?
+  if [ -n "$note" ]; then task_note "$file" "$note" || return 1; fi
+  tid="$(rfm_get "$file" id 2>/dev/null || true)"
+  case "$tid" in
+    TASK-*) case "$tid" in *[!A-Za-z0-9.-]*) return 0 ;; esac ;;
+    *) return 0 ;;
+  esac
+  task_digest "$root" "$file" "$tid" "$today"
+}
+
+# task_note <file> <text> — put <text> under the task's `# ` heading after a
+# blank line, in the file's own line ending. A body edit, so it is not
+# rfm_set's; it uses the library's awk preamble (the same fences rfm_set
+# finds), a temp file beside the task that starts as a copy of it (the mode
+# is kept), and one rename. awk stops at the heading and tail copies the rest
+# byte for byte, as the library's writer does. No heading: nothing is written.
+task_note() {
+  local file="$1" dir tmp nrf k ro="" rc=0
+  dir="$(dirname "$file")"
+  tmp="$(mktemp "$dir/.rfm.XXXXXX")" || return 1
+  RFM_TMP="$tmp"; nrf="$tmp.nr"
+  [ "$(ls -ld "$file" | cut -c3)" = "-" ] && ro=1
+  cp -p "$file" "$tmp" 2>/dev/null || true
+  chmod u+w "$tmp" 2>/dev/null || true
+  TE_NOTE="$2" TE_NRF="$nrf" LC_ALL=C awk "$RFM_AWK"'
+    NR == 1 { fm = is_fence(line); print raw; next }
+    fm && is_fence(line) { fm = 0; print raw; next }
+    !fm && line ~ /^# / {
+      print raw; printf "%s\n%s%s\n", cr, ENVIRON["TE_NOTE"], cr
+      f = ENVIRON["TE_NRF"]; print NR > f; exit
+    }
+    { print raw }
+  ' "$file" > "$tmp" || rc=$?
+  k="$(cat "$nrf" 2>/dev/null || true)"
+  rm -f "$nrf"
+  case "$rc:$k" in
+    0:) rm -f "$tmp"; RFM_TMP=""; return 0 ;;           # no heading
+    0:*[!0-9]*) rc=1 ;;
+    0:*) tail -n +"$((k + 1))" "$file" >> "$tmp" || rc=1 ;;
+  esac
+  if [ "$rc" -eq 0 ]; then
+    [ -z "$ro" ] || chmod u-w "$tmp" 2>/dev/null || true
+    if mv -f "$tmp" "$file"; then RFM_TMP=""; return 0; fi
+  fi
+  rm -f "$tmp"; RFM_TMP=""
+  echo "error: could not add the note to $file — the note is not there" >&2
+  return 1
+}
+
+# task_digest <root> <file> <id> <updated> — re-record the task's row in
+# tasks/.state/digests.tsv, as bin/task's record_digest does. An unparseable
+# ledger is left alone: check-tasks re-seeds it, and says so.
+task_digest() {
   python3 - "$@" <<'PY'
-import datetime, hashlib, os, sys
-root, path, key, value = sys.argv[1:5]
-note = sys.argv[5] if len(sys.argv) > 5 else ""
-with open(path, encoding="utf-8") as fh:
-    lines = fh.read().split("\n")
-if not lines or lines[0] != "---" or "---" not in lines[1:]:
-    sys.stderr.write("error: %s has no frontmatter block\n" % path)
-    sys.exit(1)
-close = lines.index("---", 1)
-today = datetime.date.today().isoformat()
-
-
-def upsert(k, v):
-    global close
-    for i in range(1, close):
-        if lines[i].startswith(k + ":"):
-            lines[i] = "%s: %s" % (k, v)
-            return
-    lines.insert(close, "%s: %s" % (k, v))
-    close += 1
-
-
-upsert(key, value)
-upsert("updated", today)
-tid = ""
-for i in range(1, close):
-    if lines[i].startswith("id:"):
-        tid = lines[i].split(":", 1)[1].strip()
-if note:
-    for i in range(close + 1, len(lines)):
-        if lines[i].startswith("# "):
-            lines[i + 1:i + 1] = ["", note]
-            break
-with open(path, "w", encoding="utf-8") as fh:
-    fh.write("\n".join(lines))
-
+import hashlib, os, sys
+root, path, tid, updated = sys.argv[1:5]
 digests = os.path.join(root, "tasks", ".state", "digests.tsv")
-if tid and os.path.isfile(digests):
-    rows = {}
-    with open(digests, encoding="utf-8") as fh:
-        for ln in fh.read().split("\n"):
-            if not ln:
-                continue
-            f = ln.split("\t")
-            if len(f) != 4:
-                sys.exit(0)  # unparseable: check-tasks re-seeds it, and says so
-            rows[f[0]] = f
-    with open(path, "rb") as fh:
-        sha = hashlib.sha256(fh.read()).hexdigest()
-    rows[tid] = [tid, sha, today, os.path.basename(os.path.dirname(path))]
-    tmp = digests + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write("".join("\t".join(r) + "\n" for _, r in sorted(rows.items())))
-    os.replace(tmp, digests)
+if not os.path.isfile(digests):
+    sys.exit(0)
+rows = {}
+with open(digests, encoding="utf-8") as fh:
+    for ln in fh.read().split("\n"):
+        if not ln:
+            continue
+        f = ln.split("\t")
+        if len(f) != 4:
+            sys.exit(0)  # unparseable: check-tasks re-seeds it, and says so
+        rows[f[0]] = f
+with open(path, "rb") as fh:
+    sha = hashlib.sha256(fh.read()).hexdigest()
+rows[tid] = [tid, sha, updated, os.path.basename(os.path.dirname(path))]
+tmp = digests + ".tmp"
+with open(tmp, "w", encoding="utf-8") as fh:
+    fh.write("".join("\t".join(r) + "\n" for _, r in sorted(rows.items())))
+os.replace(tmp, digests)
 PY
 }
 
 mint_stub() {
   # mint_stub <root> <title> <origin> [trigger-path]  → prints the new id
   local root="$1" title="$2" origin="$3" trigger="${4:-}"
-  local drv by note out id file body=""
+  local drv by note out id file body="" shown=""
   drv="$(task_driver "$root")"
   [ -f "$drv" ] || return 1
   by="$(actor_handle)"
-  note="$origin"; [ -n "$trigger" ] && note="$origin: $trigger"
+  # The trigger is a file path: one line before it goes into the history note
+  # or the task body.
+  [ -z "$trigger" ] || shown="$(rfm_clean "$trigger")"
+  note="$origin"; [ -n "$shown" ] && note="$origin: $shown"
   if [ -n "$by" ]; then
     out="$(python3 "$drv" new --root "$root" --quiet --type change \
       --by "$by" --note "$note" "$title" </dev/null 2>/dev/null)" || return 1
@@ -257,7 +295,7 @@ mint_stub() {
   case "$id" in TASK-*) ;; *) return 1 ;; esac
   [ -f "$file" ] || return 1
   if [ "$origin" = "auto-fallback" ]; then
-    body="> **Filed automatically** because a code change${trigger:+ to \`$trigger\`} was attempted with no task linked. The title came from the file being edited, not from anyone's intent — rewrite it to say what this work IS, then graduate it into a phase or close it."
+    body="> **Filed automatically** because a code change${shown:+ to \`$shown\`} was attempted with no task linked. The title came from the file being edited, not from anyone's intent — rewrite it to say what this work IS, then graduate it into a phase or close it."
   fi
   task_annotate "$root" "$file" x-origin "$origin" "$body" || return 1
   printf '%s\n' "$id"
@@ -271,6 +309,10 @@ mint_stub() {
 ledger_row() {
   local root="$1" task="$2" rel="$3" klass="$4"
   local day dir f
+  # The task names a file here, so it must be a plain id; and the path is
+  # made one line — a newline in it used to append forged rows.
+  case "$task" in ''|.*|*[!A-Za-z0-9._-]*) task="" ;; esac
+  rel="$(rfm_clean "$rel")"
   day="$(date -u '+%Y-%m-%d')"
   dir="$root/tasks/changes"; mkdir -p "$dir"
   f="$dir/$day-${task:-unlinked}.md"
@@ -281,10 +323,17 @@ ledger_row() {
   printf '| %s | %s | `%s` |\n' "$(date -u '+%H:%M:%S')" "$klass" "$rel" >> "$f"
 }
 
+# CHANGES.md is built in memory and published with one same-directory rename
+# that keeps its mode (it used to be a temp in $TMPDIR, which left it 0600).
 ledger_index() {
-  local root="$1" out="$root/tasks/CHANGES.md" dir="$root/tasks/changes"
+  local root="$1" out="$root/tasks/CHANGES.md" dir="$root/tasks/changes" body
   [ -d "$dir" ] || return 0
-  local tmp; tmp="$(mktemp "${TMPDIR:-/tmp}/changes.XXXXXX")"
+  body="$(ledger_index_body "$dir")" || return 1
+  printf '%s\n' "$body" | rfm_write_atomic "$out"
+}
+
+ledger_index_body() {
+  local dir="$1"
   { echo "# Changes"; echo ""
     echo "<!-- GENERATED from tasks/changes/ — DO NOT HAND-EDIT. -->"; echo ""
     local f
@@ -295,7 +344,7 @@ ledger_index() {
       echo "## $(basename "$f" .md)"; echo ""
       sed -n '3,$p' "$f"; echo ""
     done < <(ls -1 "$dir"/*.md 2>/dev/null | sort -r || true)
-  } > "$tmp" && mv "$tmp" "$out"
+  }
 }
 
 # ------------------------------------------------------------- pointer
@@ -383,7 +432,7 @@ PY
 
   # Code change, nothing linked. Mint, link, deny once.
   local title id
-  title="work on $(basename "$rel")"
+  title="work on $(rfm_clean "$(basename "$rel")")"
   if id="$(mint_stub "$root" "$title" auto-fallback "$rel")"; then
     set_current "$root" "$id"
     ledger_row "$root" "$id" "$rel" code; ledger_index "$root"
@@ -463,22 +512,12 @@ cmd_status() {
 }
 
 # ---------- frontmatter read/write ----------
-# Read one key from a file's FIRST frontmatter block. Empty if absent or if
-# the file has no block. Never reads the body.
-fm_field() {
-  awk -v k="$2" '
-    NR==1 && $0=="---" { fm=1; next }
-    fm && $0=="---"    { exit }
-    fm {
-      if ($0 ~ "^"k"[[:space:]]*:") {
-        sub("^"k"[[:space:]]*:[[:space:]]*", "")
-        sub(/[[:space:]]+#.*$/, "")
-        sub(/[[:space:]]+$/, "")
-        print; exit
-      }
-    }
-  ' "$1" 2>/dev/null
-}
+# Read one key from a file's frontmatter. Empty if absent or if the file has
+# no readable block. Never reads the body. The library's scalar reader: it
+# keeps this reader's convention (a trailing ` # comment` is dropped), finds
+# the fences through a BOM, CRLF or a trailing blank, and — the one change —
+# unquotes a quoted value as YAML does, where 0.53.1 kept the quotes.
+fm_field() { rfm_get_scalar "$1" "$2" 2>/dev/null || true; }
 
 # stamp <TASK-NNN> <key> <value> — set one of this domain's own keys.
 #
@@ -491,6 +530,13 @@ fm_field() {
 cmd_stamp() {
   local id="$1" key="$2" val="$3" root file allowed=""
   root="$(repo_root)" || return 1
+  # The id becomes a find -name pattern: `*` used to stamp whichever task
+  # file find listed first.
+  case "$id" in
+    TASK-*) case "$id" in *[!A-Za-z0-9.-]*) id="" ;; esac ;;
+    *) id="" ;;
+  esac
+  [ -n "$id" ] || { echo "error: '$1' is not a task id (TASK-NNN)" >&2; return 2; }
 
   case "$key" in
     origin|owner|outcome|severity) key="x-$key" ;;

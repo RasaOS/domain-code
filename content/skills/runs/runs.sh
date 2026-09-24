@@ -51,6 +51,7 @@ _rfm="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../lib/domain-code" 2>/dev/null &&
 # shellcheck source=../../lib/domain-code/frontmatter.sh
 . "$_rfm"
 rfm_require 1 || exit 70
+rfm_trap_cleanup   # an interrupted write leaves no temp file beside a record
 
 VALID_KIND="mission auto-task auto-develop auto-test auto-phase auto-bug auto-hotfix manual"
 VALID_OUTCOME="completed stopped-at-gate failed abandoned"
@@ -60,43 +61,30 @@ VALID_OUTCOME="completed stopped-at-gate failed abandoned"
 # never past the repository top; see its comment for the order.
 repo_root() { rasa_root; }
 
-# rasa_actor — the ONE actor-resolution order across the Element.
-# See env-rules.md "RASA_ACTOR" and stamps.md "Stamp: run" -> actor.
-rasa_actor() {
-  local a="${RASA_ACTOR:-}"
-  [ -n "$a" ] || a="$(git config user.name 2>/dev/null || true)"
-  [ -n "$a" ] || a="$(whoami 2>/dev/null || true)"
-  [ -n "$a" ] || a="${USER:-unknown}"
-  printf '%s' "$a"
-}
-
-# An agent identifies itself by setting RASA_ACTOR. Absent that, a run is
+# The actor is the library's: rasa_actor, the ONE resolution order across the
+# Element (env-rules.md "RASA_ACTOR", stamps.md "Stamp: run" -> actor), which
+# refuses an identity carrying a control character; and rasa_actor_kind — an
+# agent identifies itself by setting RASA_ACTOR, and absent that a run is
 # attributed to the human whose identity the clone carries.
-actor_kind() {
-  if [ -n "${RASA_ACTOR:-}" ]; then printf 'agent'; else printf 'human'; fi
-}
 
 ROOT="$(repo_root)" || exit 1
 RUNS_DIR="$ROOT/tasks/runs"
 
 ensure_dirs() { mkdir -p "$RUNS_DIR"; }
 
-# Read one frontmatter key. Never reads the body.
-field() {
-  awk -v k="$2" '
-    NR==1 && $0=="---" { fm=1; next }
-    fm && $0=="---"    { exit }
-    fm {
-      if ($0 ~ "^"k"[[:space:]]*:") {
-        sub("^"k"[[:space:]]*:[[:space:]]*", "")
-        sub(/[[:space:]]+$/, "")
-        print; exit
-      }
-    }
-  ' "$1" 2>/dev/null
-}
+# Read one frontmatter key. Never reads the body. Empty when absent. The
+# library's reader: before 0.54.0 a CRLF record read as having no status, so
+# `close` refused it as "already ''" and the run stayed in-flight for good.
+field() { rfm_get "$1" "$2" 2>/dev/null || true; }
 
 record_path() { printf '%s/%s.md' "$RUNS_DIR" "$1"; }
+
+# A run id names a file in tasks/runs/, so it may not be a path.
+valid_id() {
+  case "$1" in
+    ''|*/*|.*) echo "error: bad run id '$1'" >&2; return 2 ;;
+  esac
+}
 
 cmd_open() {
   local kind="$1" refs="${2:-}"
@@ -104,6 +92,27 @@ cmd_open() {
     *" $kind "*) ;;
     *) echo "error: kind must be one of: $VALID_KIND" >&2; return 2 ;;
   esac
+  # Every value is checked, and the actor resolved, BEFORE the id is reserved.
+  # The reservation is the record file itself and is never removed, so a
+  # refusal after it would leave an empty record behind for good. (Before
+  # 0.54.0, RASA_ACTOR=$'bot\nstatus: completed' forged a sealed run.)
+  local who wkind
+  who="$(rasa_actor)" || return 2
+  wkind="$(rasa_actor_kind)"
+  rfm_check task_refs "$refs" || return 2
+
+  # `rev-parse` prints to stdout AND exits non-zero in a commit-less repo, so
+  # `$(cmd || echo unknown)` appends a second line and corrupts the record.
+  # `--verify --quiet` prints nothing and exits 1 cleanly — same idiom bin/init
+  # uses for ELEMENT_SHA (773d89b), kept identical on purpose so there is one
+  # lesson here and not two.
+  local sha branch
+  sha="$(git -C "$ROOT" rev-parse --verify --quiet --short HEAD 2>/dev/null || true)"
+  branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  [ -n "$sha" ] || sha="unknown"
+  { [ -n "$branch" ] && [ "$branch" != "HEAD" ]; } || branch="unknown"
+  rfm_check sha "$sha"       || return 2
+  rfm_check branch "$branch" || return 2
   ensure_dirs
 
   local stamp base id n
@@ -121,38 +130,29 @@ cmd_open() {
     [ "$n" -lt 1000 ] || { echo "error: cannot allocate a run id" >&2; return 1; }
   done
 
-  # `rev-parse` prints to stdout AND exits non-zero in a commit-less repo, so
-  # `$(cmd || echo unknown)` appends a second line and corrupts the record.
-  # `--verify --quiet` prints nothing and exits 1 cleanly — same idiom bin/init
-  # uses for ELEMENT_SHA (773d89b), kept identical on purpose so there is one
-  # lesson here and not two.
-  local sha branch
-  sha="$(git -C "$ROOT" rev-parse --verify --quiet --short HEAD 2>/dev/null || true)"
-  branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-  [ -n "$sha" ] || sha="unknown"
-  { [ -n "$branch" ] && [ "$branch" != "HEAD" ]; } || branch="unknown"
-
+  # Same keys, same order, same bytes as before 0.54.0 — every value was
+  # checked above, so no line below can be refused.
   {
     echo "---"
-    echo "run_id: $id"
-    echo "kind: $kind"
-    echo "actor: $(rasa_actor)"
-    echo "actor_kind: $(actor_kind)"
-    echo "status: in-flight"
-    echo "outcome: "
-    echo "gate: "
-    echo "task_refs: $refs"
-    echo "started: $(date -u '+%Y-%m-%d %H:%M UTC')"
-    echo "started_epoch: $(date -u '+%s')"
-    echo "finished: "
-    echo "duration_s: "
-    echo "sha: $sha"
-    echo "branch: $branch"
+    rfm_line run_id "$id"
+    rfm_line kind "$kind"
+    rfm_line actor "$who"
+    rfm_line actor_kind "$wkind"
+    rfm_line status in-flight
+    rfm_line outcome ""
+    rfm_line gate ""
+    rfm_line task_refs "$refs"
+    rfm_line started "$(date -u '+%Y-%m-%d %H:%M UTC')"
+    rfm_line started_epoch "$(date -u '+%s')"
+    rfm_line finished ""
+    rfm_line duration_s ""
+    rfm_line sha "$sha"
+    rfm_line branch "$branch"
     echo "---"
     echo ""
     echo "# $id"
     echo ""
-    echo "\`$kind\` run, opened by $(rasa_actor)."
+    echo "\`$kind\` run, opened by $who."
     echo ""
     echo "## Autonomy report"
     echo ""
@@ -169,6 +169,7 @@ cmd_close() {
     *" $outcome "*) ;;
     *) echo "error: outcome must be one of: $VALID_OUTCOME" >&2; return 2 ;;
   esac
+  valid_id "$id" || return 2
   local f; f="$(record_path "$id")"
   [ -f "$f" ] || { echo "error: no run record $id" >&2; return 1; }
 
@@ -178,28 +179,27 @@ cmd_close() {
     return 1
   }
 
+  # started_epoch is read from the file and must be digits before it meets
+  # shell arithmetic, where a value like `a[$(cmd)]` would run the command.
   local started_epoch now dur status
   started_epoch="$(field "$f" started_epoch)"
   now="$(date -u '+%s')"
-  if [ -n "$started_epoch" ]; then dur=$(( now - started_epoch )); else dur=""; fi
+  case "$started_epoch" in
+    ''|*[!0-9]*) dur="" ;;
+    *)           dur=$(( now - started_epoch )) ;;
+  esac
   case "$outcome" in
     completed) status="completed" ;;
     failed)    status="failed" ;;
     *)         status="stopped" ;;
   esac
 
-  local tmp; tmp="$(mktemp)"
-  awk -v st="$status" -v oc="$outcome" -v gt="$gate" \
-      -v fin="$(date -u '+%Y-%m-%d %H:%M UTC')" -v dur="$dur" '
-    NR==1 && $0=="---" { fm=1; print; next }
-    fm && $0=="---"    { fm=0; print; next }
-    fm && /^status:/     { print "status: " st; next }
-    fm && /^outcome:/    { print "outcome: " oc; next }
-    fm && /^gate:/       { print "gate: " gt; next }
-    fm && /^finished:/   { print "finished: " fin; next }
-    fm && /^duration_s:/ { print "duration_s: " dur; next }
-    { print }
-  ' "$f" > "$tmp" && mv "$tmp" "$f"
+  # All five keys in one rename, through the library: the record keeps its
+  # mode, BOM and line endings (the old awk wrote a temp in $TMPDIR, which left
+  # the record 0600), and a refusal leaves it byte-identical. The gate is free
+  # text written by a person or an agent: made one line, never refused.
+  rfm_set "$f" status "$status" outcome "$outcome" gate "$(rfm_clean "$gate")" \
+    finished "$(date -u '+%Y-%m-%d %H:%M UTC')" duration_s "$dur" || return 1
 
   echo "$id: $outcome${dur:+ (${dur}s)}"
 }

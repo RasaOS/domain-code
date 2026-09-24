@@ -73,11 +73,38 @@ rfm_require() {
   return 70
 }
 
+# The temp file of a write in flight, or empty. It sits beside the record, so
+# an interrupted write would leave a hidden .rfm.* in the ledger: a script
+# with no traps of its own calls rfm_trap_cleanup once; one with its own traps
+# calls rfm_cleanup from them.
+RFM_TMP=""
+
+# rfm_cleanup — remove the write in flight, if any. Never fails, so a trap
+# can call it without changing the exit status.
+rfm_cleanup() {
+  if [ -n "${RFM_TMP:-}" ]; then rm -f "$RFM_TMP" "$RFM_TMP.nr" 2>/dev/null || true; fi
+  RFM_TMP=""
+}
+
+rfm_trap_cleanup() {
+  trap 'rfm_cleanup' EXIT
+  trap 'rfm_cleanup; trap - EXIT; exit 130' INT
+  trap 'rfm_cleanup; trap - EXIT; exit 143' TERM
+}
+
 # ── values ───────────────────────────────────────────────────────────────────
-# rfm_value_ok <value> — V1. Returns 1 for a control character, 3 for a
-# leading or trailing blank.
+# rfm_value_ok <value> — V1, checked bytewise (C locale) so the verdict does
+# not depend on the caller's locale. Returns 1 for a control character — C0,
+# DEL, the C1 controls U+0080–U+009F (NEL among them, a line break to a
+# YAML 1.1 reader) and the Unicode line and paragraph separators U+2028 and
+# U+2029 — and 3 for a leading or trailing blank. Ordinary non-ASCII text
+# (é, —, CJK) passes. The C1 and separator rules are the contract lock's
+# (0.52.1), now every writer's.
 rfm_value_ok() {
-  case "$1" in *[[:cntrl:]]*) return 1 ;; esac
+  local LC_ALL=C
+  case "$1" in
+    *[[:cntrl:]]*|*$'\302'[$'\200'-$'\237']*|*$'\342\200\250'*|*$'\342\200\251'*) return 1 ;;
+  esac
   case "$1" in ' '*|*' ') return 3 ;; esac
   return 0
 }
@@ -97,11 +124,31 @@ _rfm_refuse() {
   return 2
 }
 
-# rfm_clean <text> — free text to one acceptable line: CR/LF/TAB runs become
-# one space, other control characters are dropped, the ends are trimmed.
+# rfm_check <key> <value> — rfm_value_ok with the refusal message, rc 2. For
+# callers that validate every value BEFORE reserving a record, so a refusal
+# never leaves a half-written file behind.
+rfm_check() { rfm_value_ok "$2" || { _rfm_refuse "$1" "" "$2"; return 2; }; }
+
+# rfm_clean <text> — free text to one acceptable line: line breaks (CR, LF,
+# NEL, U+2028, U+2029) and tabs become one space, every other control
+# character (C0, DEL, C1) is dropped, runs of spaces collapse, the ends are
+# trimmed. Bytewise throughout, so text after an invalid UTF-8 byte is kept
+# rather than silently cut.
 rfm_clean() {
-  printf '%s' "$1" | tr '\r\n\t' '   ' | LC_ALL=C tr -d '\000-\037\177' \
-    | sed 's/  */ /g; s/^ //; s/ $//'
+  local nel ls ps c1a c1b
+  nel="$(printf '\302\205')"; ls="$(printf '\342\200\250')"; ps="$(printf '\342\200\251')"
+  c1a="$(printf '\302\200')"; c1b="$(printf '\302\237')"
+  printf '%s' "$1" | LC_ALL=C tr '\r\n\t' '   ' | LC_ALL=C tr -d '\000-\037\177' \
+    | LC_ALL=C sed "s/$nel/ /g; s/$ls/ /g; s/$ps/ /g" \
+    | LC_ALL=C awk -v a="$c1a" -v b="$c1b" '{  # rfm-ok: constant byte bounds
+        out = ""; n = length($0)
+        for (i = 1; i <= n; i++) {
+          c = substr($0, i, 2)
+          if (length(c) == 2 && c >= a && c <= b) { i++; continue }
+          out = out substr($0, i, 1)
+        }
+        printf "%s", out }' \
+    | LC_ALL=C sed 's/  */ /g; s/^ //; s/ $//'
 }
 
 # ── the shared awk preamble ─────────────────────────────────────────────────
@@ -140,15 +187,23 @@ rfm_block() {
 
 rfm_has() { rfm_block "$1" >/dev/null 2>&1; }
 
-# rfm_get <file> <key> — the value, verbatim (R5).
+# rfm_get <file> <key> — the value, verbatim (R5). With RFM_STRICT=1 a key
+# that occurs twice is rc 4 instead of first-wins: for a value where a
+# first-wins reader and a last-wins (YAML) reader would disagree about the
+# same bytes, such as the contract lock's is_locked.
 rfm_get() {
   rfm_key_ok "${2:-}" || { echo "error: rfm_get: bad key '${2:-}'" >&2; return 2; }
   _rfm_readable "$1" || return 4
-  RFM_K="$2" LC_ALL=C awk "$RFM_AWK"'
+  RFM_K="$2" RFM_STRICT="${RFM_STRICT:-0}" LC_ALL=C awk "$RFM_AWK"'
     NR == 1 { if (!is_fence(line)) exit 3; open = 1; next }
     open && is_fence(line) { closed = 1; exit }
-    open && !found && key_is(line, ENVIRON["RFM_K"]) { val = value_of(line); found = 1 }
-    END { if (!closed) exit 3; if (!found) exit 1; print val }
+    open && key_is(line, ENVIRON["RFM_K"]) { if (found++) next; val = value_of(line) }
+    END {
+      if (!closed) exit 3
+      if (!found) exit 1
+      if (found > 1 && ENVIRON["RFM_STRICT"] == "1") exit 4
+      print val
+    }
   ' "$1"
 }
 
@@ -227,34 +282,32 @@ rfm_line() {
   printf '%s: %s\n' "$1" "$2"
 }
 
-# rfm_set <file> <key> <value> [<key> <value> ...] — upsert, one rename (V3-V5).
-rfm_set() {
-  local file="$1"; shift
-  [ $# -ge 2 ] && [ $(( $# % 2 )) -eq 0 ] || { echo "error: rfm_set: need key/value pairs" >&2; return 2; }
-  _rfm_readable "$file" || return 4
-  local n=0 k v
-  local -a pairs keys vals
-  pairs=(); keys=(); vals=()
-  while [ $# -gt 0 ]; do
-    k="$1"; v="$2"; shift 2
-    rfm_key_ok "$k" || { echo "error: bad frontmatter key '$k'" >&2; return 2; }
-    rfm_value_ok "$v" || { _rfm_refuse "$k" " to $file" "$v"; return 2; }
-    n=$(( n + 1 ))
-    pairs[${#pairs[@]}]="RFM_K$n=$k"
-    pairs[${#pairs[@]}]="RFM_V$n=$v"
-    keys[${#keys[@]}]="$k"; vals[${#vals[@]}]="$v"
-  done
-  local dir tmp rc=0
+# _rfm_rewrite <file> <bodyfile|""> [RFM_K1=k RFM_V1=v ...] — the one write
+# path (V3-V5). awk rewrites the frontmatter ONLY and stops at the closing
+# fence; the body is then copied byte-for-byte by tail — or, with a
+# <bodyfile>, replaced by it after one blank line in the file's own line
+# ending. (Streaming the body through awk lost everything after a NUL byte on
+# BWK awk.) The temp starts as a copy of the file, so the mode survives, and a
+# read-only file is written and then made read-only again. Values have been
+# validated by the caller.
+_rfm_rewrite() {
+  local file="$1" body="$2"; shift 2
+  local n=$(( $# / 2 )) dir tmp nrf ro="" rc=0 k
   dir="$(dirname "$file")"
   tmp="$(mktemp "$dir/.rfm.XXXXXX")" || { echo "error: cannot create a temp file in $dir" >&2; return 1; }
+  RFM_TMP="$tmp"; nrf="$tmp.nr"
+  [ "$(ls -ld "$file" | cut -c3)" = "-" ] && ro=1   # the owner write bit, not access
   cp -p "$file" "$tmp" 2>/dev/null || true
-  env "${pairs[@]}" RFM_N="$n" LC_ALL=C awk "$RFM_AWK"'
+  chmod u+w "$tmp" 2>/dev/null || true
+  env "$@" RFM_N="$n" RFM_NRF="$nrf" RFM_SEP="${body:+1}" LC_ALL=C awk "$RFM_AWK"'
     BEGIN { n = ENVIRON["RFM_N"] + 0
             for (i = 1; i <= n; i++) { K[i] = ENVIRON["RFM_K" i]; V[i] = ENVIRON["RFM_V" i] } }
     NR == 1 { if (!is_fence(line)) { bad = 3; exit } ; open = 1; print raw; next }
     open && is_fence(line) {
       for (i = 1; i <= n; i++) if (!done[i]) print K[i] ": " V[i] cr
-      open = 0; closed = 1; print raw; next
+      print raw
+      if (ENVIRON["RFM_SEP"] == "1") printf "%s\n", cr
+      f = ENVIRON["RFM_NRF"]; print NR > f; closed = 1; exit
     }
     open {
       for (i = 1; i <= n; i++) if (key_is(line, K[i])) {
@@ -265,35 +318,103 @@ rfm_set() {
     { print raw }
     END { if (bad) exit bad; if (!closed) exit 3 }
   ' "$file" > "$tmp" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    k="$(cat "$nrf" 2>/dev/null)"
+    case "$k" in ''|*[!0-9]*) rc=1 ;; esac
+  fi
+  if [ "$rc" -eq 0 ]; then
+    if [ -n "$body" ]; then cat "$body" >> "$tmp" || rc=1
+    else tail -n +"$((k + 1))" "$file" >> "$tmp" || rc=1
+    fi
+  fi
+  rm -f "$nrf"
   if [ "$rc" -ne 0 ]; then
-    rm -f "$tmp"
+    rm -f "$tmp"; RFM_TMP=""
     case "$rc" in
       3) echo "error: $file has no readable frontmatter block — nothing written" >&2 ;;
       5) echo "error: $file declares a key more than once — refusing to guess which is real; nothing written" >&2; rc=4 ;;
-      *) echo "error: rewriting $file failed (rc $rc) — nothing written" >&2 ;;
+      *) echo "error: rewriting $file failed — nothing written" >&2; rc=1 ;;
     esac
     return "$rc"
   fi
-  mv -f "$tmp" "$file" || { rm -f "$tmp"; echo "error: cannot replace $file" >&2; return 1; }
-  # Read back: what a reader sees must be what we meant to write.
+  [ -z "$ro" ] || chmod u-w "$tmp" 2>/dev/null || true
+  mv -f "$tmp" "$file" || { rm -f "$tmp"; RFM_TMP=""; echo "error: cannot replace $file" >&2; return 1; }
+  RFM_TMP=""
+  return 0
+}
+
+# _rfm_pairs <file> <key> <value> ... — validate key/value pairs (V1) and set
+# RFM_PAIRS (for env), RFM_KEYS and RFM_VALS (for the read-back). rc 2 on the
+# first refusal, before anything is written. A key given twice in one call is
+# refused: the rewrite would match the first and insert the second, writing
+# the very duplicate V3 exists to refuse.
+_rfm_pairs() {
+  local file="$1" n=0 k v i; shift
+  RFM_PAIRS=(); RFM_KEYS=(); RFM_VALS=()
+  while [ $# -gt 0 ]; do
+    k="$1"; v="${2-}"; shift 2 || { echo "error: need key/value pairs" >&2; return 2; }
+    rfm_key_ok "$k" || { echo "error: bad frontmatter key '$k'" >&2; return 2; }
+    i=0
+    while [ "$i" -lt "${#RFM_KEYS[@]}" ]; do
+      [ "${RFM_KEYS[$i]}" != "$k" ] || { echo "error: '$k' is given twice in one write to $file" >&2; return 2; }
+      i=$(( i + 1 ))
+    done
+    rfm_value_ok "$v" || { _rfm_refuse "$k" " to $file" "$v"; return 2; }
+    n=$(( n + 1 ))
+    RFM_PAIRS[${#RFM_PAIRS[@]}]="RFM_K$n=$k"
+    RFM_PAIRS[${#RFM_PAIRS[@]}]="RFM_V$n=$v"
+    RFM_KEYS[${#RFM_KEYS[@]}]="$k"; RFM_VALS[${#RFM_VALS[@]}]="$v"
+  done
+}
+
+# _rfm_readback <file> — what a reader sees must be what was meant.
+_rfm_readback() {
   local i=0 got
-  while [ "$i" -lt "$n" ]; do
-    got="$(rfm_get "$file" "${keys[$i]}")" || got="<unreadable>"
-    [ "$got" = "${vals[$i]}" ] || {
-      echo "error: wrote '${keys[$i]}' to $file but read back '$got'" >&2; return 1; }
+  while [ "$i" -lt "${#RFM_KEYS[@]}" ]; do
+    got="$(rfm_get "$1" "${RFM_KEYS[$i]}")" || got="<unreadable>"
+    [ "$got" = "${RFM_VALS[$i]}" ] || {
+      echo "error: wrote '${RFM_KEYS[$i]}' to $1 but read back '$got'" >&2; return 1; }
     i=$(( i + 1 ))
   done
-  return 0
+}
+
+# rfm_set <file> <key> <value> [<key> <value> ...] — upsert, one rename.
+rfm_set() {
+  local file="$1"; shift
+  [ $# -ge 2 ] && [ $(( $# % 2 )) -eq 0 ] || { echo "error: rfm_set: need key/value pairs" >&2; return 2; }
+  _rfm_readable "$file" || return 4
+  _rfm_pairs "$file" "$@" || return 2
+  _rfm_rewrite "$file" "" "${RFM_PAIRS[@]}" || return $?
+  _rfm_readback "$file"
+}
+
+# rfm_rewrite <file> <bodyfile> [<key> <value> ...] — replace everything after
+# the closing fence with <bodyfile> (one blank line after the fence) and
+# upsert the keys, in ONE rename. For a stamp whose body is regenerated whole.
+rfm_rewrite() {
+  local file="$1" body="${2:-}"; shift 2 || { echo "error: rfm_rewrite: need <file> <bodyfile>" >&2; return 2; }
+  [ -f "$body" ] || { echo "error: rfm_rewrite: no body file '$body'" >&2; return 2; }
+  [ $(( $# % 2 )) -eq 0 ] || { echo "error: rfm_rewrite: need key/value pairs" >&2; return 2; }
+  _rfm_readable "$file" || return 4
+  if [ $# -gt 0 ]; then
+    _rfm_pairs "$file" "$@" || return 2
+    _rfm_rewrite "$file" "$body" "${RFM_PAIRS[@]}" || return $?
+    _rfm_readback "$file"
+  else
+    _rfm_rewrite "$file" "$body"
+  fi
 }
 
 # rfm_write_atomic <dest> — stdin to <dest> via a same-directory rename. For
 # generated views (DEPLOYS.md, CONTRACTS.md) that are rewritten whole. Keeps
-# an existing file's mode.
+# an existing file's mode; a new file gets the umask's, not mktemp's 0600.
 rfm_write_atomic() {
   local dest="$1" dir tmp
   dir="$(dirname "$dest")"
   tmp="$(mktemp "$dir/.rfm.XXXXXX")" || { echo "error: cannot create a temp file in $dir" >&2; return 1; }
-  [ -f "$dest" ] && cp -p "$dest" "$tmp" 2>/dev/null
+  if [ -f "$dest" ]; then cp -p "$dest" "$tmp" 2>/dev/null
+  else chmod "$(printf '%o' $(( 0666 & ~0$(umask) )))" "$tmp" 2>/dev/null
+  fi
   if cat > "$tmp"; then
     mv -f "$tmp" "$dest" && return 0
   fi

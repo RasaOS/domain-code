@@ -136,6 +136,12 @@ for f in dup unterminated no-fm empty; do
 done
 cp "$FX/dup.md" "$T/d.md"; rc=0; rfm_set "$T/d.md" status success 2>/dev/null || rc=$?
 [ "$rc" = 4 ] || bad "duplicate key: rc $rc, want 4"
+cp "$FX/lf.md" "$T/twice.md"; before="$(sum "$T/twice.md")"
+for k in status x-absent; do   # a key present in the file, and one it lacks
+  rc=0; rfm_set "$T/twice.md" "$k" a "$k" b 2>/dev/null || rc=$?
+  [ "$rc" = 2 ] || bad "a key given twice in one write ($k): rc $rc, want 2"
+done
+[ "$(sum "$T/twice.md")" = "$before" ] || bad "a key given twice in one write still changed the file"
 cp "$FX/lf.md" "$T/v.md"; before="$(sum "$T/v.md")"
 for v in "$(printf 'a\nstatus: forged')" "$(printf 'a\rb')" "$(printf 'a\tb')" ' lead' 'trail '; do
   rc=0; rfm_set "$T/v.md" owner "$v" 2>/dev/null || rc=$?
@@ -148,6 +154,40 @@ rfm_set "$T/v.md" owner 'a\nstatus: forged' 2>/dev/null || bad "literal backslas
 [ "$(rfm_get "$T/v.md" owner)" = 'a\nstatus: forged' ] || bad "literal backslash-n was expanded"
 [ "$(rfm_get "$T/v.md" status)" = in-flight ] || bad "literal backslash-n forged a key"
 [ -z "$(ls -A "$T" | grep '^\.rfm' || true)" ] || bad "temp files left behind"
+printf -- '---\nid: N-1\nstatus: in-flight\n---\n\nbefore\000after NUL\n' > "$T/nul.md"
+rfm_set "$T/nul.md" status success 2>/dev/null || bad "rfm_set on a NUL body failed"
+[ "$(tail -c 11 "$T/nul.md" | od -An -tx1 | tr -d ' \n')" = "006166746572204e554c0a" ] \
+  || bad "a NUL byte in the body was not preserved ($(tail -c 11 "$T/nul.md" | od -An -tx1 | tr -d ' \n'))"
+cp "$FX/lf.md" "$T/ro.md"; chmod 444 "$T/ro.md"
+rfm_set "$T/ro.md" status success 2>/dev/null || bad "rfm_set on a read-only file failed"
+[ "$(mode "$T/ro.md")" = "-r--r--r--" ] || bad "a read-only file came back $(mode "$T/ro.md")"
+[ -z "$RFM_TMP" ] || bad "RFM_TMP still names a temp after a write"
+( cd "$T" && : > .nr && RFM_TMP="" && rfm_cleanup && [ -e .nr ] ) || bad "rfm_cleanup with nothing in flight removed a file"
+rm -f "$T/.nr"; : > "$T/inflight"; : > "$T/inflight.nr"
+( RFM_TMP="$T/inflight"; rfm_cleanup; [ -z "$RFM_TMP" ] ) || bad "rfm_cleanup left RFM_TMP set"
+[ ! -e "$T/inflight" ] && [ ! -e "$T/inflight.nr" ] || bad "rfm_cleanup left the write in flight behind"
+rc=0; "${BASH:-bash}" -c '. "$1"; rfm_trap_cleanup; RFM_TMP="$2"; : > "$RFM_TMP"; kill -TERM $$; sleep 5' \
+  _ "$LIBDIR/frontmatter.sh" "$T/killed" 2>/dev/null || rc=$?
+[ "$rc" = 143 ] && [ ! -e "$T/killed" ] || bad "rfm_trap_cleanup: a TERM left the write in flight behind (rc $rc)"
+( umask 022; printf 'view\n' | rfm_write_atomic "$T/view-new.md" ) || bad "rfm_write_atomic failed on a new file"
+[ "$(mode "$T/view-new.md")" = "-rw-r--r--" ] || bad "a new view came back $(mode "$T/view-new.md") under umask 022"
+chmod 640 "$T/view-new.md"; printf 'view 2\n' | rfm_write_atomic "$T/view-new.md" || bad "rfm_write_atomic failed on an existing file"
+[ "$(mode "$T/view-new.md"):$(cat "$T/view-new.md")" = "-rw-r-----:view 2" ] || bad "a rewritten view lost its mode or content"
+for v in "$(printf 'a\302\205b')" "$(printf 'a\302\233b')" "$(printf 'a\342\200\250b')" "$(printf 'a\342\200\251b')"; do
+  rc=0; rfm_value_ok "$v" || rc=$?
+  [ "$rc" = 1 ] || bad "a C1 control or line separator was accepted ($(printf '%s' "$v" | od -An -tx1 | tr -d ' \n'))"
+  rfm_value_ok "$(rfm_clean "$v")" || bad "rfm_clean left an unwritable value"
+done
+rfm_value_ok "café — 東京" || bad "ordinary non-ASCII text was refused"
+cp "$FX/dup.md" "$T/s.md"; rc=0; RFM_STRICT=1 rfm_get "$T/s.md" status >/dev/null 2>&1 || rc=$?
+[ "$rc" = 4 ] || bad "RFM_STRICT=1: a duplicated key read as rc $rc, want 4"
+[ "$(rfm_get "$T/s.md" status)" = in-flight ] || bad "first-wins read of a duplicated key"
+for f in lf crlf; do
+  cp "$FX/$f.md" "$T/rw-$f.md"; printf 'new body\n' > "$T/body"
+  rfm_rewrite "$T/rw-$f.md" "$T/body" status done 2>/dev/null || bad "$f: rfm_rewrite failed"
+  [ "$(rfm_get "$T/rw-$f.md" status)" = done ] || bad "$f: rfm_rewrite did not set the key"
+  [ "$(rfm_body "$T/rw-$f.md" | tr -d '\r')" = "$(printf '\nnew body')" ] || bad "$f: the body was not replaced"
+done
 ( RASA_ACTOR="$(printf 'bot\nstatus: success')"; if rasa_actor >/dev/null 2>&1; then exit 1; fi ) \
   || bad "rasa_actor accepted a control character"
 ( RASA_ACTOR="$(printf '%0129d' 0)"; if rasa_actor >/dev/null 2>&1; then exit 1; fi ) \
@@ -184,7 +224,7 @@ hits="$(git grep -n -E \
   -e '> *"\$tmp" *&& *mv ' \
   -e 'awk [^|]*-v +[A-Za-z_]+="\$' \
   -e 'sed -i' -e '\\\\A---' \
-  -- content bin ':!content/lib/*' ':!bin/check-frontmatter' ':!*.md' "${excl[@]}" | grep -v '# rfm-ok:' || true)"
+  -- content bin ':!content/lib/*' ':!bin/check-frontmatter' ':!bin/check-reader-parity' ':!*.md' "${excl[@]}" | grep -v '# rfm-ok:' || true)"
 if [ -n "$hits" ]; then
   n="$(printf '%s\n' "$hits" | grep -c .)"
   if [ "$STRICT" = 1 ]; then
