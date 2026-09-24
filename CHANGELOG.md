@@ -24,6 +24,152 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.54.0 — 2026-09-24
+
+**Preventive: no data migration, and no damaged record.** Every record this
+Element writes is a markdown file that opens with a `---` block: deploy and
+env-transfer records, run records, task files, contract, env-var and test
+stamps, the release tracker. Until now each script carried its own awk for
+that block, and they disagreed. This release gives them one reader and one
+writer. Three defect classes are closed before they could damage a record;
+none had, in any ledger this release was checked against.
+
+- **W1:** a trailing space on the closing fence made writers rewrite body
+  lines that looked like `key:` lines, rc 0.
+- **W2:** a BOM or CRLF made line 1 never exactly `---`. A deploy close then
+  did nothing, so the record stayed in-flight, rc 0.
+- **W3:** a newline in a value forged keys, through a raw `echo "k: $v"` or
+  `awk -v` (which also turns a literal `\n` into a real one).
+
+### Still not for existing installations
+
+The v0.53.1 notice stands. Do not upgrade an installed project to 0.54.0
+yet. Tools outside this Element that read or write the task ledger directly
+have not been updated for the 0.53 ledger shape, and nothing in this release
+changes them. The upgrade opens for each installation once its readers have
+been checked against this release. New installations are unaffected.
+
+### One reader and writer for every record (TASK-065)
+
+- `.claude/lib/domain-code/frontmatter.sh` (new), with its Python twin
+  `frontmatter.py`, sourced by skills relative to their own path.
+- **Reading:** a BOM and CRLF are ignored. A fence is `---` plus blanks, and
+  the opening fence is line 1. The first occurrence of a key wins. Values are
+  returned verbatim.
+- **Writing:**
+  - A newline, a control character or a blank-edged value is refused (rc 2).
+  - Values are written verbatim, never quoted.
+  - A missing key is inserted and a duplicated one refused.
+  - Untouched bytes and the file mode are kept.
+  - A same-directory temp file is renamed into place, then read back.
+- One actor lookup, `rasa_actor`.
+- `bin/check-frontmatter` is the proof:
+  - a 74-row corpus run through both twins;
+  - the writer contract;
+  - a YAML round-trip;
+  - a grep gate over shipped code, now a hard CI step;
+  - a mutation that must fail the corpus.
+
+### The install root never leaves the repository (TASK-066)
+
+- `rasa_root` finds the project an install serves:
+  1. an explicit root or `RASA_ROOT`;
+  2. else the install that owns the calling script;
+  3. else a walk up from the current directory.
+- It never crosses the enclosing repository's top. So a per-package install
+  in a monorepo resolves to its package, and a repository nested inside
+  another never resolves to the parent. `git rev-parse --show-toplevel`,
+  which 16 scripts used, did neither.
+- A script run inside the Element's own checkout now needs `RASA_ROOT=.`.
+
+### The writers (TASK-067, TASK-068, TASK-070)
+
+On clean input every converted writer produces the bytes 0.53.1 did.
+`test/writers/` holds goldens written by 0.53.1's own scripts. What
+changes is what they refuse or survive:
+
+- **Identity.** An actor (`RASA_ACTOR`, else git `user.name`, else the OS
+  user) that carries a control character or is longer than 128 characters is
+  refused before anything is written. Before, `RASA_ACTOR=$'bot\nstatus:
+  success'` made an in-flight deploy read as a success.
+  - This applies in deploys, runs, env-sync, contract, `build/deploy` and the
+    approval gate.
+  - task-guard records the identity as refused and never blocks a commit.
+  - `contract.sh` now honours `RASA_ACTOR`.
+- **Reservation.** A record's values are checked before its id is reserved,
+  so a refusal leaves no empty record behind.
+- **Closing.** A path-shaped id is refused.
+  - `deploys.sh close` refuses a duration that is not whole seconds.
+  - `runs.sh close` passes `started_epoch` to shell arithmetic only when it is
+    digits. **0.53.1 ran a command planted there** (`BASH_VERSINFO[$(cmd)]`,
+    stock macOS bash).
+- **Bytes.** Writes keep a BOM, CRLF, the body and the file mode. The
+  writers that renamed a temp from `$TMPDIR` over a record left it 0600:
+  deploys, runs, the release tracker, `DEPLOYS.md` and `CHANGES.md`.
+  task-enforce's `stamp` rewrote a CRLF task as LF. A duplicated key is
+  refused with the file byte-identical.
+- **`import-env add`.** A stamp is committed, so:
+  - a `--default` for a secret that is not required is refused (exit 3);
+  - a URL default carrying a password is refused (exit 3);
+  - with `--purpose` omitted, the classifier's purpose is used;
+  - an explicit `--purpose` wins, with a warning when it disagrees;
+  - every flag goes through the writer, the key must be a variable name, and
+    array items must be `[A-Za-z0-9._/-]`.
+- **`import-env add-profile`.** It rewrites the frontmatter value, not the
+  whole file, and matches whole items (`prod` was never added beside
+  `prod-eu`).
+- **env-sync.** It checks the actor, the names and a writable ledger before
+  anything is sent. It no longer returns 0 when a transfer could not be
+  recorded.
+- **`git-guard off`.** It keeps a shared pre-commit hook executable. Before,
+  it disabled every other hook in the file.
+
+### The readers (TASK-069)
+
+- `rasa_actor` exists once, in the library.
+- These now read through the library: the test gate (`suite-lib.sh`),
+  export-env, import-env, secrets, status, the dashboard, environment and
+  runtime.
+  - A test suite with a BOM no longer reads as zero tests.
+  - A suite block that never closes fails the gate (rc 3) rather than
+    counting zero tests.
+  - `environment validate` names a stamp it cannot parse instead of silently
+    skipping it.
+- task-enforce reads a quoted value unquoted, as YAML does. 0.53.1 kept the
+  quotes.
+- `bin/check-reader-parity` compares 0.53.1's readers with the library's,
+  key by key. There are 0 differences on this repository's ledger. Across
+  6,828 comparisons in seven RasaOS ledgers, the only differences are that
+  unquoting.
+
+### `task-enforce.sh doctor [<root>]` (TASK-071)
+
+- A read-only check of every record kind. It has no `--fix` and writes
+  nothing, so it can be pointed at any project before it takes a release.
+- It fails on a BOM, a CR, a bad fence, a duplicated key, an escaped value, a
+  forged run actor, a blank index row or a second approval line.
+- It warns on drift.
+- It never prints a value.
+
+### Tests and CI
+
+- New suites: `bin/test-writers` (88 cases, 51 fail against 0.53.1),
+  `bin/test-readers` (31), `bin/test-root` (21), `bin/test-release` (16).
+- `bin/test-contract` now has 40 cases.
+- The ubuntu job installs PyYAML through `actions/setup-python`, because the
+  runner's system Python refuses `pip install` (PEP 668).
+
+### Filed, not worked
+
+- TASK-072: the shipped outcome.
+- TASK-073: `bin/init --plan`.
+- TASK-074: "via invocation" approvals.
+- TASK-075: main changes only through a merged pull request.
+
+All four belong to the deploy and release work that follows this release.
+
+---
+
 ## v0.53.1 — 2026-09-23
 
 ### 0.53.x is not for existing installations yet (TASK-063)

@@ -18,7 +18,7 @@ the Element primitive) was locked to canon vocabulary in the
 2026-05-22 drift-fix pass. See `~/rAI/rasa-os/DRIFT_REPORT.md` for
 the audit trail.
 
-**Version:** 0.53.1 — see `CHANGELOG.md`.
+**Version:** 0.54.0 — see `CHANGELOG.md`.
 
 ---
 
@@ -54,11 +54,11 @@ leaves the result uncommitted, and writes `tasks/MIGRATION-REVIEW.md` with
 every judgement it could not make.
 
 > **Not yet for existing installations.** Do not upgrade an installed
-> project to 0.53.x. The ledger shape changed, and tools outside this
+> project to 0.53.x or 0.54.0. The ledger shape changed, and tools outside this
 > Element that read or write task frontmatter directly (a board, a
 > dispatcher) have not been updated for it. Existing installations stay on
 > the version they have until a later release opens the upgrade; new
-> installations are unaffected. See CHANGELOG v0.53.1.
+> installations are unaffected. See CHANGELOG v0.53.1 and v0.54.0.
 
 Once it opens, `/sync` does it with a plan first and a decision on every
 locally edited file (`/sync-all` for hands-off); a project whose `/sync`
