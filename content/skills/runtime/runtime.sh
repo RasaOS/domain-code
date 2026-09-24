@@ -11,6 +11,16 @@
 
 set -euo pipefail
 
+# The shared record library — rasa_root, the frontmatter reader and writer,
+# rasa_actor. Found relative to this script (content/lib/domain-code/ in the
+# Element, .claude/lib/domain-code/ in an install), never through the project
+# root it exists to resolve.
+_rfm="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../lib/domain-code" 2>/dev/null && pwd)/frontmatter.sh"
+[ -f "$_rfm" ] || { echo "error: $(basename "$0"): .claude/lib/domain-code/frontmatter.sh is missing — re-run the Element's bin/init" >&2; exit 70; }
+# shellcheck source=../../lib/domain-code/frontmatter.sh
+. "$_rfm"
+rfm_require 1 || exit 70
+
 usage() {
   cat <<'EOF'
 runtime.sh — preflight + env validation for .claude/runtimes/<name>.md
@@ -42,15 +52,10 @@ EXIT CODES:
 EOF
 }
 
-# Resolve worktree root.
-project_root() {
-  local top
-  top="$(git rev-parse --show-toplevel 2>/dev/null)" || {
-    echo "error: not inside a git repo" >&2
-    return 1
-  }
-  ( cd -P "$top" 2>/dev/null && pwd -P )
-}
+# The project this install serves — its ledgers and .claude/ live here.
+# rasa_root (the shared library) walks up to the install's lockfile and
+# never past the repository top; see its comment for the order.
+project_root() { rasa_root; }
 
 require_python3_yaml() {
   command -v python3 >/dev/null 2>&1 || {
@@ -124,7 +129,7 @@ _run_check() {
   local root
   root="$(project_root)" || return 1
 
-  python3 - "$file" "$profile" "$root" "$mode" <<'PY'
+  python3 -B - "$file" "$profile" "$root" "$mode" "$(dirname "$_rfm")" <<'PY'
 import sys, os, subprocess, re
 
 try:
@@ -134,20 +139,37 @@ except ImportError:
     sys.exit(1)
 
 file_path, profile, repo_root, mode = sys.argv[1:5]
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[5])
+import frontmatter as rfm            # the Element's one reader (frontmatter.py)
 
-# Parse frontmatter from the .md file.
-with open(file_path) as f:
-    content = f.read()
+# The stamp's frontmatter block, found by the Element's one reader (a BOM,
+# CRLF and a blank after a fence are fine — the exact-fence regex this
+# replaced reported such a stamp as having no frontmatter). What the block
+# holds is nested YAML, so PyYAML parses that.
+try:
+    with open(file_path, encoding="utf-8") as f:
+        content = f.read()
+except (OSError, UnicodeDecodeError) as e:
+    print(f"error: cannot read {file_path}: {e}", file=sys.stderr)
+    sys.exit(1)
 
-m = re.match(r'^---\n(.*?)\n---\n', content, re.DOTALL)
-if not m:
+try:
+    lines, _ = rfm.split(content)
+except ValueError:
+    print(f"error: the frontmatter block in {file_path} is never closed", file=sys.stderr)
+    sys.exit(1)
+if lines is None:
     print(f"error: no YAML frontmatter found in {file_path}", file=sys.stderr)
     sys.exit(1)
 
 try:
-    stamp = yaml.safe_load(m.group(1)) or {}
+    stamp = yaml.safe_load("\n".join(lines)) or {}
 except yaml.YAMLError as e:
-    print(f"error: invalid YAML in {file_path}: {e}", file=sys.stderr)
+    print(f"error: invalid YAML in {file_path} (a value holding ': ' needs quotes): {e}", file=sys.stderr)
+    sys.exit(1)
+if not isinstance(stamp, dict):
+    print(f"error: the frontmatter in {file_path} is not a mapping", file=sys.stderr)
     sys.exit(1)
 
 # Resolve env file from profile.

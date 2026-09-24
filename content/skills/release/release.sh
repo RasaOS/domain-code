@@ -43,34 +43,24 @@
 
 set -euo pipefail
 
+# The shared record library — rasa_root, the frontmatter reader and writer,
+# rasa_actor. Found relative to this script (content/lib/domain-code/ in the
+# Element, .claude/lib/domain-code/ in an install), never through the project
+# root it exists to resolve.
+_rfm="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../lib/domain-code" 2>/dev/null && pwd)/frontmatter.sh"
+[ -f "$_rfm" ] || { echo "error: $(basename "$0"): .claude/lib/domain-code/frontmatter.sh is missing — re-run the Element's bin/init" >&2; exit 70; }
+# shellcheck source=../../lib/domain-code/frontmatter.sh
+. "$_rfm"
+rfm_require 1 || exit 70
+
 GLYPH_PLANNED='📋'
 GLYPH_NEXT='🚧'
 GLYPH_SHIPPED='✅'
 
-# rasa_actor — the ONE actor-resolution order across the Element.
-#
-#   RASA_ACTOR  -> set by a runner, CI job or agent harness. The knob.
-#   git identity -> the human configured in this clone.
-#   OS user      -> last resort.
-#
-# Canonical definition: stamps.md, "Stamp: run" -> actor. Before this existed,
-# five sites called $(whoami) directly, so a service account running an agent
-# was recorded in the ledger exactly as a human would be.
-rasa_actor() {
-  local a="${RASA_ACTOR:-}"
-  [ -n "$a" ] || a="$(git config user.name 2>/dev/null || true)"
-  [ -n "$a" ] || a="$(whoami 2>/dev/null || true)"
-  [ -n "$a" ] || a="${USER:-unknown}"
-  printf '%s' "$a"
-}
-
-repo_root() {
-  local d
-  if d="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-    printf '%s\n' "$d"; return 0
-  fi
-  echo "error: not inside a git repo" >&2; return 1
-}
+# The project this install serves — its ledgers and .claude/ live here.
+# rasa_root (the shared library) walks up to the install's lockfile and
+# never past the repository top; see its comment for the order.
+repo_root() { rasa_root; }
 ROOT="$(repo_root)" || exit 1
 LEDGER="$ROOT/tasks/RELEASES.md"
 
@@ -83,6 +73,20 @@ require_ledger() {
   echo "error: $LEDGER does not exist." >&2
   echo "       Create a release with: /release-plan v<X.Y.Z>" >&2
   return 1
+}
+
+# _line_ok <what> <value> — a value that becomes part of one tracker line may
+# not carry a newline or any other control character. Before 0.54.0 a newline
+# in a theme, a title or an approver wrote extra lines into RELEASES.md —
+# a second **Approved.** line, a forged heading — and `awk -v` turned even a
+# literal `\n` into one. Every command checks its values with this BEFORE its
+# first write, so a refusal leaves the tracker byte-identical.
+_line_ok() {
+  case "$2" in *[[:cntrl:]]*)
+    echo "error: refusing $1 — it contains a newline or control character; nothing written" >&2
+    return 2 ;;
+  esac
+  return 0
 }
 
 # An id is matched as a WHOLE token. `grep TASK-018` also matches
@@ -109,8 +113,8 @@ valid_id() {
 # Print the body of one release section (everything under its heading).
 section_body() {
   local version="$1"
-  ledger_text | awk -v v="## $version " '
-    index($0, v) == 1 { inside = 1; next }
+  ledger_text | RV_V="## $version " awk '
+    index($0, ENVIRON["RV_V"]) == 1 { inside = 1; next }
     /^## v/          { if (inside) exit }
     inside           { print }
   '
@@ -119,8 +123,8 @@ section_body() {
 # Print the bullets under one subsection of one release.
 subsection() {
   local version="$1" want_sub="$2"
-  section_body "$version" | awk -v s="### $want_sub" '
-    $0 == s   { inside = 1; next }
+  section_body "$version" | RV_S="### $want_sub" awk '
+    $0 == ENVIRON["RV_S"] { inside = 1; next }
     /^### /   { if (inside) exit }
     /^## /    { if (inside) exit }
     inside && /^- / { print }
@@ -279,9 +283,22 @@ cmd_check() {
 }
 
 # ----------------------------------------------------------------- write
-# Every mutation writes through a temp file and moves it into place, so an
-# interrupted run cannot leave a half-written tracker.
-replace_ledger() { mv "$1" "$LEDGER"; }
+# Every mutation writes a temp file BESIDE the ledger and renames it into
+# place, so an interrupted run cannot leave a half-written tracker. The temp
+# starts as a copy of the ledger, so it carries the ledger's mode: before
+# 0.54.0 it came from $TMPDIR (mktemp's 0600) and every write left
+# RELEASES.md readable by its owner only.
+# The temp name carries this process's id ($$ is the same in every subshell),
+# so the exit trap removes what an interrupted run left, and nothing else.
+_ledger_tmp() {
+  local tmp
+  tmp="$(mktemp "$(dirname "$LEDGER")/.releases.$$.XXXXXX")" || {
+    echo "error: cannot create a temp file beside $LEDGER" >&2; return 1; }
+  [ -f "$LEDGER" ] && cp -p "$LEDGER" "$tmp" 2>/dev/null
+  printf '%s\n' "$tmp"
+}
+trap 'rm -f "$(dirname "$LEDGER")"/.releases.$$.* 2>/dev/null' EXIT
+replace_ledger() { mv -f "$1" "$LEDGER"; }
 
 cmd_create() {
   local version="$1"; shift
@@ -294,6 +311,9 @@ cmd_create() {
     esac
   done
   valid_version "$version" || { echo "error: '$version' is not v<semver>" >&2; return 2; }
+  _line_ok "the version" "$version" || return 2
+  _line_ok "the theme" "$theme" || return 2
+  _line_ok "the target" "$target" || return 2
 
   mkdir -p "$ROOT/tasks"
   if [ ! -f "$LEDGER" ]; then
@@ -313,9 +333,11 @@ cmd_create() {
     echo "error: $version already has an entry" >&2; return 3
   fi
 
-  local tmp; tmp="$(mktemp "${TMPDIR:-/tmp}/rel.XXXXXX")"
-  awk -v ver="$version" -v glyph="$GLYPH_PLANNED" -v theme="$theme" -v target="$target" '
-    BEGIN { placed = 0 }
+  local tmp; tmp="$(_ledger_tmp)"
+  RV_VER="$version" RV_GLYPH="$GLYPH_PLANNED" RV_THEME="$theme" RV_TARGET="$target" awk '
+    BEGIN { placed = 0
+            ver = ENVIRON["RV_VER"]; glyph = ENVIRON["RV_GLYPH"]
+            theme = ENVIRON["RV_THEME"]; target = ENVIRON["RV_TARGET"] }
     /^## v/ && !placed {
       print "## " ver " — " glyph " Planned"
       print ""
@@ -354,20 +376,22 @@ cmd_create() {
 # layers of every release so an id can never appear twice.
 _place() {
   local id="$1" title="$2" version="$3" want_sub="$4" strip_sub="$5"
-  local tmp; tmp="$(mktemp "${TMPDIR:-/tmp}/rel.XXXXXX")"
+  local tmp; tmp="$(_ledger_tmp)"
   # NOTE: the awk variable is `want`, not `sub` — `sub` is a reserved awk
   # FUNCTION name and BSD awk rejects it as a variable outright.
   #
   # The bullet is APPENDED at the end of its section, not inserted after
   # the heading: release-add/SKILL.md keeps merge order, and a manifest
   # that reads backwards is a manifest people stop trusting.
-  awk -v id="$id" -v title="$title" -v ver="## $version " -v want="### $want_sub" \
-      -v strip="$strip_sub" '
+  RV_ID="$id" RV_TITLE="$title" RV_VER="## $version " RV_WANT="### $want_sub" \
+      RV_STRIP="$strip_sub" awk '
     function is_target_line(l) { return index(l, "- " id " — ") == 1 }
     function flush_pending() {
       if (insub && !placed) { print "- " id " — " title; placed = 1 }
     }
-    BEGIN { inver = 0; insub = 0; instrip = 0; placed = 0 }
+    BEGIN { inver = 0; insub = 0; instrip = 0; placed = 0
+            id = ENVIRON["RV_ID"]; title = ENVIRON["RV_TITLE"]; ver = ENVIRON["RV_VER"]
+            want = ENVIRON["RV_WANT"]; strip = ENVIRON["RV_STRIP"] }
     {
       line = $0
       if (index(line, "## ") == 1 || index(line, "### ") == 1) {
@@ -395,7 +419,7 @@ _place() {
 # A section with no bullets gets its placeholder back, so the file always
 # reads cleanly and `check` has an unambiguous empty state.
 _reflow() {
-  local tmp; tmp="$(mktemp "${TMPDIR:-/tmp}/rel.XXXXXX")"
+  local tmp; tmp="$(_ledger_tmp)"
   awk '
     BEGIN { n = 0 }
     { buf[n++] = $0 }
@@ -432,6 +456,8 @@ cmd_target() {
     case "$1" in --title) title="${2:-}"; shift 2 ;; *) shift ;; esac
   done
   valid_id "$id" || { echo "error: '$id' is not a TASK-/HOTFIX-/Phase id" >&2; return 2; }
+  _line_ok "the id" "$id" || return 2
+  _line_ok "the title" "$title" || return 2
   ledger_text | grep -q "^## $version " || { echo "error: no release $version" >&2; return 1; }
   [ "$(cmd_state "$version")" = "Shipped" ] && {
     echo "error: $version is already shipped — a shipped release is frozen" >&2; return 3; }
@@ -452,9 +478,10 @@ cmd_target() {
 cmd_untarget() {
   require_ledger || return 1
   local id="$1"
-  local tmp; tmp="$(mktemp "${TMPDIR:-/tmp}/rel.XXXXXX")"
-  awk -v id="$id" '
-    BEGIN { instrip = 0 }
+  _line_ok "the id" "$id" || return 2
+  local tmp; tmp="$(_ledger_tmp)"
+  RV_ID="$id" awk '
+    BEGIN { instrip = 0; id = ENVIRON["RV_ID"] }
     {
       if (index($0, "### ") == 1) instrip = ($0 == "### Targeted")
       if (instrip && index($0, "- " id " — ") == 1) next
@@ -476,6 +503,9 @@ cmd_bundle() {
       *) shift ;;
     esac
   done
+  _line_ok "the id" "$id" || return 2
+  _line_ok "the title" "$title" || return 2
+  _line_ok "the approver" "$approved_by" || return 2
   ledger_text | grep -q "^## $version " || { echo "error: no release $version" >&2; return 1; }
 
   # Idempotent FIRST: re-bundling what is already there is a no-op, per
@@ -521,23 +551,35 @@ cmd_bundle() {
   esac
 
   [ -n "$title" ] || title="$(_title_for "$id")"
+  _line_ok "the title" "$title" || return 2
+  # The approver is resolved NOW, before the first write. Before 0.54.0 it was
+  # resolved after the bundle and the state flip were already written, so an
+  # actor carrying a newline aborted half-way: work bundled, no approval.
+  # rasa_actor (the shared library) refuses a control character itself.
+  local need_approval=0
+  if ! section_body "$version" | grep -q '^\*\*Approved\.\*\*'; then
+    need_approval=1
+    [ -n "$approved_by" ] || approved_by="$(rasa_actor)" || return 2
+  fi
+
   # Clears the id from BOTH layers everywhere, then writes it into Bundled.
   _place "$id" "$title" "$version" "Bundled" "both"
 
   # 🚧 is derived from having bundled work.
-  local tmp; tmp="$(mktemp "${TMPDIR:-/tmp}/rel.XXXXXX")"
-  sed "s/^## $version — $GLYPH_PLANNED Planned$/## $version — $GLYPH_NEXT Next/" \
-    < "$LEDGER" > "$tmp"; replace_ledger "$tmp"
+  local tmp; tmp="$(_ledger_tmp)"
+  RV_FROM="## $version — $GLYPH_PLANNED Planned" RV_TO="## $version — $GLYPH_NEXT Next" awk '
+    $0 == ENVIRON["RV_FROM"] { print ENVIRON["RV_TO"]; next }
+    { print }
+  ' < "$LEDGER" > "$tmp"; replace_ledger "$tmp"
 
   # Approval is recorded once per release. Invocation IS the approval —
   # the same token the deploy ledger writes, so a grep joins them.
-  if ! section_body "$version" | grep -q '^\*\*Approved\.\*\*'; then
-    [ -n "$approved_by" ] || approved_by="$(rasa_actor)"
-    tmp="$(mktemp "${TMPDIR:-/tmp}/rel.XXXXXX")"
-    awk -v ver="## $version " -v who="$approved_by" '
+  if [ "$need_approval" -eq 1 ]; then
+    tmp="$(_ledger_tmp)"
+    RV_VER="## $version " RV_WHO="$approved_by" awk '
       { print }
-      index($0, ver) == 1 { pend = 1; next_blank = 1 }
-      pend && /^\*\*Target\.\*\*/ { print "**Approved.** " who " via invocation"; pend = 0 }
+      index($0, ENVIRON["RV_VER"]) == 1 { pend = 1 }
+      pend && /^\*\*Target\.\*\*/ { print "**Approved.** " ENVIRON["RV_WHO"] " via invocation"; pend = 0 }
     ' < <(ledger_text) > "$tmp"
     replace_ledger "$tmp"
   fi
@@ -557,6 +599,9 @@ cmd_ship() {
     esac
   done
   [ -n "$tag" ] || { echo "error: ship needs --tag" >&2; return 2; }
+  _line_ok "the tag" "$tag" || return 2
+  _line_ok "the sha" "$sha" || return 2
+  _line_ok "the date" "$date" || return 2
   [ -n "$sha" ] || sha="$(git -C "$ROOT" rev-parse --short HEAD)"
   [ -n "$date" ] || date="$(date -u '+%Y-%m-%d')"
   [ "$(cmd_state "$version")" = "Shipped" ] && {
@@ -566,9 +611,9 @@ cmd_ship() {
     echo "error: $version has nothing bundled — a release with an empty manifest is not a release" >&2
     return 3; }
 
-  local tmp; tmp="$(mktemp "${TMPDIR:-/tmp}/rel.XXXXXX")"
-  awk -v ver="## $version " -v g_ship="$GLYPH_SHIPPED" -v stamp="**Shipped.** $date · tag \`$tag\` · sha $sha" '
-    BEGIN { inver = 0 }
+  local tmp; tmp="$(_ledger_tmp)"
+  RV_VER="## $version " RV_GSHIP="$GLYPH_SHIPPED" RV_STAMP="**Shipped.** $date · tag \`$tag\` · sha $sha" awk '
+    BEGIN { inver = 0; ver = ENVIRON["RV_VER"]; g_ship = ENVIRON["RV_GSHIP"]; stamp = ENVIRON["RV_STAMP"] }
     {
       line = $0
       if (index(line, "## v") == 1) inver = (index(line, ver) == 1)
@@ -602,7 +647,10 @@ _title_for() {
       # bracket expression. An em-dash is multi-byte UTF-8 and BSD awk matches
       # brackets BYTE-wise, so [:—-] eats only part of the character and leaves
       # mojibake in RELEASES.md.
-      _t="$(awk 'NR==1 && $0=="---" {infm=1; next} infm && $0=="---" {infm=0; next} !infm && /^# / {sub(/^# *[A-Za-z-]*-[0-9]*/,""); sub(/^[[:space:]]+/,""); sub(/^:[[:space:]]*/,""); sub(/^—[[:space:]]*/,""); sub(/^-[[:space:]]*/,""); print; exit}' "$f")"
+      # rfm_title (the shared library) reads past a frontmatter block whatever
+      # its BOM, CRLF or fence spacing; the exact-fence parser that lived here
+      # read a CRLF task's frontmatter as its title.
+      _t="$(rfm_title "$f" | awk '{sub(/^[A-Za-z-]*-[0-9]*/,""); sub(/^[[:space:]]+/,""); sub(/^:[[:space:]]*/,""); sub(/^—[[:space:]]*/,""); sub(/^-[[:space:]]*/,""); print; exit}')"
       [ -n "$_t" ] && printf '%s\n' "$_t" && return 0
     fi
   done

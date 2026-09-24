@@ -111,12 +111,11 @@ EXIT CODES:
 EOF
 }
 
-repo_root() {
-  git rev-parse --show-toplevel 2>/dev/null || {
-    echo "error: not inside a git repo" >&2
-    return 1
-  }
-}
+_rfm="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../lib/domain-code" 2>/dev/null && pwd)/frontmatter.sh"
+[ -f "$_rfm" ] || { echo "error: .claude/lib/domain-code/frontmatter.sh is missing — re-run the Element's bin/init" >&2; exit 70; }
+. "$_rfm"; rfm_require 1 || exit 70
+
+project_root() { rasa_root; }
 
 # ... subcommand handlers ...
 
@@ -149,8 +148,17 @@ main "$@"
 - **Shebang `#!/usr/bin/env bash`.** Portable across macOS and Linux.
 - **`set -euo pipefail`.** Strict mode. Fail loud on errors, undefined
   variables, and broken pipes. No silent failures.
-- **Repo root via `git rev-parse --show-toplevel`.** Works inside
-  worktrees, robust to caller's `pwd`. Never `pwd`-relative.
+- **Project root via `rasa_root`** from the shared library
+  (`.claude/lib/domain-code/frontmatter.sh`, sourced relative to the
+  script). It walks up to the install's `.claude/rasa.lock.json` and never
+  past the repository top, so it is right in a worktree and in a
+  per-package install inside a monorepo — where `git rev-parse
+  --show-toplevel` answers the monorepo's root. Use `show-toplevel` only
+  for a question about git itself (which worktree is this?), never to find
+  the project. Never `pwd`-relative.
+- **Records through the library.** A script that reads or writes a
+  frontmatter record uses `rfm_get` / `rfm_line` / `rfm_set`, never its
+  own awk: the library's header states the contract.
 - **Helper functions, not inline globs.** A 200-line script with no
   functions is a maintenance hazard.
 
@@ -262,7 +270,7 @@ first.
 It demonstrates:
 
 - The skeleton (shebang, strict mode, usage, subcommand dispatch)
-- Repo-root resolution via `git rev-parse --show-toplevel`
+- Project-scoped state under the shared `.git` dir (`git rev-parse --git-common-dir`)
 - Subcommand verbs (`status`, `write`, `archive`)
 - Exit codes (0, 1, 2, 3) used the way this doc specifies
 - I/O discipline (stdout for results, stderr for errors)

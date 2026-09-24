@@ -1,0 +1,239 @@
+#!/usr/bin/env bash
+# bin/test-readers — regression tests for the frontmatter READERS that moved
+# onto the shared library (content/lib/domain-code/) in 0.54.0. Repo tooling:
+# lives in bin/, is not registered in rasa.json, and is never installed into
+# a consumer.
+#
+# Every section installs an Element into a fresh project with bin/init and
+# drives the real scripts there. Each fixture is a byte shape the reader it
+# replaced got wrong:
+#
+#   suite-lib     the test gate reads a suite and a stamp through a BOM; a
+#                 quoted run_command keeps its ` # `; a suite whose block never
+#                 closes is rc 3, not zero tests
+#   export-env    a CRLF stamp exports with its fields
+#   import-env    a CRLF stamp is listed
+#   secrets       a `var_name:` line in a stamp's body is not a key
+#   status        a task with a BOM and CRLF is titled by its H1, not by a
+#                 comment in its frontmatter
+#   dashboard     the same, through frontmatter.py
+#   environment   (needs PyYAML) a stamp with a BOM has its environments
+#                 checked; a stamp that does not parse is named, not skipped
+#   runtime       (needs PyYAML) a runtime stamp with a BOM is read
+#   doctor        `task-enforce.sh doctor` passes a project written by the
+#                 Element's own scripts, names every damaged record of every
+#                 kind, prints no value, and writes nothing at all
+#
+# The Python readers get a BOM rather than only CRLF: Python's text mode
+# turns CRLF into LF on read, so the old ones survived CRLF.
+#
+# Usage: bin/test-readers
+#        TEST_READERS_ELEMENT=<tree> bin/test-readers   (a control run)
+#
+# Portable on purpose: bash 3.2, POSIX tools. Exit 0 only if every case passes.
+
+set -u
+here="$(cd "$(dirname "$0")" && pwd -P)"
+ELEMENT="${TEST_READERS_ELEMENT:-$here/..}"
+ELEMENT="$(cd "$ELEMENT" && pwd -P)"
+
+T="$(mktemp -d "${TMPDIR:-/tmp}/test-readers.XXXXXX")" || exit 2
+T="$(cd "$T" && pwd -P)"
+trap 'rm -rf "$T"' EXIT
+# HOME moves below (a clean git config, a private secrets store); Python's
+# user site moves with it unless it is pinned first — where a pip --user
+# PyYAML lives.
+PYTHONUSERBASE="$(python3 -m site --user-base 2>/dev/null || true)"
+[ -n "$PYTHONUSERBASE" ] && export PYTHONUSERBASE
+export GIT_CONFIG_GLOBAL=/dev/null HOME="$T/home"
+mkdir -p "$HOME"
+unset RASA_ROOT RASA_ACTOR
+
+pass=0; fail=0; skip=0
+ok()   { pass=$((pass + 1)); printf '  ✓ %s\n' "$1"; }
+bad()  { fail=$((fail + 1)); printf '  ✗ %s\n' "$1"; }
+skip() { skip=$((skip + 1)); printf '  - %s (skipped: %s)\n' "$1" "$2"; }
+check() { local l="$1"; shift; if "$@"; then ok "$l"; else bad "$l"; fi; }
+same() { [ "$1" = "$2" ]; }
+has()  { printf '%s\n' "$1" | grep -qF -- "$2"; }
+hasnt() { ! has "$1" "$2"; }
+
+BOM="$(printf '\357\273\277')"
+# crlf <file> — rewrite with CRLF line endings
+crlf() { LC_ALL=C awk '{ printf "%s\r\n", $0 }' "$1" > "$1.x"; mv "$1.x" "$1"; }
+# bom <file> — prefix a UTF-8 BOM. (Python's text mode turns CRLF into LF on
+# read, so the old Python readers survived CRLF; a BOM is what broke them.)
+bom() { { printf '%s' "$BOM"; cat "$1"; } > "$1.x"; mv "$1.x" "$1"; }
+
+install() {
+  mkdir -p "$1" && git -C "$1" init -q
+  git -C "$1" config user.name "Test Person"; git -C "$1" config user.email t@t
+  "$ELEMENT/bin/init" "$1" >/dev/null 2>&1 || { echo "bin/init failed for $1" >&2; exit 2; }
+  git -C "$1" add -A >/dev/null 2>&1; git -C "$1" commit -qm install >/dev/null 2>&1
+}
+
+P="$T/p"; install "$P"
+YAML=0; python3 -B -c 'import yaml' 2>/dev/null && YAML=1
+
+# ── suite-lib ────────────────────────────────────────────────────────────────
+echo "suite-lib"
+S="$T/suites"; mkdir -p "$S"
+suite() { ( . "$P/build/gates/suite-lib.sh" && "$@" ); }
+{ printf '%s' "$BOM"; printf -- '---\ntests: [alpha, beta]\n---\n\n# pre-deploy\n'; } > "$S/bom.md"
+out="$(suite suite_tests "$S/bom.md" 2>/dev/null | tr '\n' ' ')"
+check "a suite with a BOM lists its tests (got: [$out])" same "$out" "alpha beta "
+printf -- '---\ntests: [alpha]\n\n# the block never closes\n' > "$S/open.md"
+rc=0; suite suite_tests "$S/open.md" >/dev/null 2>&1 || rc=$?
+check "a suite whose block never closes is rc 3, not zero tests (rc $rc)" same "$rc" 3
+{ printf '%s' "$BOM"; printf -- '---\nname: alpha\n---\n\n# alpha\n\n---\n\nname: body-name\n'; } > "$S/stamp-bom.md"
+out="$(suite stamp_field "$S/stamp-bom.md" name 2>/dev/null)"
+check "a stamp with a BOM is read from its frontmatter, not its body (name: $out)" same "$out" alpha
+printf -- '---\nname: beta\nrun_command: "npm test # all"\n---\n' > "$S/stamp-q.md"
+out="$(suite stamp_field "$S/stamp-q.md" run_command 2>/dev/null)"
+check "a quoted run_command keeps its ' # ' ($out)" same "$out" "npm test # all"
+
+# ── env stamps (export-env, import-env, secrets) ─────────────────────────────
+mkdir -p "$P/env/stamps"
+cat > "$P/env/stamps/api-key.md" <<'EOF'
+---
+var_name: API_KEY
+required: true
+group: api
+purpose: secret
+type: string
+description: The API key
+environments: [local, staging]
+status: active
+---
+
+# API_KEY
+EOF
+crlf "$P/env/stamps/api-key.md"
+printf '# a note, not a stamp\n\nvar_name: GHOST_KEY\n' > "$P/env/stamps/ghost.md"
+
+echo "export-env"
+out="$(cd "$P" && bash .claude/skills/export-env/export-env.sh preview 2>&1)"
+check "a CRLF stamp is exported with its name" has "$out" "API_KEY"
+
+echo "import-env"
+out="$(cd "$P" && bash .claude/skills/import-env/import-env.sh list 2>&1)"
+check "a CRLF stamp is listed" has "$out" "API_KEY"
+
+echo "secrets"
+out="$(cd "$P" && bash .claude/skills/secrets/secrets.sh check 2>&1)"
+check "the CRLF stamp's key is known" has "$out" "API_KEY"
+check "a var_name line in a stamp's body is not a key" hasnt "$out" "GHOST_KEY"
+
+# ── task titles (status, dashboard) ──────────────────────────────────────────
+mkdir -p "$P/tasks/active"
+TF="$P/tasks/active/TASK-001-titled.md"
+printf -- '---\nid: TASK-001\n# owner is set by /task\ntype: change\n---\n# TASK-001: The real title\n\nBody.\n' > "$TF"
+crlf "$TF"; bom "$TF"
+
+echo "status"
+out="$(cd "$P" && bash .claude/skills/status/status.sh dashboard 2>/dev/null)"
+check "a task with a BOM and CRLF is titled by its H1" has "$out" "TASK-001: The real title"
+check "…not by the comment in its frontmatter" hasnt "$out" "owner is set by /task"
+
+echo "dashboard"
+out="$(python3 -B -c '
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import dashboard
+for t in dashboard.gather_active_tasks(Path(sys.argv[2])):
+    print(t["title"])
+' "$ELEMENT/content/dashboard" "$P" 2>&1)"
+check "a task with a BOM and CRLF is titled by its H1 ($out)" same "$out" "TASK-001: The real title"
+
+# ── environment, runtime (PyYAML) ────────────────────────────────────────────
+echo "environment"
+if [ "$YAML" = 1 ]; then
+  printf '{"environments": {"local": {}, "staging": {}}}\n' > "$P/.claude/environments.json"
+  cat > "$P/env/stamps/db-url.md" <<'EOF'
+---
+var_name: DB_URL
+environments: [local, production]
+---
+EOF
+  crlf "$P/env/stamps/db-url.md"; bom "$P/env/stamps/db-url.md"
+  printf -- '---\nvar_name: BAD_YAML\ndescription: used for: auth\nenvironments: [local]\n---\n' > "$P/env/stamps/bad-yaml.md"
+  rc=0; out="$(cd "$P" && bash .claude/skills/environment/environment.sh validate 2>&1)" || rc=$?
+  check "a stamp with a BOM has its environments checked (DRIFT, rc $rc)" same "$(has "$out" production && echo drift):$rc" "drift:3"
+  check "a stamp that does not parse is named, not skipped" has "$out" "bad-yaml.md"
+  rm -f "$P/env/stamps/db-url.md" "$P/env/stamps/bad-yaml.md"
+else
+  skip "environment validate" "PyYAML is not installed"
+fi
+
+echo "runtime"
+if [ "$YAML" = 1 ]; then
+  mkdir -p "$P/.claude/runtimes"
+  printf -- '---\nname: api\nkind: dev-server\nlanguage: python\nenv:\n  file: ".env"\n---\n\n# api\n' > "$P/.claude/runtimes/api.md"
+  crlf "$P/.claude/runtimes/api.md"; bom "$P/.claude/runtimes/api.md"
+  out="$(cd "$P" && bash .claude/skills/runtime/runtime.sh check api 2>&1 || true)"
+  check "a runtime stamp with a BOM is read" has "$out" "runtime: api (dev-server, python)"
+else
+  skip "runtime check" "PyYAML is not installed"
+fi
+
+# ── doctor (task-enforce.sh doctor): read-only, every record kind ────────────
+echo "doctor"
+D="$T/doctor"; install "$D"
+doc() { ( cd "$D" && bash .claude/skills/task-enforce/task-enforce.sh doctor "$@" ); }
+# One clean record of every kind, written by the Element's own scripts.
+( cd "$D" || exit 1
+  python3 .claude/bin/task new --root "$D" --quiet --type change --by test-person "clean task" >/dev/null
+  rid="$(RASA_ACTOR=ci-bot bash .claude/skills/runs/runs.sh open auto-task)" && bash .claude/skills/runs/runs.sh close "$rid" completed >/dev/null
+  id="$(bash .claude/skills/deploys/deploys.sh open staging nonprod deploy v1)" && bash .claude/skills/deploys/deploys.sh close "$id" success 3 >/dev/null
+  bash .claude/skills/contract/contract.sh init >/dev/null 2>&1
+  printf '# Orders API\n' > body.md
+  bash .claude/skills/contract/contract.sh new orders-api --kind doc --why t --from body.md >/dev/null 2>&1
+  bash .claude/skills/import-env/import-env.sh add API_TOKEN --purpose secret --required true >/dev/null 2>&1
+  mkdir -p tests/stamps
+  printf -- '---\nname: smoke\nstatus: active\n---\n\n# smoke\n' > tests/stamps/20260924_001_smoke.md
+) >/dev/null 2>&1
+cp "$here/../test/release/expect.RELEASES.md" "$D/tasks/RELEASES.md"
+rc=0; out="$(doc 2>&1)" || rc=$?
+check "a project written by the Element's own scripts is clean (rc $rc)" has "$out" "0 failure(s), 0 warning(s)"
+check "…and every record kind was read (the install seeds one test stamp)" has "$out" "read: tasks 1 · runs 1 · deploy records 1 · deploy index 1 · contract stamps 1 · env stamps 1 · test stamps 2 · release tracker 1"
+
+# One damaged record per finding.
+printf -- '---\nid: TASK-901\ntype: change\n---\n# TASK-901: bom\n' > "$D/tasks/active/TASK-901-bom.md"; bom "$D/tasks/active/TASK-901-bom.md"
+printf -- '---\nrun_id: RUN-20260101-000000\nkind: manual\nactor: a\nactor_kind: human\nstatus: completed\n---\n' > "$D/tasks/runs/RUN-20260101-000000.md"
+crlf "$D/tasks/runs/RUN-20260101-000000.md"
+printf -- '---\nname: fence\nversion: 1.0.0\nis_locked: false\n--- \n\nversion: 9.9.9\n' > "$D/contracts/stamps/fence.md"
+printf -- '---\nname: open\nvar_name: OPEN\n\n# never closed\n' > "$D/env/stamps/open.md"
+printf -- '---\nid: DEP-20260101-000000-x\nkind: deploy\nstatus: in-flight\nstatus: success\n---\n' > "$D/deploys/records/DEP-20260101-000000-x.md"
+printf -- '---\nid: TASK-902\ntype: change\nx-owner: a\\nstatus: forged\n---\n# TASK-902: escaped\n' > "$D/tasks/backlog/TASK-902-escaped.md"
+printf -- '---\nrun_id: RUN-20260101-000001\nkind: auto-task\nactor: someone\nactor_kind: human\nstatus: completed\n---\n' > "$D/tasks/runs/RUN-20260101-000001.md"
+printf '| 2026-01-01 00:00:00 UTC | deploy | x | y | `` | a | ? | | `` |\n' >> "$D/deploys/DEPLOYS.md"
+awk '{ print } /^\*\*Approved\.\*\*/ && !d { print "**Approved.** someone-else via invocation"; d = 1 }' "$D/tasks/RELEASES.md" > "$D/tasks/RELEASES.md.x"
+mv "$D/tasks/RELEASES.md.x" "$D/tasks/RELEASES.md"
+first="$(ls "$D"/tasks/triage/TASK-*.md | head -1)"
+sed 's/^# TASK-/# copy of TASK-/' "$first" > "$D/tasks/completed/$(basename "$first")"
+printf -- '---\nid: TASK-903\ntype: change\n---\n\n---\nid: TASK-903\n---\n# TASK-903: twice\n' > "$D/tasks/triage/TASK-903-twice.md"
+
+snap() { ( cd "$D" && find . -type f -exec cksum {} + | LC_ALL=C sort ); }
+s0="$(snap)"
+rc=0; out="$(doc 2>&1)" || rc=$?
+check "damage fails the check (rc $rc)" same "$rc" 1
+finding() { printf '%s\n' "$out" | grep -qE "(FAIL|WARN)  $1 +$2"; }
+check "a BOM" finding bom "tasks/active/TASK-901-bom.md"
+check "a CR" finding cr "tasks/runs/RUN-20260101-000000.md"
+check "a blank after the closing fence" finding fence "contracts/stamps/fence.md"
+check "…and the body line it exposes" finding body-kv "contracts/stamps/fence.md"
+check "a block that never closes" finding fence "env/stamps/open.md"
+check "a duplicated key" finding dup-key "deploys/records/DEP-20260101-000000-x.md"
+check "a literal \\n in a value" finding escaped "tasks/backlog/TASK-902-escaped.md"
+check "an auto-* run recorded as human" finding actor "tasks/runs/RUN-20260101-000001.md"
+check "a blank index row" finding blank-row "deploys/DEPLOYS.md"
+check "a second approval line" finding approval "tasks/RELEASES.md"
+check "a duplicated task id (a warning)" finding dup-id "tasks/"
+check "a second frontmatter block (a warning)" finding second-fm "tasks/triage/TASK-903-twice.md"
+check "the check wrote nothing — not a byte, not a file" same "$(snap)" "$s0"
+check "no value is printed" hasnt "$out" "forged"
+
+echo
+echo "test-readers: $pass passed, $fail failed, $skip skipped"
+[ "$fail" -eq 0 ]

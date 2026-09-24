@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# bin/test-root — regression tests for install-root resolution (rasa_root in
+# content/lib/domain-code/frontmatter.sh). Repo tooling: lives in bin/, is not
+# registered in rasa.json, and is never installed into a consumer.
+#
+# Every case builds real repositories under a temp directory, installs the
+# library and a probe skill the way bin/init lays them out, and asserts which
+# directory the probe resolves — or that it refuses (rc 70). The case that
+# matters most is the nested one: a repository inside a parent that has its
+# own lockfile must never resolve to the parent.
+#
+# Portable on purpose: bash 3.2, POSIX tools. Exit 0 only if every case passes.
+
+set -u
+here="$(cd "$(dirname "$0")" && pwd -P)"
+LIB="$here/../content/lib/domain-code/frontmatter.sh"
+[ -f "$LIB" ] || { echo "test-root: no library at $LIB" >&2; exit 2; }
+
+T="$(mktemp -d "${TMPDIR:-/tmp}/test-root.XXXXXX")" || exit 2
+T="$(cd "$T" && pwd -P)"
+trap 'rm -rf "$T"' EXIT
+export GIT_CONFIG_GLOBAL=/dev/null GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t \
+       GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+unset RASA_ROOT
+
+pass=0; fail=0
+ok()  { pass=$((pass + 1)); printf '  ✓ %s\n' "$1"; }
+bad() { fail=$((fail + 1)); printf '  ✗ %s\n' "$1"; }
+
+# install <dir> [nolock] — the library and a probe skill, laid out like
+# bin/init does; a lockfile unless "nolock".
+install() {
+  mkdir -p "$1/.claude/lib/domain-code" "$1/.claude/skills/probe"
+  cp "$LIB" "$1/.claude/lib/domain-code/frontmatter.sh"
+  cat > "$1/.claude/skills/probe/probe.sh" <<'EOF'
+#!/usr/bin/env bash
+_rfm="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../lib/domain-code" 2>/dev/null && pwd)/frontmatter.sh"
+[ -f "$_rfm" ] || exit 70
+. "$_rfm"
+rasa_root "$@"
+EOF
+  [ "${2:-}" = nolock ] || echo '{"lock_version": 1}' > "$1/.claude/rasa.lock.json"
+}
+
+# expect <label> <want> <cwd> <probe> [args...] — want is a path, or "70".
+expect() {
+  local label="$1" want="$2" cwd="$3" probe="$4" got rc=0
+  shift 4
+  got="$(cd "$cwd" && bash "$probe" "$@" 2>/dev/null)" || rc=$?
+  if [ "$want" = 70 ]; then
+    [ "$rc" = 70 ] && ok "$label → refused (rc 70)" || bad "$label: want rc 70, got rc $rc [$got]"
+  else
+    [ "$rc" = 0 ] && [ "$got" = "$want" ] && ok "$label → ${want#$T/}" \
+      || bad "$label: want ${want#$T/}, got rc $rc [${got#$T/}]"
+  fi
+}
+
+echo "1. single repository"
+mkdir -p "$T/single/src/deep"; git -C "$T/single" init -q; install "$T/single"
+P="$T/single/.claude/skills/probe/probe.sh"
+expect "from the root" "$T/single" "$T/single" "$P"
+expect "from a subdirectory" "$T/single" "$T/single/src/deep" "$P"
+
+echo "2. monorepo: per-package installs"
+mkdir -p "$T/mono/packages/app" "$T/mono/packages/api"
+git -C "$T/mono" init -q
+install "$T/mono/packages/app"; install "$T/mono/packages/api"
+expect "app's skill, run from the monorepo root" "$T/mono/packages/app" "$T/mono" "$T/mono/packages/app/.claude/skills/probe/probe.sh"
+expect "api's skill, run from inside app" "$T/mono/packages/api" "$T/mono/packages/app" "$T/mono/packages/api/.claude/skills/probe/probe.sh"
+install "$T/mono"
+expect "root's skill, run from inside a package" "$T/mono" "$T/mono/packages/app" "$T/mono/.claude/skills/probe/probe.sh"
+
+echo "3. nested worktree"
+mkdir -p "$T/main"; git -C "$T/main" init -q; install "$T/main"
+git -C "$T/main" add -A >/dev/null; git -C "$T/main" commit -qm init
+git -C "$T/main" worktree add -q "$T/main/.claude/worktrees/w" 2>/dev/null
+expect "the worktree's own skill" "$T/main/.claude/worktrees/w" "$T/main/.claude/worktrees/w" "$T/main/.claude/worktrees/w/.claude/skills/probe/probe.sh"
+rm -f "$T/main/.claude/worktrees/w/.claude/rasa.lock.json"
+expect "a worktree without a lockfile never falls through to its host" 70 "$T/main/.claude/worktrees/w" "$T/main/.claude/worktrees/w/.claude/skills/probe/probe.sh"
+
+echo "4. a repository nested inside a parent that has its own lockfile"
+mkdir -p "$T/parent/child"; git -C "$T/parent" init -q; install "$T/parent"
+echo "child/" > "$T/parent/.gitignore"
+git -C "$T/parent" add -A >/dev/null; git -C "$T/parent" commit -qm init
+git -C "$T/parent/child" init -q; install "$T/parent/child" nolock
+before="$(git -C "$T/parent" status --porcelain)"
+expect "child with no lockfile refuses; never the parent" 70 "$T/parent/child" "$T/parent/child/.claude/skills/probe/probe.sh"
+[ "$(git -C "$T/parent" status --porcelain)" = "$before" ] && ok "the parent's working tree is untouched" || bad "the parent's working tree changed"
+echo '{"lock_version": 1}' > "$T/parent/child/.claude/rasa.lock.json"
+expect "child with its own lockfile" "$T/parent/child" "$T/parent/child" "$T/parent/child/.claude/skills/probe/probe.sh"
+
+echo "5. a package with no lockfile of its own"
+mkdir -p "$T/repo5/packages/lib"; git -C "$T/repo5" init -q; install "$T/repo5"
+expect "the root install's skill, run from the package" "$T/repo5" "$T/repo5/packages/lib" "$T/repo5/.claude/skills/probe/probe.sh"
+
+echo "6. a worktree at a commit from before the lockfile existed"
+mkdir -p "$T/m6"; git -C "$T/m6" init -q
+echo readme > "$T/m6/README"; git -C "$T/m6" add -A; git -C "$T/m6" commit -qm first
+install "$T/m6"; git -C "$T/m6" add -A >/dev/null; git -C "$T/m6" commit -qm install
+git -C "$T/m6" worktree add -q "$T/w6" HEAD~1 2>/dev/null
+expect "the install that owns the script" "$T/m6" "$T/w6" "$T/m6/.claude/skills/probe/probe.sh"
+RASA_ROOT="$T/w6" expect "RASA_ROOT points it at the worktree" "$T/w6" "$T/w6" "$T/m6/.claude/skills/probe/probe.sh"
+
+echo "7. explicit roots"
+expect "an explicit argument wins" "$T/mono" "$T/single" "$T/single/.claude/skills/probe/probe.sh" "$T/mono"
+RASA_ROOT="$T/repo5" expect "RASA_ROOT wins over the walks" "$T/repo5" "$T/single" "$T/single/.claude/skills/probe/probe.sh"
+RASA_ROOT="$T/nope" expect "a RASA_ROOT that is not a directory" 70 "$T/single" "$T/single/.claude/skills/probe/probe.sh"
+
+echo "8. the Element's own source layout (no lockfile)"
+mkdir -p "$T/elem/content/lib/domain-code" "$T/elem/content/skills/probe"; git -C "$T/elem" init -q
+cp "$LIB" "$T/elem/content/lib/domain-code/"; cp "$T/single/.claude/skills/probe/probe.sh" "$T/elem/content/skills/probe/"
+expect "refuses without RASA_ROOT" 70 "$T/elem" "$T/elem/content/skills/probe/probe.sh"
+RASA_ROOT="$T/elem" expect "RASA_ROOT=the checkout" "$T/elem" "$T/elem" "$T/elem/content/skills/probe/probe.sh"
+
+echo "9. a real skill: task-enforce.sh set, from inside a monorepo package"
+TE="$here/../content/skills/task-enforce/task-enforce.sh"
+PKG="$T/mono9/packages/controller"
+mkdir -p "$PKG/.claude/skills/task-enforce" "$PKG/tasks/active" "$T/home"
+git -C "$T/mono9" init -q
+install "$PKG"
+cp "$TE" "$PKG/.claude/skills/task-enforce/task-enforce.sh"
+printf -- '---\nid: TASK-192\n---\n# TASK-192: a package task\n' > "$PKG/tasks/active/TASK-192-a-package-task.md"
+for cwd in "$PKG" "$T/mono9"; do
+  out="$(cd "$cwd" && HOME="$T/home" bash "$PKG/.claude/skills/task-enforce/task-enforce.sh" set TASK-192 2>&1)" \
+    && ok "set TASK-192 from ${cwd#$T/} finds the package's task" \
+    || bad "set TASK-192 from ${cwd#$T/}: $out"
+done
+got="$(cd "$T/mono9" && HOME="$T/home" bash "$PKG/.claude/skills/task-enforce/task-enforce.sh" current 2>&1)"
+[ "$got" = TASK-192 ] && ok "current → TASK-192" || bad "current: $got"
+
+echo
+echo "test-root: $pass passed, $fail failed"
+[ "$fail" -eq 0 ]

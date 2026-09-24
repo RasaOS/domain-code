@@ -1,0 +1,273 @@
+#!/usr/bin/env bash
+#
+# bin/check-frontmatter — the frontmatter contract is a program, not prose.
+#
+# Repo tooling: lives in bin/, is not registered in rasa.json, and is never
+# installed into a consumer.
+#
+# 1. corpus    every row of test/frontmatter/expect.tsv, through BOTH
+#              content/lib/domain-code/frontmatter.sh and frontmatter.py. A
+#              wrong value, a wrong rc, or the twins disagreeing fails.
+# 2. writer    rfm_set on every fixture: read-back; untouched bytes (BOM,
+#              CRLF, body) and the file mode preserved; a duplicate key, a
+#              malformed block, a control character or a blank-edged value
+#              refused with the file left byte-identical; no temp files left.
+# 3. yaml      writes are verbatim (no quoting until a later release): the
+#              plain values records hold round-trip under PyYAML, and a value
+#              YAML would misread is kept byte-for-byte rather than quoted.
+#              Skipped, and said so, when PyYAML is absent.
+# 4. grep      no exact-fence reader, no `> "$tmp" && mv` writer, no
+#              unmarked `awk -v NAME="$var"`, no `sed -i`, no `\A---`, and in
+#              shipped content no `grep '^key:'` reader — outside the library
+#              and the vendored files. A reviewed exception carries a trailing
+#              `# rfm-ok: <reason>`; a comment line is not a hit. A hard gate
+#              since the 0.54.0 sweep; --advisory lists without failing.
+# 5. mutation  the corpus is re-run against a copy of the library whose
+#              fence test is exact-match (`/^---$/`); it must FAIL, or the
+#              corpus is not testing what it claims to.
+#
+# Usage: bin/check-frontmatter [--advisory]
+#   (--strict, the old spelling of the default, is still accepted)
+# Exit: 0 clean, 1 findings, 2 usage.
+
+set -euo pipefail
+STRICT=1
+case "${1:-}" in
+  ""|--strict) ;;
+  --advisory) STRICT=0 ;;
+  -h|--help) sed -n '3,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  *) echo "usage: bin/check-frontmatter [--advisory]" >&2; exit 2 ;;
+esac
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
+LIBDIR="content/lib/domain-code"
+FX="test/frontmatter/fixtures"
+fail=0
+bad() { printf '  ✗ %s\n' "$*"; fail=$((fail + 1)); }
+
+T="$(mktemp -d)"
+trap 'rm -rf "$T"' EXIT
+
+# corpus <libdir> — run expect.tsv through the bash lib in <libdir> and the
+# python twin; print one line per failure, nothing when clean.
+corpus() {
+  bash -c '
+    set -u
+    . "$1/frontmatter.sh"
+    FX="$2"
+    while IFS="|" read -r file fn key want_rc want_val; do
+      [ -n "$file" ] || continue
+      got="" rc=0
+      case "$fn" in
+        get)    got="$(rfm_get "$FX/$file" "$key" 2>/dev/null)" || rc=$? ;;
+        scalar) got="$(rfm_get_scalar "$FX/$file" "$key" 2>/dev/null)" || rc=$? ;;
+        child)  got="$(rfm_get_child "$FX/$file" "${key%%.*}" "${key#*.}" 2>/dev/null)" || rc=$? ;;
+        title)  got="$(rfm_title "$FX/$file")" || rc=$? ;;
+      esac
+      [ "$rc" = "$want_rc" ] || echo "sh  $file $fn $key: rc $rc, want $want_rc"
+      [ "$rc" != 0 ] || [ "$got" = "$want_val" ] || echo "sh  $file $fn $key: [$got], want [$want_val]"
+    done < test/frontmatter/expect.tsv
+  ' _ "$1" "$FX"
+  python3 -B - "$1" "$FX" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import frontmatter as f
+fx = sys.argv[2]
+for row in open("test/frontmatter/expect.tsv", encoding="utf-8"):
+    row = row.rstrip("\n")
+    if not row:
+        continue
+    file, fn, key, want_rc, want_val = row.split("|", 4)
+    text = open(fx + "/" + file, encoding="utf-8", newline="").read()
+    try:
+        if fn == "title":
+            rc, v = "0", f.title(text)
+        else:
+            if fn == "child":
+                p, c = key.split(".", 1)
+                v = f.child(text, p, c)
+            else:
+                v = f.get(text, key)
+                if fn == "scalar":
+                    v = f.scalar(v)
+            rc = "1" if v is None else "0"
+    except (ValueError, LookupError):
+        rc, v = "3", None
+    if rc != want_rc:
+        print("py  %s %s %s: rc %s, want %s" % (file, fn, key, rc, want_rc))
+    elif rc == "0" and v != want_val:
+        print("py  %s %s %s: [%s], want [%s]" % (file, fn, key, v, want_val))
+PY
+}
+
+# shellcheck source=../content/lib/domain-code/frontmatter.sh
+. "$LIBDIR/frontmatter.sh"
+
+# ── 1. corpus ───────────────────────────────────────────────────────────────
+echo "1. corpus (bash lib vs python twin)"
+rows="$(grep -c . test/frontmatter/expect.tsv)"
+out="$(corpus "$LIBDIR")"
+if [ -n "$out" ]; then printf '%s\n' "$out" | while IFS= read -r l; do printf '  ✗ %s\n' "$l"; done
+  fail=$((fail + $(printf '%s\n' "$out" | grep -c .))); fi
+echo "   $rows rows, both twins"
+
+# ── 2. writer ───────────────────────────────────────────────────────────────
+echo "2. writer (rfm_set)"
+sum() { cksum < "$1"; }
+mode() { ls -l "$1" | cut -c1-10; }
+for f in lf crlf bom bom-crlf trail-open trail-close; do
+  cp "$FX/$f.md" "$T/$f.md"; chmod 644 "$T/$f.md"
+  crs_before="$(LC_ALL=C tr -cd '\r' < "$T/$f.md" | wc -c | tr -d ' ')"
+  rfm_set "$T/$f.md" status success x-new "v: 1 # two" 2>/dev/null || bad "$f: rfm_set failed"
+  [ "$(rfm_get "$T/$f.md" status)" = success ] || bad "$f: status not rewritten"
+  [ "$(rfm_get "$T/$f.md" x-new)" = "v: 1 # two" ] || bad "$f: inserted key did not round-trip verbatim"
+  [ "$(rfm_body "$T/$f.md" | cksum)" = "$(rfm_body "$FX/$f.md" | cksum)" ] || bad "$f: body bytes changed"
+  crs_after="$(LC_ALL=C tr -cd '\r' < "$T/$f.md" | wc -c | tr -d ' ')"
+  case "$f" in
+    *crlf*) [ "$crs_after" = $((crs_before + 1)) ] || bad "$f: CRLF not preserved ($crs_before -> $crs_after)" ;;
+    *)      [ "$crs_after" = 0 ] || bad "$f: CR introduced" ;;
+  esac
+  case "$f" in bom*) [ "$(head -c 3 "$T/$f.md" | od -An -tx1 | tr -d ' \n')" = efbbbf ] || bad "$f: BOM dropped" ;; esac
+  [ "$(mode "$T/$f.md")" = "-rw-r--r--" ] || bad "$f: file mode changed to $(mode "$T/$f.md")"
+done
+for f in dup unterminated no-fm empty; do
+  cp "$FX/$f.md" "$T/$f.md"; before="$(sum "$T/$f.md")"
+  if rfm_set "$T/$f.md" status success 2>/dev/null; then bad "$f: write accepted"; fi
+  [ "$(sum "$T/$f.md")" = "$before" ] || bad "$f: refused write still changed the file"
+done
+cp "$FX/dup.md" "$T/d.md"; rc=0; rfm_set "$T/d.md" status success 2>/dev/null || rc=$?
+[ "$rc" = 4 ] || bad "duplicate key: rc $rc, want 4"
+cp "$FX/lf.md" "$T/twice.md"; before="$(sum "$T/twice.md")"
+for k in status x-absent; do   # a key present in the file, and one it lacks
+  rc=0; rfm_set "$T/twice.md" "$k" a "$k" b 2>/dev/null || rc=$?
+  [ "$rc" = 2 ] || bad "a key given twice in one write ($k): rc $rc, want 2"
+done
+[ "$(sum "$T/twice.md")" = "$before" ] || bad "a key given twice in one write still changed the file"
+cp "$FX/lf.md" "$T/v.md"; before="$(sum "$T/v.md")"
+for v in "$(printf 'a\nstatus: forged')" "$(printf 'a\rb')" "$(printf 'a\tb')" ' lead' 'trail '; do
+  rc=0; rfm_set "$T/v.md" owner "$v" 2>/dev/null || rc=$?
+  [ "$rc" = 2 ] || bad "value [$v] accepted or wrong rc ($rc)"
+  rc=0; rfm_line owner "$v" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 2 ] || bad "rfm_line accepted [$v] ($rc)"
+done
+[ "$(sum "$T/v.md")" = "$before" ] || bad "a refused value still changed the file"
+rfm_set "$T/v.md" owner 'a\nstatus: forged' 2>/dev/null || bad "literal backslash-n refused"
+[ "$(rfm_get "$T/v.md" owner)" = 'a\nstatus: forged' ] || bad "literal backslash-n was expanded"
+[ "$(rfm_get "$T/v.md" status)" = in-flight ] || bad "literal backslash-n forged a key"
+[ -z "$(ls -A "$T" | grep '^\.rfm' || true)" ] || bad "temp files left behind"
+printf -- '---\nid: N-1\nstatus: in-flight\n---\n\nbefore\000after NUL\n' > "$T/nul.md"
+rfm_set "$T/nul.md" status success 2>/dev/null || bad "rfm_set on a NUL body failed"
+[ "$(tail -c 11 "$T/nul.md" | od -An -tx1 | tr -d ' \n')" = "006166746572204e554c0a" ] \
+  || bad "a NUL byte in the body was not preserved ($(tail -c 11 "$T/nul.md" | od -An -tx1 | tr -d ' \n'))"
+cp "$FX/lf.md" "$T/ro.md"; chmod 444 "$T/ro.md"
+rfm_set "$T/ro.md" status success 2>/dev/null || bad "rfm_set on a read-only file failed"
+[ "$(mode "$T/ro.md")" = "-r--r--r--" ] || bad "a read-only file came back $(mode "$T/ro.md")"
+[ -z "$RFM_TMP" ] || bad "RFM_TMP still names a temp after a write"
+( cd "$T" && : > .nr && RFM_TMP="" && rfm_cleanup && [ -e .nr ] ) || bad "rfm_cleanup with nothing in flight removed a file"
+rm -f "$T/.nr"; : > "$T/inflight"; : > "$T/inflight.nr"
+( RFM_TMP="$T/inflight"; rfm_cleanup; [ -z "$RFM_TMP" ] ) || bad "rfm_cleanup left RFM_TMP set"
+[ ! -e "$T/inflight" ] && [ ! -e "$T/inflight.nr" ] || bad "rfm_cleanup left the write in flight behind"
+rc=0; "${BASH:-bash}" -c '. "$1"; rfm_trap_cleanup; RFM_TMP="$2"; : > "$RFM_TMP"; kill -TERM $$; sleep 5' \
+  _ "$LIBDIR/frontmatter.sh" "$T/killed" 2>/dev/null || rc=$?
+[ "$rc" = 143 ] && [ ! -e "$T/killed" ] || bad "rfm_trap_cleanup: a TERM left the write in flight behind (rc $rc)"
+( umask 022; printf 'view\n' | rfm_write_atomic "$T/view-new.md" ) || bad "rfm_write_atomic failed on a new file"
+[ "$(mode "$T/view-new.md")" = "-rw-r--r--" ] || bad "a new view came back $(mode "$T/view-new.md") under umask 022"
+chmod 640 "$T/view-new.md"; printf 'view 2\n' | rfm_write_atomic "$T/view-new.md" || bad "rfm_write_atomic failed on an existing file"
+[ "$(mode "$T/view-new.md"):$(cat "$T/view-new.md")" = "-rw-r-----:view 2" ] || bad "a rewritten view lost its mode or content"
+for v in "$(printf 'a\302\205b')" "$(printf 'a\302\233b')" "$(printf 'a\342\200\250b')" "$(printf 'a\342\200\251b')"; do
+  rc=0; rfm_value_ok "$v" || rc=$?
+  [ "$rc" = 1 ] || bad "a C1 control or line separator was accepted ($(printf '%s' "$v" | od -An -tx1 | tr -d ' \n'))"
+  rfm_value_ok "$(rfm_clean "$v")" || bad "rfm_clean left an unwritable value"
+done
+rfm_value_ok "café — 東京" || bad "ordinary non-ASCII text was refused"
+# A value holding ': ' and ' # ' reads back verbatim through both twins — the
+# line PyYAML rejects outright, and a comment-stripping reader cuts short.
+printf -- '---\nid: T-1\nphase: Phase 3: Foo # x\n---\n' > "$T/phase.md"
+[ "$(rfm_get "$T/phase.md" phase)" = 'Phase 3: Foo # x' ] || bad "rfm_get: 'phase: Phase 3: Foo # x' was not read verbatim"
+got="$(python3 -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import frontmatter; print(frontmatter.get(open(sys.argv[2], encoding="utf-8").read(), "phase"))' "$LIBDIR" "$T/phase.md" 2>&1)"
+[ "$got" = 'Phase 3: Foo # x' ] || bad "frontmatter.py: 'phase: Phase 3: Foo # x' read as [$got]"
+cp "$FX/dup.md" "$T/s.md"; rc=0; RFM_STRICT=1 rfm_get "$T/s.md" status >/dev/null 2>&1 || rc=$?
+[ "$rc" = 4 ] || bad "RFM_STRICT=1: a duplicated key read as rc $rc, want 4"
+[ "$(rfm_get "$T/s.md" status)" = in-flight ] || bad "first-wins read of a duplicated key"
+for f in lf crlf; do
+  cp "$FX/$f.md" "$T/rw-$f.md"; printf 'new body\n' > "$T/body"
+  rfm_rewrite "$T/rw-$f.md" "$T/body" status done 2>/dev/null || bad "$f: rfm_rewrite failed"
+  [ "$(rfm_get "$T/rw-$f.md" status)" = done ] || bad "$f: rfm_rewrite did not set the key"
+  [ "$(rfm_body "$T/rw-$f.md" | tr -d '\r')" = "$(printf '\nnew body')" ] || bad "$f: the body was not replaced"
+done
+( RASA_ACTOR="$(printf 'bot\nstatus: success')"; if rasa_actor >/dev/null 2>&1; then exit 1; fi ) \
+  || bad "rasa_actor accepted a control character"
+( RASA_ACTOR="$(printf '%0129d' 0)"; if rasa_actor >/dev/null 2>&1; then exit 1; fi ) \
+  || bad "rasa_actor accepted an identity over 128 characters"
+[ "$(RASA_ACTOR='  ci-bot  ' rasa_actor)" = ci-bot ] || bad "rasa_actor did not trim"
+
+# ── 3. yaml ─────────────────────────────────────────────────────────────────
+echo "3. yaml (verbatim writes)"
+if python3 -B -c 'import yaml' 2>/dev/null; then
+  for v in 'DEP-20260924-101500-staging' 'v1.4.2-9f3a1c7-staging' '2026-09-24 10:15:00 UTC' \
+           'in-flight' 'success' 'ci-bot' 'staging' 'task/TASK-065-shared-frontmatter' '42' \
+           'invocation' 'a1b2c3d' 'deploys/records/DEP-1.md'; do
+    line="$(rfm_line description "$v")"
+    got="$(python3 -B -c 'import sys,yaml; print(yaml.safe_load(sys.argv[1])["description"])' "$line" 2>&1)" \
+      || { bad "yaml: plain value [$v] does not parse"; continue; }
+    [ "$got" = "$v" ] || bad "yaml: [$v] reads back as [$got]"
+  done
+  for v in 'foo: bar' 'see #42' '[draft] x'; do
+    [ "$(rfm_line description "$v")" = "description: $v" ] || bad "yaml: [$v] was not written verbatim"
+  done
+else
+  echo "   SKIP — PyYAML not installed (the corpus and writer checks still ran)"
+fi
+
+# ── 4. grep gate ────────────────────────────────────────────────────────────
+echo "4. grep gate$([ "$STRICT" = 1 ] || echo ' (advisory — hits are listed, not failed)')"
+vendored="$(python3 -B -c 'import json; d=json.load(open("vendored.json")); print("\n".join(e["path"] for k,v in d.items() if isinstance(v,dict) for e in v.get("files",[])))' 2>/dev/null || true)"
+excl=()
+while IFS= read -r p; do [ -n "$p" ] && excl+=(":!$p"); done <<EOF
+$vendored
+EOF
+# Banned: exact-fence readers (awk, shell and Python spellings, including a
+# Python `\A---` regex), `> "$tmp" && mv` (a temp in $TMPDIR loses the mode),
+# an unmarked `awk -v NAME="$var"` (it expands backslash escapes), `sed -i`,
+# and — in shipped content only — a `grep '^key:'` reader, which reads the
+# body as well as the frontmatter. A comment line is not code, so it is not
+# a hit; a deliberate exception carries `# rfm-ok: <why>` on the line.
+GREP_KEY_RE="grep [^|]*[\"']\\^[A-Za-z_][A-Za-z0-9_-]*[[:space:]]*:"
+hits="$( { git grep -n -E \
+  -e '\$0 *== *"---"' -e "/\^---\\$/" -e "'\^---\\$'" -e '\^---\\n' -e "strip\(\) *[!=]= *'---'" \
+  -e '> *"\$tmp" *&& *mv ' \
+  -e 'awk [^|]*-v +[A-Za-z_]+="\$' \
+  -e 'sed -i' -e '\\A---' \
+  -- content bin ':!content/lib/*' ':!bin/check-frontmatter' ':!bin/check-reader-parity' ':!*.md' "${excl[@]}"
+  git grep -n -E -e "$GREP_KEY_RE" -- content ':!content/lib/*' ':!*.md' "${excl[@]}"
+} | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' | grep -v '# rfm-ok:' | LC_ALL=C sort -u || true)"
+if [ -n "$hits" ]; then
+  n="$(printf '%s\n' "$hits" | grep -c .)"
+  if [ "$STRICT" = 1 ]; then
+    printf '%s\n' "$hits" | sed 's/^/  ✗ /'; fail=$((fail + n))
+  else
+    printf '%s\n' "$hits" | sed 's/^/  · /'
+    echo "   $n site(s) — without --advisory these fail the gate"
+  fi
+else
+  echo "   clean"
+fi
+
+# ── 5. mutation ─────────────────────────────────────────────────────────────
+echo "5. mutation (exact-match fences must fail the corpus)"
+mkdir -p "$T/mut"
+cp "$LIBDIR/frontmatter.py" "$T/mut/"
+sed 's#function is_fence(l) { return l ~ /^---\[ \\t\]\*\$/ }#function is_fence(l) { return l ~ /^---$/ }#' \
+  "$LIBDIR/frontmatter.sh" > "$T/mut/frontmatter.sh"
+if cmp -s "$LIBDIR/frontmatter.sh" "$T/mut/frontmatter.sh"; then
+  bad "mutation: could not mutate is_fence — the gate would not notice a regression"
+else
+  mut="$(corpus "$T/mut" | grep -c '^sh ' || true)"
+  if [ "${mut:-0}" -gt 0 ]; then echo "   the mutated library fails $mut corpus row(s) — the corpus catches it"
+  else bad "mutation: an exact-match fence passed the whole corpus"; fi
+fi
+
+echo
+if [ "$fail" -eq 0 ]; then echo "bin/check-frontmatter: clean"; exit 0; fi
+echo "bin/check-frontmatter: $fail finding(s)"; exit 1

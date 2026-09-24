@@ -283,7 +283,7 @@ fields live on `Stamp: run`.
 |---|---|---|---|
 | `run_id` | yes | string | `RUN-YYYYMMDD-HHMMSS-<short>`. Matches the filename. |
 | `kind` | yes | enum | `mission` / `auto-task` / `auto-develop` / `auto-test` / `auto-phase` / `auto-bug` / `auto-hotfix` / `manual`. The invoked entry point. |
-| `actor` | yes | string | Who or what ran it. Resolved in one fixed order: `RASA_ACTOR`, then the clone's git identity, then the OS user. `RASA_ACTOR` is the knob a runner, CI job or agent harness sets to identify itself. |
+| `actor` | yes | string | Who or what ran it. Resolved in one fixed order: `RASA_ACTOR`, then the clone's git identity, then the OS user (`rasa_actor`, in the shared library). `RASA_ACTOR` is the knob a runner, CI job or agent harness sets to identify itself. An identity carrying a control character is refused before the record is opened. |
 | `actor_kind` | yes | enum | `human` / `agent`. Distinct from the task's `x-origin`, which records how a *file* came to exist. |
 | `status` | yes | enum | `in-flight` / `completed` / `stopped` / `failed`. Opened `in-flight` **before** the work and sealed after. |
 | `outcome` | no | enum | `completed` / `stopped-at-gate` / `failed` / `abandoned`. Absent while `in-flight`. |

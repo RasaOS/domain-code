@@ -28,22 +28,19 @@ BUILD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$BUILD_DIR/.." && pwd)"
 cd "$PROJECT_DIR"
 
-# rasa_actor — the ONE actor-resolution order across the Element.
-#
-#   RASA_ACTOR  -> set by a runner, CI job or agent harness. The knob.
-#   git identity -> the human configured in this clone.
-#   OS user      -> last resort.
-#
-# Canonical definition: stamps.md, "Stamp: run" -> actor. Before this existed,
-# five sites called $(whoami) directly, so a service account running an agent
-# was recorded in the ledger exactly as a human would be.
-rasa_actor() {
-  local a="${RASA_ACTOR:-}"
-  [ -n "$a" ] || a="$(git config user.name 2>/dev/null || true)"
-  [ -n "$a" ] || a="$(whoami 2>/dev/null || true)"
-  [ -n "$a" ] || a="${USER:-unknown}"
-  printf '%s' "$a"
-}
+# The shared record library, for rasa_actor — the ONE actor-resolution order
+# across the Element (RASA_ACTOR, then git user.name, then the OS user;
+# stamps.md, "Stamp: run"). build/ installs at the project root, beside
+# .claude/, so an install has it at .claude/lib/domain-code; the Element's own
+# tree keeps it at content/lib/domain-code.
+_rfm=""
+for _d in "$BUILD_DIR/../.claude/lib/domain-code" "$BUILD_DIR/../lib/domain-code"; do
+  if [ -f "$_d/frontmatter.sh" ]; then _rfm="$_d/frontmatter.sh"; break; fi
+done
+[ -n "$_rfm" ] || { echo "ERROR: .claude/lib/domain-code/frontmatter.sh is missing — re-run the Element's bin/init" >&2; exit 70; }
+# shellcheck source=/dev/null
+. "$_rfm"
+rfm_require 1 || exit 70
 
 # ─── Defaults ──────────────────────────────────────────────────────────────
 ENV=""
@@ -152,7 +149,14 @@ if [[ -f "$ENV_SH" ]]; then
   DEPLOY_TO="$(bash "$ENV_SH" get "$ENV" deploy_to 2>/dev/null || true)"
 fi
 
-export DEPLOY_USER="$(rasa_actor)"
+# Who is deploying — resolved once, before anything is written. An identity
+# carrying a control character is refused, not recorded: it used to forge
+# rows in the deploy log (and `export X="$(cmd)"` hid the failure).
+DEPLOY_USER="$(rasa_actor)" || {
+  echo "ERROR: cannot record who is deploying — fix RASA_ACTOR or git user.name." >&2
+  exit 2
+}
+export DEPLOY_USER
 export DEPLOY_TIMESTAMP="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 
 # ─── Resolve direction, then enforce it ────────────────────────────────────

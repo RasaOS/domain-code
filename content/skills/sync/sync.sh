@@ -25,14 +25,25 @@
 
 set -euo pipefail
 
+# The shared record library — rasa_root, the frontmatter reader and writer,
+# rasa_actor. Found relative to this script (content/lib/domain-code/ in the
+# Element, .claude/lib/domain-code/ in an install), never through the project
+# root it exists to resolve.
+_rfm="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../lib/domain-code" 2>/dev/null && pwd)/frontmatter.sh"
+[ -f "$_rfm" ] || { echo "error: $(basename "$0"): .claude/lib/domain-code/frontmatter.sh is missing — re-run the Element's bin/init" >&2; exit 70; }
+# shellcheck source=../../lib/domain-code/frontmatter.sh
+. "$_rfm"
+rfm_require 1 || exit 70
+
 LOCK=".claude/rasa.lock.json"
 LEGACY_LOCK=".claude/foundation.json"
 
 die() { echo "sync: $*" >&2; exit 1; }
 
-project_root() {
-  git rev-parse --show-toplevel 2>/dev/null || pwd
-}
+# The project this install serves — its ledgers and .claude/ live here.
+# rasa_root (the shared library) walks up to the install's lockfile and
+# never past the repository top; see its comment for the order.
+project_root() { rasa_root; }
 
 # lock_field <key>  — element.repo | element.branch | pinned_sha
 # Reads the canonical lockfile, falling back to the pre-canon one.
@@ -298,7 +309,7 @@ archive() {
 
 list_group() {
   # list_group <plan-output> <header-prefix> — the paths under one plan group
-  printf '%s\n' "$1" | awk -v h="$2" 'index($0, h) == 1 {on=1; next} /^$/ {on=0} on && /^  / {sub(/^  /, ""); print}'
+  printf '%s\n' "$1" | SYNC_H="$2" awk 'index($0, ENVIRON["SYNC_H"]) == 1 {on=1; next} /^$/ {on=0} on && /^  / {sub(/^  /, ""); print}'
 }
 
 cmd_apply() {

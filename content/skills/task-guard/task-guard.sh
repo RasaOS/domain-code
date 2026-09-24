@@ -23,6 +23,16 @@
 
 set -euo pipefail
 
+# The shared record library — rasa_root, the frontmatter reader and writer,
+# rasa_actor. Found relative to this script (content/lib/domain-code/ in the
+# Element, .claude/lib/domain-code/ in an install), never through the project
+# root it exists to resolve.
+_rfm="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../lib/domain-code" 2>/dev/null && pwd)/frontmatter.sh"
+[ -f "$_rfm" ] || { echo "error: $(basename "$0"): .claude/lib/domain-code/frontmatter.sh is missing — re-run the Element's bin/init" >&2; exit 70; }
+# shellcheck source=../../lib/domain-code/frontmatter.sh
+. "$_rfm"
+rfm_require 1 || exit 70
+
 # Git hook the on/off toggle installs.
 GIT_HOOK="pre-commit"
 HOOK_SUB="guard-commit"
@@ -53,12 +63,10 @@ EOF
 }
 
 # ── helpers ──────────────────────────────────────────────────────
-repo_root() {
-  git rev-parse --show-toplevel 2>/dev/null || {
-    echo "error: not inside a git repo" >&2
-    return 1
-  }
-}
+# The project this install serves — its ledgers and .claude/ live here.
+# rasa_root (the shared library) walks up to the install's lockfile and
+# never past the repository top; see its comment for the order.
+repo_root() { rasa_root; }
 
 git_common_dir() {
   local d
@@ -66,16 +74,16 @@ git_common_dir() {
   ( cd -P "$d" 2>/dev/null && pwd -P )
 }
 
-# Same resolution order as rasa_actor() elsewhere in the Element — RASA_ACTOR
-# first, so an agent harness can identify itself instead of inheriting whatever
-# git identity the clone happens to carry. See stamps.md, "Stamp: run".
-actor() {
-  local a="${RASA_ACTOR:-}"
-  [ -n "$a" ] || a="$(git config user.name 2>/dev/null || true)"
-  [ -n "$a" ] || a="$(whoami 2>/dev/null || true)"
-  [ -n "$a" ] || a="${USER:-unknown}"
-  printf '%s' "$a"
-}
+# actor — the shared rasa_actor (RASA_ACTOR, then git user.name, then the OS
+# user), or nothing when it refuses an identity that carries a control
+# character. This hook never blocks a commit, so a refused identity is
+# recorded as refused (ledger_append) rather than written raw.
+actor() { rasa_actor 2>/dev/null || true; }
+
+# one_line <text> — a ledger value on one line: control characters become
+# spaces. Clean text is returned byte-for-byte. Before 0.54.0 a newline in
+# the actor or a file name wrote extra rows — a forged `## …` entry.
+one_line() { printf '%s' "$1" | LC_ALL=C tr '\000-\037\177' ' '; }
 
 now_stamp() { date '+%Y-%m-%d %H:%M'; }
 
@@ -130,15 +138,18 @@ EOF
 ledger_append() {
   local task_ref="$1" auto="$2" note="$3"; shift 3
   local ledger; ledger="$(ledger_path)"
+  local who; who="$(actor)"
+  [ -n "$who" ] || who="(refused: the actor identity carried a control character)"
+  task_ref="$(one_line "$task_ref")"; note="$(one_line "$note")"
   {
     printf '\n## %s — %s\n' "$(now_stamp)" "$task_ref"
-    printf -- '- **Author.** %s\n' "$(actor)"
+    printf -- '- **Author.** %s\n' "$(one_line "$who")"
     if [ "$auto" = "1" ]; then
       printf -- '- **Task.** %s — auto-created (no active task at commit time)\n' "$task_ref"
     else
       printf -- '- **Task.** %s — linked to active work\n' "$task_ref"
     fi
-    printf -- '- **Files.** %s\n' "$(printf '%s, ' "$@" | sed 's/, $//')"
+    printf -- '- **Files.** %s\n' "$(one_line "$(printf '%s, ' "$@" | sed 's/, $//')")"
     printf -- '- **Note.** %s\n' "$note"
   } >> "$ledger"
 }
@@ -193,14 +204,24 @@ current_task() {
 TG_OPEN="# >>> task-guard >>>"
 TG_CLOSE="# <<< task-guard <<<"
 
+# _strip_block <hook-file> — remove task-guard's sentinel block. The temp
+# starts as a copy of the hook, so it keeps the hook's mode: before 0.54.0 the
+# rewritten file was 0644, and removing task-guard from a pre-commit shared
+# with other tools silently disabled them all.
 _strip_block() {
-  local file="$1"
+  local file="$1" tmp
   [ -f "$file" ] || return 0
-  awk -v o="$TG_OPEN" -v c="$TG_CLOSE" '
-    index($0,o){skip=1}
-    !skip{print}
-    index($0,c){skip=0}
-  ' "$file" > "$file.tg.tmp" && mv "$file.tg.tmp" "$file"
+  tmp="$(mktemp "$(dirname "$file")/.task-guard.XXXXXX")" || return 1
+  cp -p "$file" "$tmp"
+  if TG_O="$TG_OPEN" TG_C="$TG_CLOSE" awk '
+       index($0, ENVIRON["TG_O"]) { skip = 1 }
+       !skip { print }
+       index($0, ENVIRON["TG_C"]) { skip = 0 }
+     ' "$file" > "$tmp"; then
+    mv -f "$tmp" "$file"
+  else
+    rm -f "$tmp"; echo "error: could not rewrite $file" >&2; return 1
+  fi
 }
 
 install_git_hook() {

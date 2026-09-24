@@ -216,11 +216,30 @@ import-env.sh validate                        # coverage check against .env-temp
 
 `add` flags: `--required`, `--group`, `--purpose`, `--type`, `--default`, `--description`, `--environments`, `--used-by-runtimes`, `--used-by-clouds`, `--tags`, `--force`.
 
+What `add` refuses, because a stamp is committed:
+
+- **A secret as a default.** When `required` is false and the purpose is
+  `secret`, `--default` is refused (exit 3) — the value belongs in the `.env`
+  file. With `--purpose` left out, the purpose is what `suggest` says, so
+  `STRIPE_SECRET_KEY` is a secret without anyone saying so. An explicit
+  `--purpose` always wins, with a warning when it disagrees with `suggest`:
+  that is the escape hatch for a name the classifier gets wrong.
+- **A URL carrying a password.** A `--default` like `postgres://app:pw@db/app`
+  is always refused (exit 3). Write it without the password
+  (`postgres://app@db/app`).
+- **A value that would forge a line.** A newline or control character in any
+  flag (exit 2); a key that is not a variable name (exit 2); an array item
+  outside `[A-Za-z0-9._/-]` (exit 2).
+
+`add-profile` reads and rewrites the `environments:` value in the
+frontmatter only, matches whole items (`prod` is not in `[prod-eu]`), and
+refuses a profile outside `[A-Za-z0-9._/-]`.
+
 All subcommands exit:
 - `0` success
 - `1` operational error
-- `2` usage error
-- `3` validation failed (validate only)
+- `2` usage error, or a value that cannot be written
+- `3` validation failed (validate), or a secret refused as a default (add)
 
 ## When to invoke this skill
 

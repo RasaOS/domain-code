@@ -16,6 +16,16 @@
 
 set -euo pipefail
 
+# The shared record library — rasa_root, the frontmatter reader and writer,
+# rasa_actor. Found relative to this script (content/lib/domain-code/ in the
+# Element, .claude/lib/domain-code/ in an install), never through the project
+# root it exists to resolve.
+_rfm="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../lib/domain-code" 2>/dev/null && pwd)/frontmatter.sh"
+[ -f "$_rfm" ] || { echo "error: $(basename "$0"): .claude/lib/domain-code/frontmatter.sh is missing — re-run the Element's bin/init" >&2; exit 70; }
+# shellcheck source=../../lib/domain-code/frontmatter.sh
+. "$_rfm"
+rfm_require 1 || exit 70
+
 # Claude Code hook the init/off toggle installs. Shared settings so
 # every contributor's session enforces the contract discipline.
 CC_TARGET=".claude/settings.json"
@@ -77,23 +87,20 @@ EOF
 }
 
 # ── helpers ──────────────────────────────────────────────────────
-repo_root() {
-  git rev-parse --show-toplevel 2>/dev/null || {
-    echo "error: not inside a git repo" >&2
-    return 1
-  }
-}
+# The project this install serves — its ledgers and .claude/ live here.
+# rasa_root (the shared library) walks up to the install's lockfile and
+# never past the repository top; see its comment for the order.
+repo_root() { rasa_root; }
 
 now_date()  { date '+%Y-%m-%d'; }
 now_stamp() { date '+%Y-%m-%d %H:%M'; }
 
-# Who is making the change — for the ledger.
-actor() {
-  local a
-  a="$(git config user.name 2>/dev/null || true)"
-  [ -n "$a" ] || a="${USER:-unknown}"
-  printf '%s' "$a"
-}
+# Who is making the change — for the ledger. The library's rasa_actor
+# (RASA_ACTOR, then git user.name, then the OS user), resolved once in main()
+# before a mutating verb writes anything. Before 0.54.0 this ignored
+# RASA_ACTOR, so an agent's changes were ledgered as the human's.
+CONTRACT_ACTOR=""
+actor() { printf '%s' "$CONTRACT_ACTOR"; }
 
 # Resolve this script's absolute path (synced project or kit repo).
 self_path() {
@@ -133,179 +140,45 @@ valid_name() {
   esac
 }
 
-# ── frontmatter (0.52.1) ─────────────────────────────────────────
-# The Element-wide frontmatter contract lands in 0.53.0; until then these
-# helpers hold the same rules locally:
-#   * a UTF-8 BOM on line 1 and a CR at the end of any line are ignored
-#     when MATCHING, and preserved byte-for-byte when writing;
-#   * a fence is `---` followed only by blanks; the opening fence is line 1;
-#   * the first occurrence of a key wins, and a writer refuses a duplicate;
-#   * values reach awk through ENVIRON, never `awk -v` (which expands
-#     backslash escapes, so a literal \n became a real newline);
-#   * a write goes to a temp file in the same directory, is checked, then
-#     renamed — and is read back before anything is ledgered.
-FM_BOM="$(printf '\357\273\277')"; export FM_BOM
+# ── frontmatter ──────────────────────────────────────────────────
+# 0.52.1 held the frontmatter rules here, in a private copy: a BOM and a CR
+# ignored when matching and kept when writing; a fence is `---` plus blanks
+# on line 1; the first occurrence of a key wins and a writer refuses a
+# duplicate; values reach awk through ENVIRON; a write is a same-directory
+# temp file, renamed, read back. Since 0.54.0 those rules are the shared
+# library's, for every writer (frontmatter.sh — its READ and WRITE contracts).
+# These wrappers keep this script's names and exit codes.
 
-# The awk preamble every reader/writer shares: `line` is $0 normalised for
-# matching; `raw` is what gets printed; `cr` is this line's own EOL marker.
-FM_AWK_NORM='
-  { raw = $0; line = $0
-    if (NR == 1 && substr(line, 1, 3) == ENVIRON["FM_BOM"]) line = substr(line, 4)
-    cr = ""; if (line ~ /\r$/) { cr = "\r"; sub(/\r$/, "", line) } }
-  function is_fence(l) { return l ~ /^---[ \t]*$/ }
-  function key_of(l,   k, r) {
-    k = ENVIRON["FM_K"]
-    if (substr(l, 1, length(k)) != k) return 0
-    r = substr(l, length(k) + 1)
-    return (r ~ /^[ \t]*:/)
-  }
-'
+# fm_value_ok <value> — no control character, C1 control or Unicode line or
+# paragraph separator. A leading or trailing blank is not refused here: a
+# reader trims it, and fm_set trims before it writes.
+fm_value_ok() { rfm_value_ok "$1" || [ $? -eq 3 ]; }
 
-# fm_value_ok <value> — a value may not introduce a line or carry controls.
-# Checked bytewise (C locale), so the verdict does not depend on the
-# caller's locale. Refused besides C0 controls and DEL: the C1 controls
-# U+0080–U+009F (which include NEL, a line break to a YAML 1.1 reader) and
-# the Unicode line/paragraph separators U+2028 and U+2029. Ordinary non-ASCII
-# text — é, —, CJK — passes.
-fm_value_ok() {
-  local LC_ALL=C
-  case "$1" in
-    *[[:cntrl:]]*|*$'\302'[$'\200'-$'\237']*|*$'\342\200\250'*|*$'\342\200\251'*) return 1 ;;
-  esac
-  return 0
-}
+# fm_clean <text> — free text for the LEDGER (--why, the actor) as one line.
+fm_clean() { rfm_clean "$1"; }
 
-# fm_clean <text> — for free text written to the LEDGER (--why): collapse
-# line breaks (including NEL/LS/PS) and tabs to one space, drop other control
-# characters. Bytewise throughout, so text after an invalid UTF-8 byte is
-# kept rather than silently cut.
-fm_clean() {
-  local nel ls ps
-  nel="$(printf '\302\205')"; ls="$(printf '\342\200\250')"; ps="$(printf '\342\200\251')"
-  printf '%s' "$1" | LC_ALL=C tr '\r\n\t' '   ' | LC_ALL=C tr -d '\000-\037\177' \
-    | LC_ALL=C sed "s/$nel/ /g; s/$ls/ /g; s/$ps/ /g; s/  */ /g; s/^ //; s/ \$//"
-}
-
-# fm_get <file> <key> — echo the value. rc 0 found (value may be empty),
-# rc 1 key absent, rc 3 no frontmatter or an unterminated block. The first
-# occurrence wins; with FM_STRICT=1 a key that appears twice is rc 4 instead
-# — used for is_locked, where first-wins and a YAML reader's last-wins would
+# fm_get <file> <key> — rc 0 found (the value may be empty), 1 absent, 3 no
+# readable frontmatter. With FM_STRICT=1 a key that appears twice is rc 4:
+# used for is_locked, where first-wins and a YAML reader's last-wins would
 # disagree about the same bytes.
-fm_get() {
-  FM_K="$2" LC_ALL=C awk "$FM_AWK_NORM"'
-    NR == 1 { if (!is_fence(line)) exit; open = 1; next }
-    open && is_fence(line) { closed = 1; exit }
-    open && key_of(line) {
-      if (found++) next
-      v = line; sub(/^[^:]*:[ \t]*/, "", v); sub(/[ \t]+$/, "", v)
-      val = v
-    }
-    END {
-      if (!closed) exit 3
-      if (!found)  exit 1
-      if (found > 1 && ENVIRON["FM_STRICT"] == "1") exit 4
-      print val
-    }
-  ' "$1"
-}
+fm_get() { RFM_STRICT="${FM_STRICT:-0}" rfm_get "$1" "$2"; }
 
-# fm_set <file> <key> <value> — UPSERT one key. Rewrites the key in place,
-# or INSERTS it before the closing fence when absent (0.52.0 had no insert
-# branch: setting a missing key exited 0 and wrote nothing — which is how
-# `lock` ledgered a lock that never happened). Refuses: a value with control
-# characters (rc 2), no/unterminated frontmatter (rc 3), a key that already
-# appears twice (rc 4). Reads the value back before returning 0.
+# fm_set <file> <key> <value> — upsert one key: rewritten in place, or
+# inserted before the closing fence when absent (0.52.0 had no insert branch,
+# which is how `lock` ledgered a lock that never happened). Blanks at either
+# end are trimmed. rc 2 a control character, 3 no readable frontmatter, 4 the
+# key already appears twice; the file is untouched on every refusal.
 fm_set() {
-  local file="$1" key="$2" val="$3" dir tmp nrf k ro rc=0
-  val="$(printf '%s' "$val" | sed 's/^[ 	]*//; s/[ 	]*$//')"
-  fm_value_ok "$val" || {
-    echo "error: refusing to write '$key' — the value contains a control character or line break" >&2
-    return 2; }
-  dir="$(dirname "$file")"
-  tmp="$(mktemp "$dir/.contract.XXXXXX")" || return 1
-  CONTRACT_TMP="$tmp"                                # removed by the trap on interrupt
-  nrf="$tmp.nr"
-  ro=""; [ "$(ls -ld "$file" | cut -c3)" = "-" ] && ro=1   # owner write bit, not access
-  cp -p "$file" "$tmp" 2>/dev/null || true          # carry the file mode
-  chmod u+w "$tmp" 2>/dev/null || true               # …but stay writable to us
-  # awk rewrites the frontmatter only and stops at the closing fence; the
-  # body is then copied byte-for-byte by tail. (Streaming the body through
-  # awk lost everything after a NUL byte on BWK awk.)
-  FM_K="$key" FM_V="$val" FM_NRF="$nrf" LC_ALL=C awk "$FM_AWK_NORM"'
-    NR == 1 { if (!is_fence(line)) { bad = 3; exit } ; open = 1; print raw; next }
-    open && is_fence(line) {
-      if (!done) print ENVIRON["FM_K"] ": " ENVIRON["FM_V"] cr
-      print raw; f = ENVIRON["FM_NRF"]; print NR > f; closed = 1; exit
-    }
-    open && key_of(line) {
-      if (++n > 1) { bad = 4; exit }
-      print ENVIRON["FM_K"] ": " ENVIRON["FM_V"] cr; done = 1; next
-    }
-    { print raw }
-    END { if (bad) exit bad; if (!closed) exit 3 }
-  ' "$file" > "$tmp" || rc=$?
-  if [ "$rc" -eq 0 ]; then
-    k="$(cat "$nrf" 2>/dev/null)"
-    case "$k" in ''|*[!0-9]*) rc=1 ;; esac
-  fi
-  [ "$rc" -eq 0 ] && { tail -n +"$((k + 1))" "$file" >> "$tmp" || rc=1; }
-  rm -f "$nrf"
-  if [ "$rc" -ne 0 ]; then
-    rm -f "$tmp"; CONTRACT_TMP=""
-    case "$rc" in
-      3) echo "error: $file has no readable frontmatter block — refusing to write '$key'" >&2 ;;
-      4) echo "error: $file declares '$key' more than once — refusing to guess; repair by hand" >&2 ;;
-      *) echo "error: rewriting $file failed (rc=$rc) — file unchanged" >&2 ;;
-    esac
-    return "$rc"
-  fi
-  [ -z "$ro" ] || chmod u-w "$tmp" 2>/dev/null || true   # restore read-only
-  mv -f "$tmp" "$file" || { rm -f "$tmp"; CONTRACT_TMP=""; return 1; }
-  CONTRACT_TMP=""
-  local got=""; got="$(fm_get "$file" "$key")" || true
-  [ "$got" = "$val" ] || {
-    echo "error: wrote '$key' to $file but read back '$got'" >&2; return 1; }
+  local val
+  val="$(printf '%s' "$3" | sed 's/^[ 	]*//; s/[ 	]*$//')"
+  rfm_set "$1" "$2" "$val"
 }
 
 # stamp_rewrite <file> <bodyfile> — replace everything after the closing
-# fence with <bodyfile>, and stamp last_updated, in ONE rename. 0.52.0 copied
+# fence with <bodyfile> and stamp last_updated, in ONE rename. 0.52.0 copied
 # the whole file when it could not find the fences (CRLF, a trailing space on
 # the fence) and then APPENDED the new body: rc 0, old and new body both kept.
-stamp_rewrite() {
-  local file="$1" bodyfile="$2" dir tmp ro rc=0
-  dir="$(dirname "$file")"
-  tmp="$(mktemp "$dir/.contract.XXXXXX")" || return 1
-  CONTRACT_TMP="$tmp"
-  ro=""; [ "$(ls -ld "$file" | cut -c3)" = "-" ] && ro=1
-  cp -p "$file" "$tmp" 2>/dev/null || true
-  chmod u+w "$tmp" 2>/dev/null || true
-  FM_K="last_updated" FM_V="$(now_date)" LC_ALL=C awk "$FM_AWK_NORM"'
-    NR == 1 { if (!is_fence(line)) { bad = 3; exit } ; open = 1; print raw; next }
-    open && is_fence(line) {
-      if (!done) print ENVIRON["FM_K"] ": " ENVIRON["FM_V"] cr
-      print raw; printf "%s\n", cr; closed = 1; exit
-    }
-    open && key_of(line) {
-      if (++n > 1) { bad = 4; exit }
-      print ENVIRON["FM_K"] ": " ENVIRON["FM_V"] cr; done = 1; next
-    }
-    { print raw }
-    END { if (bad) exit bad; if (!closed) exit 3 }
-  ' "$file" > "$tmp" || rc=$?
-  if [ "$rc" -ne 0 ]; then
-    rm -f "$tmp"; CONTRACT_TMP=""
-    case "$rc" in
-      3) echo "error: $file has no readable frontmatter block — body NOT replaced" >&2 ;;
-      4) echo "error: $file declares 'last_updated' more than once — body NOT replaced; repair by hand" >&2 ;;
-      *) echo "error: rewriting $file failed (rc=$rc) — body NOT replaced" >&2; return 1 ;;
-    esac
-    return "$rc"
-  fi
-  cat "$bodyfile" >> "$tmp" || { rm -f "$tmp"; CONTRACT_TMP=""; return 1; }
-  [ -z "$ro" ] || chmod u-w "$tmp" 2>/dev/null || true   # restore read-only
-  mv -f "$tmp" "$file" || { rm -f "$tmp"; CONTRACT_TMP=""; return 1; }
-  CONTRACT_TMP=""
-}
+stamp_rewrite() { rfm_rewrite "$1" "$2" last_updated "$(now_date)"; }
 
 # lock_state <name> — locked | unlocked | missing | invalid | duplicate |
 # damaged | none.
@@ -317,6 +190,9 @@ lock_state() {
   local file val rc=0
   file="$(stamp_path "$1")"
   [ -f "$file" ] || { echo none; return 0; }
+  # The library answers rc 4 for an unreadable file too; that is damage,
+  # not a duplicated key.
+  [ -r "$file" ] || { echo damaged; return 0; }
   val="$(FM_STRICT=1 fm_get "$file" is_locked)" || rc=$?
   case "$rc" in
     0) ;;
@@ -374,14 +250,13 @@ require_name() {
 # frontmatter over the locked stamp: the ledger said "locked", the stamp was
 # not. mkdir is atomic and needs no flock (which stock macOS lacks).
 CONTRACT_MUTEX=""
-CONTRACT_TMP=""   # the in-flight temp file, removed if the run is interrupted
 
 # contract_cleanup — never fails, so it can never rewrite the exit status
 # of the verb it runs after (set -e applies inside traps too).
 contract_cleanup() {
-  if [ -n "$CONTRACT_TMP" ]; then rm -f "$CONTRACT_TMP" "$CONTRACT_TMP.nr" 2>/dev/null || true; fi
+  rfm_cleanup   # the library's write in flight, if any
   if [ -n "$CONTRACT_MUTEX" ]; then rmdir "$CONTRACT_MUTEX" 2>/dev/null || true; fi
-  CONTRACT_TMP=""; CONTRACT_MUTEX=""
+  CONTRACT_MUTEX=""
 }
 
 contract_mutex() {
@@ -937,7 +812,11 @@ main() {
   esac
 
   case "$action" in
-    new|update|bump|lock|unlock) contract_mutex || return 1 ;;
+    new|update|bump|lock|unlock)
+      # An identity carrying a control character is refused here, before
+      # anything is written, rather than flattened into the ledger.
+      CONTRACT_ACTOR="$(rasa_actor)" || return 2
+      contract_mutex || return 1 ;;
   esac
 
   case "$action" in

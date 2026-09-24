@@ -6,13 +6,29 @@
 # returns them to stdout, stderr, or any log. The orchestrating Claude
 # skill (SKILL.md) calls this script and never sees a single value.
 #
-# Language: pure bash. No YAML parser needed — stamp frontmatter is
-# scanned with grep/awk for the simple fields this script uses.
+# Language: pure bash. No YAML parser needed — stamp frontmatter is read
+# with the Element's shared reader (frontmatter.sh) for the simple fields
+# this script uses.
 
 set -euo pipefail
 
 # ─── Paths ─────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The shared record library. Found relative to this script
+# (content/lib/domain-code/ in the Element, .claude/lib/domain-code/ in an
+# install).
+_rfm="$(cd "$SCRIPT_DIR/../../lib/domain-code" 2>/dev/null && pwd)/frontmatter.sh"
+[ -f "$_rfm" ] || { echo "error: $(basename "$0"): .claude/lib/domain-code/frontmatter.sh is missing — re-run the Element's bin/init" >&2; exit 70; }
+# shellcheck source=../../lib/domain-code/frontmatter.sh
+. "$_rfm"
+rfm_require 1 || exit 70
+
+# stamp_field <stamp> <key> — one frontmatter value, verbatim; empty when
+# absent. The library's reader: before 0.54.0 each read here was an awk that
+# matched exact `---` fences, so a CRLF stamp read as having no var_name and
+# vanished from list, diff and validate.
+stamp_field() { rfm_get "$1" "$2" 2>/dev/null || true; }
 
 project_root() {
   # Walk up from cwd until we find env/stamps/ or hit /
@@ -51,9 +67,13 @@ USAGE:
       Options:
         --required <true|false>          (default: true)
         --group <slash-path>             (default: 'misc')
-        --purpose <enum>                 (default: 'config')
+        --purpose <enum>                 (default: what `suggest` says;
+                                          an explicit value always wins,
+                                          with a warning when it differs)
         --type <enum>                    (default: 'string')
-        --default <value>                (default: empty)
+        --default <value>                (default: empty; refused for a
+                                          secret that is not required, and
+                                          for a URL carrying a password)
         --description <text>             (default: 'TODO — describe')
         --environments <comma,list>      (default: 'local')
         --used-by-runtimes <comma,list>  (default: empty)
@@ -79,8 +99,9 @@ USAGE:
 EXIT CODES:
   0  success
   1  operational error (file not found, write failed)
-  2  usage error
-  3  validation failed
+  2  usage error, or a value that cannot be written (a newline, a control
+     character, an array item outside [A-Za-z0-9._/-])
+  3  validation failed, or a secret refused as a committed default
 
 VALUES NEVER LEAVE THIS SCRIPT. If you see a value in this script's
 output, that's a bug — please report it.
@@ -132,7 +153,7 @@ cmd_diff() {
     stamp_keys=$(
       for f in "$stamps_dir"/*.md; do
         [[ -f "$f" ]] || continue
-        awk '/^---$/{f++; next} f==1 && /^var_name:/{sub(/^var_name:[[:space:]]*/, ""); print; exit}' "$f"
+        stamp_field "$f" var_name
       done | sort -u
     )
   fi
@@ -267,12 +288,31 @@ EOF
 }
 
 # ─── add ───────────────────────────────────────────────────────────────────
+# yaml_array <flag> <comma,list> — a one-line YAML flow list. Each item is
+# trimmed and must be a plain name ([A-Za-z0-9._/-]); rc 2 otherwise.
+yaml_array() {
+  local flag="$1" csv="$2" out="[" first=true v
+  [[ -z "$csv" ]] && { echo "[]"; return 0; }
+  local IFS=','
+  for v in $csv; do
+    v="$(printf '%s' "$v" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    case "$v" in
+      ''|*[!A-Za-z0-9._/-]*)
+        echo "error: --$flag item '$v' is not a plain name ([A-Za-z0-9._/-])" >&2
+        return 2 ;;
+    esac
+    $first && out+="$v" || out+=", $v"
+    first=false
+  done
+  echo "$out]"
+}
+
 # Generate a stamp file. All metadata via flags; values never accepted.
 cmd_add() {
   local key=""
   local required="true"
   local group="misc"
-  local purpose="config"
+  local purpose=""
   local type="string"
   local default=""
   local description="TODO — describe"
@@ -305,6 +345,26 @@ cmd_add() {
     return 2
   fi
 
+  # The key names a file under env/stamps/ and is written into it: a variable
+  # name, nothing else.
+  local key_bad
+  case "$key" in
+    [A-Za-z_]*) case "$key" in *[!A-Za-z0-9_]*) key_bad=1 ;; *) key_bad=0 ;; esac ;;
+    *) key_bad=1 ;;
+  esac
+  [ "$key_bad" = 0 ] || { echo "error: '$key' is not an environment variable name" >&2; return 2; }
+
+  # Purpose: what the classifier says unless --purpose says otherwise. An
+  # explicit purpose always wins — it is the escape hatch for a name the
+  # classifier gets wrong — but a disagreement is said out loud.
+  local suggested
+  suggested="$(cmd_suggest "$key" | sed -n 's/^purpose=//p')"
+  if [ -z "$purpose" ]; then
+    purpose="${suggested:-config}"
+  elif [ -n "$suggested" ] && [ "$purpose" != "$suggested" ]; then
+    echo "warning: $key looks like '$suggested' to the classifier; recording '$purpose' because --purpose says so" >&2
+  fi
+
   # Validate enums
   case "$purpose" in
     connection|credential|feature-flag|config|secret|url|derived) ;;
@@ -319,13 +379,31 @@ cmd_add() {
     *) echo "error: --required must be true or false" >&2; return 2 ;;
   esac
 
+  # A stamp is committed. A secret's value must never become its default,
+  # and neither may a URL that carries a password — `user:pass@` in the
+  # authority, the part between `://` and the next `/`.
+  local auth="${default#*://}"
+  if [ "$auth" != "$default" ]; then
+    auth="${auth%%/*}"
+    case "$auth" in
+      *:*@*)
+        echo "error: refusing --default for $key: it is a URL carrying a password, and a stamp is committed." >&2
+        echo "  Write it without the password (scheme://user@host/...); the password belongs in the .env file." >&2
+        return 3 ;;
+    esac
+  fi
+  if [ "$purpose" = secret ] && [ "$required" = false ] && [ -n "$default" ]; then
+    echo "error: refusing --default for $key: its purpose is secret, and a stamp is committed." >&2
+    echo "  Leave --default out; the value belongs in the .env file." >&2
+    return 3
+  fi
+
   # Compute paths
   local kebab
   kebab="$(echo "$key" | tr '[:upper:]_' '[:lower:]-')"
   local root
   root="$(project_root)"
   local stamps_dir="$root/env/stamps"
-  mkdir -p "$stamps_dir"
   local out="$stamps_dir/$kebab.md"
 
   if [[ -e "$out" && "$force" != true ]]; then
@@ -333,27 +411,14 @@ cmd_add() {
     return 1
   fi
 
-  # Build YAML arrays
-  yaml_array() {
-    local csv="$1"
-    [[ -z "$csv" ]] && { echo "[]"; return; }
-    local IFS=','
-    local out="["
-    local first=true
-    for v in $csv; do
-      v="${v# }"; v="${v% }"   # trim
-      $first && out+="$v" || out+=", $v"
-      first=false
-    done
-    out+="]"
-    echo "$out"
-  }
-
+  # Arrays are written as one-line YAML flow lists, so every item is a plain
+  # name: [A-Za-z0-9._/-]. Anything else — a bracket, a comma inside an
+  # item, a newline — is refused, not quoted.
   local envs_yaml runtimes_yaml clouds_yaml tags_yaml
-  envs_yaml="$(yaml_array "$environments")"
-  runtimes_yaml="$(yaml_array "$used_by_runtimes")"
-  clouds_yaml="$(yaml_array "$used_by_clouds")"
-  tags_yaml="$(yaml_array "$tags")"
+  envs_yaml="$(yaml_array environments "$environments")"         || return 2
+  runtimes_yaml="$(yaml_array used-by-runtimes "$used_by_runtimes")" || return 2
+  clouds_yaml="$(yaml_array used-by-clouds "$used_by_clouds")"   || return 2
+  tags_yaml="$(yaml_array tags "$tags")"                         || return 2
 
   # `default` is special — null if required, else the literal
   local default_yaml
@@ -366,40 +431,44 @@ cmd_add() {
   local today
   today="$(date '+%Y-%m-%d')"
 
-  cat > "$out" <<EOF
----
-name: $kebab
-kind: env-var
-var_name: $key
-group: $group
-required: $required
-purpose: $purpose
-description: $description
-type: $type
-default: $default_yaml
-used_by:
-  runtimes: $runtimes_yaml
-  clouds: $clouds_yaml
-environments: $envs_yaml
-created: $today
-status: active
-tags: $tags_yaml
----
+  # Every value is checked (rfm_line refuses a newline or control character,
+  # rc 2) BEFORE anything is written: before 0.54.0 a newline in --group or
+  # --description forged keys in a committed stamp. Then one atomic write.
+  local fm
+  fm="$(
+    rfm_line name "$kebab"          && rfm_line kind env-var          &&
+    rfm_line var_name "$key"        && rfm_line group "$group"        &&
+    rfm_line required "$required"   && rfm_line purpose "$purpose"    &&
+    rfm_line description "$description" && rfm_line type "$type"      &&
+    rfm_line default "$default_yaml"
+  )" || return 2
 
-# Env var: $key
-
-$description
-
-EOF
+  mkdir -p "$stamps_dir"
+  {
+    printf -- '---\n%s\n' "$fm"
+    printf 'used_by:\n  runtimes: %s\n  clouds: %s\n' "$runtimes_yaml" "$clouds_yaml"
+    rfm_line environments "$envs_yaml"
+    rfm_line created "$today"
+    rfm_line status active
+    rfm_line tags "$tags_yaml"
+    printf -- '---\n\n# Env var: %s\n\n%s\n\n' "$key" "$description"
+  } | rfm_write_atomic "$out" || return 1
 
   echo "wrote: $out"
 }
 
 # ─── add-profile ───────────────────────────────────────────────────────────
-# Append a profile name to an existing stamp's environments[] array.
+# Append a profile name to an existing stamp's environments[] array, through
+# the library: the frontmatter value is read and rewritten, never the body.
+# Before 0.54.0 this was a `grep '^environments:'` and a `sed -i` over the
+# whole file — a body line starting `environments:` was rewritten too — and
+# `\bprod\b` found `prod` inside `prod-eu`, so it was never added.
 cmd_add_profile() {
   local key="${1:?usage: add-profile <KEY> <profile>}"
   local profile="${2:?usage: add-profile <KEY> <profile>}"
+  case "$profile" in
+    ''|*[!A-Za-z0-9._/-]*) echo "error: profile '$profile' is not a plain name ([A-Za-z0-9._/-])" >&2; return 2 ;;
+  esac
   local kebab
   kebab="$(echo "$key" | tr '[:upper:]_' '[:lower:]-')"
   local root
@@ -411,28 +480,33 @@ cmd_add_profile() {
     return 1
   fi
 
-  # Read the environments line, check if profile is already there
-  local current
-  current="$(grep '^environments:' "$stamp" || true)"
-  if [[ -z "$current" ]]; then
-    echo "error: stamp has no environments line: $stamp" >&2
+  local current rc=0
+  current="$(rfm_get "$stamp" environments 2>/dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "error: stamp has no readable environments line: $stamp" >&2
     return 1
   fi
+  case "$current" in
+    \[*\]) ;;
+    *) echo "error: environments in $stamp is not a one-line [a, b] list — edit it by hand" >&2; return 1 ;;
+  esac
 
-  if echo "$current" | grep -qE "\\b$profile\\b"; then
+  local inner item next="" found=false
+  inner="${current#\[}"; inner="${inner%\]}"
+  local IFS=','
+  for item in $inner; do
+    item="$(printf '%s' "$item" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+    [ -n "$item" ] || continue
+    [ "$item" = "$profile" ] && found=true
+    next="${next:+$next, }$item"
+  done
+  unset IFS
+  if $found; then
     echo "no-op: $profile already in $kebab"
     return 0
   fi
-
-  # Insert profile into the array. Handle both [a, b] and [] cases.
-  if echo "$current" | grep -q '\[\]'; then
-    # Empty array → [profile]
-    sed -i.bak "s/^environments: \[\]/environments: [$profile]/" "$stamp"
-  else
-    # Non-empty → insert before closing bracket
-    sed -i.bak "s/^\(environments: \[.*\)\]/\1, $profile]/" "$stamp"
-  fi
-  rm -f "$stamp.bak"
+  next="${next:+$next, }$profile"
+  rfm_set "$stamp" environments "[$next]" || return 1
   echo "updated: $stamp ($profile added)"
 }
 
@@ -459,10 +533,10 @@ cmd_list() {
   local f var_name required group purpose
   for f in "$stamps_dir"/*.md; do
     [[ -f "$f" ]] || continue
-    var_name="$(awk '/^---$/{f++; next} f==1 && /^var_name:/{sub(/^var_name:[[:space:]]*/, ""); print; exit}' "$f")"
-    required="$(awk '/^---$/{f++; next} f==1 && /^required:/{sub(/^required:[[:space:]]*/, ""); print; exit}' "$f")"
-    group="$(awk '/^---$/{f++; next} f==1 && /^group:/{sub(/^group:[[:space:]]*/, ""); print; exit}' "$f")"
-    purpose="$(awk '/^---$/{f++; next} f==1 && /^purpose:/{sub(/^purpose:[[:space:]]*/, ""); print; exit}' "$f")"
+    var_name="$(stamp_field "$f" var_name)"
+    required="$(stamp_field "$f" required)"
+    group="$(stamp_field "$f" group)"
+    purpose="$(stamp_field "$f" purpose)"
 
     [[ -z "$var_name" ]] && continue
     [[ "$required_only" == true && "$required" != "true" ]] && continue
@@ -490,7 +564,7 @@ cmd_validate() {
     stamp_keys="$(
       for f in "$root"/env/stamps/*.md; do
         [[ -f "$f" ]] || continue
-        awk '/^---$/{f++; next} f==1 && /^var_name:/{sub(/^var_name:[[:space:]]*/, ""); print; exit}' "$f"
+        stamp_field "$f" var_name
       done | sort -u
     )"
 
@@ -506,9 +580,9 @@ cmd_validate() {
       for f in "$root"/env/stamps/*.md; do
         [[ -f "$f" ]] || continue
         local req var
-        req="$(awk '/^---$/{f++; next} f==1 && /^required:/{sub(/^required:[[:space:]]*/, ""); print; exit}' "$f")"
+        req="$(stamp_field "$f" required)"
         [[ "$req" != "true" ]] && continue
-        var="$(awk '/^---$/{f++; next} f==1 && /^var_name:/{sub(/^var_name:[[:space:]]*/, ""); print; exit}' "$f")"
+        var="$(stamp_field "$f" var_name)"
         if ! echo "$tmpl_keys" | grep -qx "$var"; then
           echo "$var"
         fi

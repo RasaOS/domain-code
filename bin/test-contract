@@ -35,8 +35,12 @@ cd "$T" || exit 2
 git init -q .
 git config user.name tester
 git config user.email tester@example.invalid
-mkdir -p .claude/skills/contract contracts/stamps
+mkdir -p .claude/skills/contract .claude/lib/domain-code contracts/stamps
 cp "$SRC" .claude/skills/contract/contract.sh
+# Laid out as bin/init installs it: the shared library beside the skills,
+# and a lockfile, which is how contract.sh finds this project (rasa_root).
+cp "$(dirname "$SRC")/../../lib/domain-code/frontmatter.sh" .claude/lib/domain-code/frontmatter.sh
+printf '{"lock_version": 1}\n' > .claude/rasa.lock.json
 printf '# Contract ledger\n' > contracts/LEDGER.md
 
 # Run contract.sh under the SAME interpreter as this harness, so
@@ -61,14 +65,14 @@ mut() {
     clean)   : ;;
     bom)     { printf '\357\273\277'; cat "$f"; } > "$f.tmp"; rewrite "$f" ;;
     crlf)    awk '{ printf "%s\r\n", $0 }' "$f" > "$f.tmp"; rewrite "$f" ;;
-    trail)   awk '$0 == "---" { n++; if (n == 2) { print "--- "; next } } { print }' "$f" > "$f.tmp"; rewrite "$f" ;;
+    trail)   awk '$0 == "---" { n++; if (n == 2) { print "--- "; next } } { print }' "$f" > "$f.tmp"; rewrite "$f" ;;  # rfm-ok: builds the damaged fixture
     nokey)   grep -v '^is_locked:' "$f" > "$f.tmp"; rewrite "$f" ;;
     garbage) sed 's/^is_locked: .*/is_locked: yes/' "$f" > "$f.tmp"; rewrite "$f" ;;
   esac
 }
 count() { grep -c -- "$1" "$2" 2>/dev/null || true; }
 fm_count() {  # occurrences of key $1 inside the frontmatter of $2
-  awk -v k="$1" 'NR == 1 { next } /^---/ { exit } index($0, k ":") == 1 { n++ } END { print n + 0 }' "$2"
+  K="$1" awk 'NR == 1 { next } /^---/ { exit } index($0, ENVIRON["K"] ":") == 1 { n++ } END { print n + 0 }' "$2"
 }
 sum() { cksum < "$1"; }
 
@@ -233,14 +237,17 @@ want mode "$(ls -l "$S/p7.md" | cut -c1-10)" "-rw-r--r--"
 end
 
 # ── 22: no temp files left behind ────────────────────────────────────
+# Writes go through the shared library since 0.54.0, whose temp files are
+# .rfm.*; .contract.* is what 0.52.1 left. Both names are checked, or this
+# case would pass vacuously.
 begin "no temp files left in stamps/"
-want leftovers "$(ls -a "$S" | grep -c '^\.contract\.' || true)" 0
+want leftovers "$(ls -a "$S" | grep -cE '^\.(contract|rfm)\.' || true)" 0
 end
 
 # ── 23-24: a DUPLICATED is_locked is treated as locked, in either order
 # (first-wins and a YAML reader's last-wins would disagree) ───────────
 dup_lock() {  # dup_lock <file> <first> <second>
-  awk -v a="$2" -v b="$3" '/^is_locked:/ && !d { print "is_locked: " a; print "is_locked: " b; d = 1; next } { print }' "$1" > "$1.tmp"
+  A="$2" B="$3" awk '/^is_locked:/ && !d { print "is_locked: " ENVIRON["A"]; print "is_locked: " ENVIRON["B"]; d = 1; next } { print }' "$1" > "$1.tmp"
   rewrite "$1"
 }
 begin "duplicate is_locked (false, then true): locked; lock refuses"
@@ -423,6 +430,41 @@ if [ "$(id -u)" != 0 ]; then
 else
   echo "      (running as root — permissions cannot be tested)"
 fi
+end
+
+# ── 38: an unreadable stamp is damage, not a duplicated key ──────────
+# The shared library answers rc 4 both for a file it cannot read and for a
+# key that appears twice under a strict read; lock_state must tell them apart.
+begin "unreadable stamp: reported as damaged, lock refused"
+if [ "$(id -u)" != 0 ]; then
+  c new ur --kind doc --why t --from body1.md >/dev/null 2>&1
+  chmod 000 "$S/ur.md"
+  msg="$(c lock ur --why t 2>&1)"; rc=$?
+  chmod 644 "$S/ur.md"
+  want rc "$rc" 3
+  want damaged "$(printf '%s' "$msg" | grep -c 'no readable frontmatter')" 1
+  want not-duplicate "$(printf '%s' "$msg" | grep -c 'more than once')" 0
+else
+  echo "      (running as root — permissions cannot be tested)"
+fi
+end
+
+# ── 39-40: the actor is the library's rasa_actor ─────────────────────
+# (0.53.1 ignored RASA_ACTOR, so an agent's changes were ledgered as the
+# human's; a newline in the identity was flattened into the ledger line)
+begin "RASA_ACTOR is who the ledger names"
+RASA_ACTOR=ci-bot c new act-a --kind doc --why t --from body1.md >/dev/null 2>&1; rc=$?
+want rc "$rc" 0
+want who "$(grep -A1 'act-a · created' "$LEDGER" | grep -c -- '- \*\*Who\.\*\* ci-bot$')" 1
+end
+
+begin "an actor carrying a newline is refused before anything is written"
+c new act-b --kind doc --why t --from body1.md >/dev/null 2>&1
+h1="$(sum "$S/act-b.md")"; l1="$(sum "$LEDGER")"
+RASA_ACTOR="$(printf 'bot\n## forged · act-b · unlocked')" c lock act-b --why t >/dev/null 2>&1; rc=$?
+want rc "$rc" 2
+want stamp-unchanged "$([ "$h1" = "$(sum "$S/act-b.md")" ] && echo yes || echo no)" yes
+want ledger-unchanged "$([ "$l1" = "$(sum "$LEDGER")" ] && echo yes || echo no)" yes
 end
 
 echo

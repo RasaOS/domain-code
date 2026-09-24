@@ -297,18 +297,25 @@ The kit ships an empty template; the project (or `/setup-deploy`, or a future `/
 
 ## Reading tests programmatically
 
-Stamps are parseable:
+Stamps are parseable — through the Element's one frontmatter reader,
+`.claude/lib/domain-code/frontmatter.sh`, never a hand-written awk:
 
 ```sh
 # Find all active integration tests
+. .claude/lib/domain-code/frontmatter.sh
 for f in tests/stamps/*.md; do
-  status=$(awk '/^---$/{f++; next} f==1 && /^status:/{sub(/^status:[[:space:]]*/, ""); print; exit}' "$f")
-  kind=$(awk '/^---$/{f++; next} f==1 && /^test_kind:/{sub(/^test_kind:[[:space:]]*/, ""); print; exit}' "$f")
+  status="$(rfm_get_scalar "$f" status 2>/dev/null || true)"
+  kind="$(rfm_get_scalar "$f" test_kind 2>/dev/null || true)"
   [[ "$status" == "active" && "$kind" == "integration" ]] && echo "$f"
 done
 ```
 
-The pipeline's `30-test.sh` uses the same parsing pattern.
+The pipeline's `30-test.sh` reads stamps the same way (`suite-lib.sh`'s
+`stamp_field`). The awk this section used to show — `/^---$/{f++; next}` —
+matched exact fences anywhere in the file: a stamp with a BOM, CRLF line
+endings or a blank after a fence read as empty, and a `---` rule in the body
+opened a second "frontmatter". Python readers use the library's twin,
+`frontmatter.py` (`split`, `get`, `scalar`, `child`, `title`).
 
 ---
 

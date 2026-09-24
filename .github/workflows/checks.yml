@@ -45,6 +45,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # A Python whose site-packages pip may write to: the runner's system
+      # Python refuses `pip install` (PEP 668). PyYAML lets check-frontmatter
+      # part 3 and bin/test-readers' environment and runtime cases run here
+      # instead of skipping.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: PyYAML for the YAML checks
+        run: python -m pip install --quiet pyyaml
+
       # Hard gate. This is NOT redundant with `bash -n` below: this runner
       # has bash 5, where every bash-4-ism parses clean. Before v0.43.1 all
       # 40 shipped scripts passed `bash -n` while the production approval
@@ -80,6 +91,43 @@ jobs:
           ln -s "$(command -v mawk)" "$shim/awk"
           PATH="$shim:$PATH" bash bin/test-contract
 
+      # The shared frontmatter library (content/lib/domain-code/) under mawk:
+      # the corpus through both twins, the writer contract, the YAML check,
+      # the exact-fence mutation, and part 4 — the grep gate, hard since the
+      # 0.54.0 sweep: an exact-fence reader, a $TMPDIR temp renamed over a
+      # record, an unmarked `awk -v`, `sed -i` or a `grep '^key:'` reader in
+      # shipped content fails the build.
+      - name: Frontmatter contract (mawk)
+        run: |
+          set -euo pipefail
+          command -v mawk >/dev/null || sudo apt-get install -y mawk
+          shim="$(mktemp -d)"
+          ln -s "$(command -v mawk)" "$shim/awk"
+          PATH="$shim:$PATH" bash bin/check-frontmatter
+
+      # Install-root resolution (rasa_root): per-package installs, nested
+      # repositories and worktrees resolve to their own install, never a parent.
+      - name: Install-root resolution (mawk)
+        run: |
+          set -euo pipefail
+          shim="$(mktemp -d)"
+          ln -s "$(command -v mawk)" "$shim/awk"
+          PATH="$shim:$PATH" bash bin/test-root
+
+      # The records: the release tracker's golden history and hostile values;
+      # the writers and the readers driven inside a real bin/init install
+      # (with 0.53.1's output as the writers' golden); and the library's
+      # readers against the readers they replaced, on this repo's own ledger.
+      - name: Record writers and readers (mawk)
+        run: |
+          set -euo pipefail
+          shim="$(mktemp -d)"
+          ln -s "$(command -v mawk)" "$shim/awk"
+          PATH="$shim:$PATH" bash bin/test-release
+          PATH="$shim:$PATH" bash bin/test-writers
+          PATH="$shim:$PATH" bash bin/test-readers
+          PATH="$shim:$PATH" bash bin/check-reader-parity
+
   macos:
     name: runs on stock macOS bash
     runs-on: macos-latest
@@ -102,6 +150,20 @@ jobs:
       # runs contract.sh with its own interpreter, so this IS bash 3.2.
       - name: Contract lock tests (bash 3.2)
         run: /bin/bash bin/test-contract
+
+      # The frontmatter contract under stock bash 3.2 and BWK awk.
+      - name: Frontmatter contract (bash 3.2)
+        run: /bin/bash bin/check-frontmatter
+
+      - name: Install-root resolution (bash 3.2)
+        run: /bin/bash bin/test-root
+
+      - name: Record writers and readers (bash 3.2)
+        run: |
+          /bin/bash bin/test-release
+          /bin/bash bin/test-writers
+          /bin/bash bin/test-readers
+          /bin/bash bin/check-reader-parity
 
       # The approval gate must (a) auto-approve under FORCE_APPROVAL=1 and
       # (b) fail CLOSED with no controlling terminal. A CI runner has no

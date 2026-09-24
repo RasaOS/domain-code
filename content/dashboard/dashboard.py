@@ -35,6 +35,17 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PID_FILE = SCRIPT_DIR / ".dashboard.pid"
 STATE_FILE = SCRIPT_DIR / "state.json"
 
+# The Element's one frontmatter reader (frontmatter.py) sits beside this
+# folder, at .claude/lib/domain-code in an install and content/lib/domain-code
+# in the Element. The dashboard is opt-in and copied by hand, so it still runs
+# without it: task titles then fall back to the file name.
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(SCRIPT_DIR.parent / "lib" / "domain-code"))
+try:
+    import frontmatter as rfm
+except ImportError:
+    rfm = None
+
 
 # ---------- project root detection -----------------------------------------
 
@@ -361,13 +372,13 @@ def gather_active_tasks(root: Path) -> list[dict[str, str]]:
             title = path.stem
             try:
                 text = path.read_text(encoding="utf-8", errors="replace")
-                # Strip a leading frontmatter block first: a `#` line inside it is a
-                # comment, not the title. (This pattern was double-escaped in a raw
-                # string until 0.53.0 and never matched.)
-                body = re.sub(r"\A---\n.*?\n---\n", "", text, count=1, flags=re.S)
-                m = re.search(r"^#\s+(.+)$", body, re.M)
-                if m:
-                    title = m.group(1).strip()
+                # The first H1 below the frontmatter: a `#` line inside the
+                # block is a comment, not the title. frontmatter.title finds
+                # the block as every reader does (a BOM, CRLF, a blank after a
+                # fence). The regex this replaced was double-escaped until
+                # 0.53.0 and never matched, then matched exact LF fences only.
+                if rfm is not None:
+                    title = rfm.title(text).strip() or title
             except OSError:
                 pass
             out.append({"file": path.name, "title": title, "stage": stage})

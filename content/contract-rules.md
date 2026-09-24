@@ -106,7 +106,10 @@ change — created, updated, version-bumped, locked, unlocked — adds
 an entry:
 
 - **When** — timestamp, written by the script.
-- **Who** — `git config user.name` (the actor making the change).
+- **Who** — the actor making the change: `RASA_ACTOR`, then the
+  clone's git identity, then the OS user (the one resolution order,
+  `env-rules.md`). An identity carrying a control character is
+  refused before anything is written.
 - **What** — the concrete change.
 - **Why** — the reason, supplied by the user or the task as
   `--why "<reason>"`. Required on every mutating verb. Plain fact,

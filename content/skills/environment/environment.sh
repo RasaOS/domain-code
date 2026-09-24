@@ -13,6 +13,16 @@
 
 set -euo pipefail
 
+# The shared record library — rasa_root, the frontmatter reader and writer,
+# rasa_actor. Found relative to this script (content/lib/domain-code/ in the
+# Element, .claude/lib/domain-code/ in an install), never through the project
+# root it exists to resolve.
+_rfm="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../lib/domain-code" 2>/dev/null && pwd)/frontmatter.sh"
+[ -f "$_rfm" ] || { echo "error: $(basename "$0"): .claude/lib/domain-code/frontmatter.sh is missing — re-run the Element's bin/init" >&2; exit 70; }
+# shellcheck source=../../lib/domain-code/frontmatter.sh
+. "$_rfm"
+rfm_require 1 || exit 70
+
 usage() {
   cat <<'EOF'
 environment.sh — environment registry, current-env pointer, version string
@@ -59,15 +69,10 @@ EXIT CODES:
 EOF
 }
 
-# Current worktree root — for locating .claude/environments.json.
-repo_root() {
-  local top
-  top="$(git rev-parse --show-toplevel 2>/dev/null)" || {
-    echo "error: not inside a git repo" >&2
-    return 1
-  }
-  ( cd -P "$top" 2>/dev/null && pwd -P )
-}
+# The project this install serves — its ledgers and .claude/ live here.
+# rasa_root (the shared library) walks up to the install's lockfile and
+# never past the repository top; see its comment for the order.
+repo_root() { rasa_root; }
 
 # Project key for ~/.claude/projects/<key>/ — derived from the *main*
 # repo root via --git-common-dir, so all worktrees of one project share
@@ -334,9 +339,10 @@ cmd_version() {
 }
 
 # Cross-check environment names used across the project against the
-# registry. Uses python3 + PyYAML (stamp frontmatter) and tomllib.
+# registry. Uses python3, frontmatter.py (finding each stamp's block), PyYAML
+# (what the block holds) and tomllib.
 _validate_py() {
-  python3 - "$@" <<'PY'
+  python3 -B - "$@" <<'PY'
 import json, os, re, sys
 
 try:
@@ -358,21 +364,50 @@ except (OSError, ValueError) as exc:
     sys.exit(1)
 valid = set((reg.get("environments") or {}).keys())
 
-FRONT = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[3])
+import frontmatter as rfm            # the Element's one reader (frontmatter.py)
+
+
+def skipped(path, why):
+    # A stamp that cannot be read is named, not silently left out: drift
+    # inside it would otherwise pass as OK. (Before 0.54.0 an exact-fence
+    # regex returned nothing for a BOM or CRLF stamp, and a value holding
+    # ': ' failed the YAML parse — both skipped without a word.)
+    print("warning: %s: %s — not checked" % (os.path.relpath(path, root), why), file=sys.stderr)
 
 
 def frontmatter(path):
+    """The stamp's frontmatter as a mapping, or None after a warning.
+
+    frontmatter.py finds the block (a BOM, CRLF and a blank after a fence
+    are fine); what it holds is nested YAML, so PyYAML parses that.
+    """
     try:
-        with open(path) as fh:
-            m = FRONT.match(fh.read())
-    except OSError:
-        return None
-    if not m:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        skipped(path, "cannot be read (%s)" % exc.__class__.__name__)
         return None
     try:
-        return yaml.safe_load(m.group(1)) or {}
+        lines, _ = rfm.split(text)
+    except ValueError:
+        skipped(path, "its frontmatter block is never closed")
+        return None
+    if lines is None:
+        skipped(path, "it has no frontmatter block")
+        return None
+    try:
+        data = yaml.safe_load("\n".join(lines))
     except yaml.YAMLError:
+        skipped(path, "its frontmatter is not valid YAML (a value holding ': ' needs quotes)")
         return None
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        skipped(path, "its frontmatter is not a mapping")
+        return None
+    return data
 
 
 def md_files(subdir):
@@ -464,7 +499,7 @@ cmd_validate() {
     echo "error: validate requires PyYAML — install with: pip install pyyaml" >&2
     return 1
   }
-  _validate_py "$root" "$reg"
+  _validate_py "$root" "$reg" "$(dirname "$_rfm")"
 }
 
 main() {

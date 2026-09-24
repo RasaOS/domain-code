@@ -19,6 +19,16 @@
 
 set -euo pipefail
 
+# The shared record library — rasa_root, the frontmatter reader and writer,
+# rasa_actor. Found relative to this script (content/lib/domain-code/ in the
+# Element, .claude/lib/domain-code/ in an install), never through the project
+# root it exists to resolve.
+_rfm="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../lib/domain-code" 2>/dev/null && pwd)/frontmatter.sh"
+[ -f "$_rfm" ] || { echo "error: $(basename "$0"): .claude/lib/domain-code/frontmatter.sh is missing — re-run the Element's bin/init" >&2; exit 70; }
+# shellcheck source=../../lib/domain-code/frontmatter.sh
+. "$_rfm"
+rfm_require 1 || exit 70
+
 # ── tunables (env-overridable) ───────────────────────────────────
 # Autosave fires when ANY threshold trips. The time backstop is the
 # one that catches forgetfulness — a small change left abandoned.
@@ -74,12 +84,10 @@ EOF
 }
 
 # ── helpers ──────────────────────────────────────────────────────
-repo_root() {
-  git rev-parse --show-toplevel 2>/dev/null || {
-    echo "error: not inside a git repo" >&2
-    return 1
-  }
-}
+# The project this install serves — its ledgers and .claude/ live here.
+# rasa_root (the shared library) walks up to the install's lockfile and
+# never past the repository top; see its comment for the order.
+repo_root() { rasa_root; }
 
 # Shared .git dir — correct inside worktrees (hooks + markers live here).
 git_common_dir() {
@@ -182,14 +190,24 @@ file_too_big() {
 GG_OPEN="# >>> git-guard >>>"
 GG_CLOSE="# <<< git-guard <<<"
 
+# The temp starts as a copy of the hook, so the rewrite keeps its mode. The
+# old `> file.gg.tmp && mv` left a shared hook non-executable (a new file
+# takes the umask's mode), which silently disabled every OTHER hook in it —
+# the defect TASK-067 fixed in task-guard.
 _strip_block() {
-  local file="$1"
+  local file="$1" tmp
   [ -f "$file" ] || return 0
-  awk -v o="$GG_OPEN" -v c="$GG_CLOSE" '
-    index($0,o){skip=1}
-    !skip{print}
-    index($0,c){skip=0}
-  ' "$file" > "$file.gg.tmp" && mv "$file.gg.tmp" "$file"
+  tmp="$(mktemp "$(dirname "$file")/.git-guard.XXXXXX")" || return 1
+  cp -p "$file" "$tmp"
+  if GG_O="$GG_OPEN" GG_C="$GG_CLOSE" awk '
+       index($0, ENVIRON["GG_O"]) { skip = 1 }
+       !skip { print }
+       index($0, ENVIRON["GG_C"]) { skip = 0 }
+     ' "$file" > "$tmp"; then
+    mv -f "$tmp" "$file"
+  else
+    rm -f "$tmp"; echo "error: could not rewrite $file" >&2; return 1
+  fi
 }
 
 install_git_hook() {

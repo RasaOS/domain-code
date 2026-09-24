@@ -70,8 +70,9 @@ failing = [c.get('name', '?') for c in rollup
 print(f"pr={meta.get('number','')}")
 print(f"title={meta.get('title','')}")
 # The PR author is a GitHub login. It is a FOREIGN identity: it does not share
-# a namespace with rasa_actor() (RASA_ACTOR / git name / OS user), so the two
-# must never be compared for equality. Labelled, never asserted against.
+# a namespace with the library's rasa_actor (RASA_ACTOR / git name / OS user),
+# so the two must never be compared for equality. Labelled, never asserted
+# against.
 print(f"pr_author_github={(meta.get('author') or {}).get('login','')}")
 print(f"base={meta.get('baseRefName','')}")
 print(f"head={meta.get('headRefName','')}")

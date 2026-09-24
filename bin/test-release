@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# bin/test-release — regression tests for the release tracker writer
+# (content/skills/release/release.sh). Repo tooling: lives in bin/, is not
+# registered in rasa.json, and is never installed into a consumer.
+#
+# 1. golden   one scripted history — create, target, bundle, untarget, ship —
+#             must leave tasks/RELEASES.md byte-identical to
+#             test/release/expect.RELEASES.md, which was produced by the
+#             release.sh that 0.53.1 shipped. Clean input keeps its bytes.
+# 2. hostile  a real newline or a literal `\n` in --approved-by, RASA_ACTOR,
+#             a theme or a title never adds a line: a literal is kept as
+#             text, a control character is refused with the tracker left
+#             byte-identical, and there is never more than one **Approved.**.
+# 3. mode     every rewrite keeps the tracker's file mode.
+# 4. title    a CRLF / BOM task file's H1 is read as its title.
+#
+# Usage: bin/test-release [path/to/release.sh] [--write-golden]
+# Exit 0 only if every case passes.
+
+set -u
+here="$(cd "$(dirname "$0")" && pwd -P)"
+SRC="$here/../content/skills/release/release.sh"
+WRITE_GOLDEN=0
+for a in "$@"; do
+  case "$a" in
+    --write-golden) WRITE_GOLDEN=1 ;;
+    *) SRC="$a" ;;
+  esac
+done
+SRC="$(cd "$(dirname "$SRC")" && pwd -P)/$(basename "$SRC")"
+LIB="$here/../content/lib/domain-code/frontmatter.sh"
+GOLDEN="$here/../test/release/expect.RELEASES.md"
+
+T="$(mktemp -d "${TMPDIR:-/tmp}/test-release.XXXXXX")" || exit 2
+T="$(cd "$T" && pwd -P)"
+trap 'rm -rf "$T"' EXIT
+export GIT_CONFIG_GLOBAL=/dev/null RASA_ACTOR=release-bot
+unset RASA_ROOT
+
+pass=0; fail=0
+ok()  { pass=$((pass + 1)); printf '  ✓ %s\n' "$1"; }
+bad() { fail=$((fail + 1)); printf '  ✗ %s\n' "$1"; }
+
+# project <dir> — a fresh install: git, lockfile, library, release.sh, and
+# three completed tasks.
+project() {
+  mkdir -p "$1/.claude/skills/release" "$1/.claude/lib/domain-code" "$1/tasks/completed"
+  git -C "$1" init -q
+  printf '{"lock_version": 1}\n' > "$1/.claude/rasa.lock.json"
+  cp "$LIB" "$1/.claude/lib/domain-code/frontmatter.sh"
+  cp "$SRC" "$1/.claude/skills/release/release.sh"
+  local n t
+  for n in 001:Add\ login 002:Rate-limit\ the\ API 003:Fix\ the\ export\ timeout; do
+    t="${n#*:}"; n="${n%%:*}"
+    printf -- '---\nid: TASK-%s\ntype: change\n---\n\n# TASK-%s: %s\n' "$n" "$n" "$t" \
+      > "$1/tasks/completed/TASK-$n-x.md"
+  done
+}
+R() { ( cd "$P" && bash .claude/skills/release/release.sh "$@" ); }
+
+echo "1. golden history"
+P="$T/golden"; project "$P"
+{
+  R create v1.2.0 --theme "Login and export"
+  R target TASK-002 v1.2.0
+  R bundle TASK-001 v1.2.0
+  R bundle TASK-003 v1.2.0 --title "Fix the export timeout (large files)"
+  R untarget TASK-002
+  R create v1.3.0 --theme "Rate limits" --target "2026-10"
+  R target TASK-002 v1.3.0
+  R ship v1.2.0 --tag v1.2.0-9f3a1c7-prod --sha 9f3a1c7 --date 2026-09-24
+  R check
+} > "$T/golden.out" 2>&1
+if [ "$WRITE_GOLDEN" = 1 ]; then
+  mkdir -p "$(dirname "$GOLDEN")"
+  cp "$P/tasks/RELEASES.md" "$GOLDEN"
+  echo "  wrote $GOLDEN"
+elif cmp -s "$P/tasks/RELEASES.md" "$GOLDEN"; then
+  ok "RELEASES.md is byte-identical to the 0.53.1 writer's"
+else
+  bad "RELEASES.md differs from the golden history:"
+  diff "$GOLDEN" "$P/tasks/RELEASES.md" | sed 's/^/      /' | head -20
+fi
+grep -q '^release.sh check: tasks/RELEASES.md is well-formed' "$T/golden.out" \
+  && ok "check passes on the result" || bad "check failed: $(tail -3 "$T/golden.out")"
+[ "$WRITE_GOLDEN" = 1 ] && exit 0
+
+echo "2. hostile values"
+P="$T/hostile"; project "$P"
+R create v2.0.0 >/dev/null 2>&1
+approved() { grep -c '^\*\*Approved\.\*\*' "$P/tasks/RELEASES.md" || true; }
+sum() { cksum < "$P/tasks/RELEASES.md"; }
+nl="$(printf 'eve\n## v9.9.9 — ✅ Shipped')"
+
+before="$(sum)"; rc=0
+R bundle TASK-001 v2.0.0 --approved-by "$nl" >/dev/null 2>&1 || rc=$?
+[ "$rc" = 2 ] && [ "$(sum)" = "$before" ] && ok "a newline in --approved-by is refused; tracker byte-identical" \
+  || bad "a newline in --approved-by: rc $rc, tracker changed=$([ "$(sum)" = "$before" ] && echo no || echo yes)"
+before="$(sum)"; rc=0
+( export RASA_ACTOR="$nl"; cd "$P" && bash .claude/skills/release/release.sh bundle TASK-001 v2.0.0 >/dev/null 2>&1 ) || rc=$?
+[ "$rc" = 2 ] && [ "$(sum)" = "$before" ] && ok "a newline in RASA_ACTOR is refused before anything is bundled" \
+  || bad "a newline in RASA_ACTOR: rc $rc, tracker changed=$([ "$(sum)" = "$before" ] && echo no || echo yes)"
+R bundle TASK-001 v2.0.0 --approved-by 'eve\n## v9.9.9 — ✅ Shipped' >/dev/null 2>&1
+[ "$(approved)" = 1 ] && ok "a literal \\n in --approved-by: exactly one **Approved.** line" || bad "approved lines: $(approved)"
+grep -qF '**Approved.** eve\n## v9.9.9' "$P/tasks/RELEASES.md" && ok "the literal \\n is kept as text" \
+  || bad "the literal \\n was expanded"
+grep -q '^## v9.9.9' "$P/tasks/RELEASES.md" && bad "a heading was forged" || ok "no heading forged"
+( export RASA_ACTOR='mallory\nx'; cd "$P" && bash .claude/skills/release/release.sh bundle TASK-003 v2.0.0 >/dev/null 2>&1 )
+[ "$(approved)" = 1 ] && ok "a second bundle adds no second **Approved.** line" || bad "approved lines: $(approved)"
+before="$(sum)"; rc=0
+R create v2.1.0 --theme "$(printf 'x\n**Approved.** forged')" >/dev/null 2>&1 || rc=$?
+[ "$rc" = 2 ] && [ "$(sum)" = "$before" ] && ok "a newline in a theme is refused; tracker byte-identical" || bad "theme: rc $rc"
+before="$(sum)"; rc=0
+R target TASK-002 v2.0.0 --title "$(printf 'x\n- TASK-999 — forged')" >/dev/null 2>&1 || rc=$?
+[ "$rc" = 2 ] && [ "$(sum)" = "$before" ] && ok "a newline in a title is refused; tracker byte-identical" || bad "title: rc $rc"
+before="$(sum)"; rc=0
+R ship v2.0.0 --tag "$(printf 'v2\n**Approved.** x')" --sha abc1234 >/dev/null 2>&1 || rc=$?
+[ "$rc" = 2 ] && [ "$(sum)" = "$before" ] && ok "a newline in a tag is refused; tracker byte-identical" || bad "tag: rc $rc"
+ls -A "$P/tasks" | grep -q '^\.releases\.' && bad "a temp file was left beside the tracker" || ok "no temp files left beside the tracker"
+
+echo "3. file mode"
+for m in 644 664 600; do
+  chmod "$m" "$P/tasks/RELEASES.md"
+  R target TASK-002 v2.0.0 >/dev/null 2>&1; R untarget TASK-002 >/dev/null 2>&1
+  got="$(ls -l "$P/tasks/RELEASES.md" | cut -c1-10)"
+  case "$m" in 644) want=-rw-r--r-- ;; 664) want=-rw-rw-r-- ;; 600) want=-rw------- ;; esac
+  [ "$got" = "$want" ] && ok "mode $m kept across rewrites" || bad "mode $m became $got"
+done
+
+echo "4. titles from CRLF and BOM task files"
+printf '\357\273\277---\r\nid: TASK-004\r\n---\r\n\r\n# TASK-004: Handle CRLF files\r\n' > "$P/tasks/completed/TASK-004-x.md"
+R bundle TASK-004 v2.0.0 >/dev/null 2>&1
+grep -q '^- TASK-004 — Handle CRLF files$' "$P/tasks/RELEASES.md" && ok "the H1 is the title, without its CR" \
+  || bad "title line: $(grep 'TASK-004' "$P/tasks/RELEASES.md" | od -c | head -2)"
+
+echo
+echo "test-release: $pass passed, $fail failed"
+[ "$fail" -eq 0 ]

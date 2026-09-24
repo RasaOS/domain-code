@@ -47,36 +47,31 @@
 
 set -euo pipefail
 
+# The shared record library — rasa_root, the frontmatter reader and writer,
+# rasa_actor. Found relative to this script (content/lib/domain-code/ in the
+# Element, .claude/lib/domain-code/ in an install), never through the project
+# root it exists to resolve.
+_rfm="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../lib/domain-code" 2>/dev/null && pwd)/frontmatter.sh"
+[ -f "$_rfm" ] || { echo "error: $(basename "$0"): .claude/lib/domain-code/frontmatter.sh is missing — re-run the Element's bin/init" >&2; exit 70; }
+# shellcheck source=../../lib/domain-code/frontmatter.sh
+. "$_rfm"
+rfm_require 1 || exit 70
+rfm_trap_cleanup   # an interrupted write leaves no temp file beside a record
+
 VALID_STATUS="success failed in-flight"
 VALID_INTENT="deploy release"
 
 # ---------------------------------------------------------------- paths
-# rasa_actor — the ONE actor-resolution order across the Element.
-#
-#   RASA_ACTOR  -> set by a runner, CI job or agent harness. The knob.
-#   git identity -> the human configured in this clone.
-#   OS user      -> last resort.
-#
-# Canonical definition: stamps.md, "Stamp: run" -> actor. Before this existed,
-# five sites called $(whoami) directly, so a service account running an agent
-# was recorded in the ledger exactly as a human would be.
-rasa_actor() {
-  local a="${RASA_ACTOR:-}"
-  [ -n "$a" ] || a="$(git config user.name 2>/dev/null || true)"
-  [ -n "$a" ] || a="$(whoami 2>/dev/null || true)"
-  [ -n "$a" ] || a="${USER:-unknown}"
-  printf '%s' "$a"
-}
+# The actor is the library's rasa_actor — the ONE resolution order across the
+# Element (RASA_ACTOR, then git user.name, then the OS user; stamps.md,
+# "Stamp: run"). It refuses an identity that carries a control character:
+# before 0.54.0, RASA_ACTOR=$'bot\nstatus: success' made an in-flight deploy
+# read as a success.
 
-project_root() {
-  local d
-  if d="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-    printf '%s\n' "$d"
-    return 0
-  fi
-  echo "error: not inside a git repo" >&2
-  return 1
-}
+# The project this install serves — its ledgers and .claude/ live here.
+# rasa_root (the shared library) walks up to the install's lockfile and
+# never past the repository top; see its comment for the order.
+project_root() { rasa_root; }
 
 ROOT="$(project_root)" || exit 1
 LEDGER_DIR="$ROOT/deploys"
@@ -85,22 +80,16 @@ INDEX="$LEDGER_DIR/DEPLOYS.md"
 
 ensure_dirs() { mkdir -p "$RECORDS_DIR"; }
 
-# Read one frontmatter field from a record. Line-oriented on purpose.
-field() {
-  local file="$1" key="$2"
-  awk -v k="$key" '
-    NR==1 && $0=="---" { infm=1; next }
-    infm && $0=="---"   { exit }
-    infm {
-      i = index($0, ":")
-      if (i > 0 && substr($0, 1, i-1) == k) {
-        v = substr($0, i+1)
-        sub(/^[ \t]+/, "", v)
-        print v
-        exit
-      }
-    }
-  ' "$file"
+# Read one frontmatter field from a record; empty when absent or unreadable.
+# The library's reader: a BOM, CRLF or a trailing space on a fence no longer
+# hides a record's fields (before 0.54.0 such a record indexed as a blank row).
+field() { rfm_get "$1" "$2" 2>/dev/null || true; }
+
+# A record id names a file in records/, so it may not be a path.
+valid_id() {
+  case "$1" in
+    ''|*/*|.*) echo "error: bad deploy id '$1'" >&2; return 2 ;;
+  esac
 }
 
 usage() {
@@ -115,6 +104,35 @@ cmd_open() {
     *" $intent "*) ;;
     *) echo "error: intent must be one of: $VALID_INTENT" >&2; return 2 ;;
   esac
+  # Every value is checked, and the actor resolved, BEFORE the id is reserved.
+  # The reservation is the record file itself and is never removed, so a
+  # refusal after it would leave an empty record behind for good. The
+  # environment is part of the id, and so of a file name.
+  case "$env_name" in
+    ''|*/*|.*) echo "error: bad environment name '$env_name'" >&2; return 2 ;;
+  esac
+  approval="${approval:-none}"
+  rfm_check environment "$env_name" || return 2
+  rfm_check class "$klass"          || return 2
+  rfm_check tag "$tag"              || return 2
+  rfm_check approval "$approval"    || return 2
+  local who host
+  who="$(rasa_actor)" || return 2
+  host="$(hostname -s 2>/dev/null || true)"; [ -n "$host" ] || host=unknown
+  rfm_check host "$host" || return 2
+
+  # `rev-parse` prints to stdout AND exits non-zero in a commit-less repo, so
+  # `$(cmd || echo unknown)` appends a second line and corrupts the record.
+  # `--verify --quiet` prints nothing and exits 1 cleanly — same idiom bin/init
+  # uses for ELEMENT_SHA (773d89b), kept identical on purpose so there is one
+  # lesson here and not two.
+  local sha branch
+  sha="$(git -C "$ROOT" rev-parse --verify --quiet --short HEAD 2>/dev/null || true)"
+  branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  [ -n "$sha" ] || sha="unknown"
+  { [ -n "$branch" ] && [ "$branch" != "HEAD" ]; } || branch="unknown"
+  rfm_check sha "$sha"       || return 2
+  rfm_check branch "$branch" || return 2
   ensure_dirs
 
   local stamp base id n
@@ -139,35 +157,26 @@ cmd_open() {
     [ "$n" -lt 1000 ] || { echo "error: cannot allocate a deploy id" >&2; return 1; }
   done
 
-  # `rev-parse` prints to stdout AND exits non-zero in a commit-less repo, so
-  # `$(cmd || echo unknown)` appends a second line and corrupts the record.
-  # `--verify --quiet` prints nothing and exits 1 cleanly — same idiom bin/init
-  # uses for ELEMENT_SHA (773d89b), kept identical on purpose so there is one
-  # lesson here and not two.
-  local sha branch
-  sha="$(git -C "$ROOT" rev-parse --verify --quiet --short HEAD 2>/dev/null || true)"
-  branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-  [ -n "$sha" ] || sha="unknown"
-  { [ -n "$branch" ] && [ "$branch" != "HEAD" ]; } || branch="unknown"
-
+  # Same keys, same order, same bytes as before 0.54.0 — every value was
+  # checked above, so no line below can be refused.
   {
     echo "---"
-    echo "id: $id"
-    echo "kind: $intent"
-    echo "environment: $env_name"
-    echo "class: $klass"
-    echo "tag: $tag"
-    echo "sha: $sha"
-    echo "branch: $branch"
-    echo "user: $(rasa_actor)"
-    echo "host: $(hostname -s 2>/dev/null || echo unknown)"
-    echo "started: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-    echo "finished: "
-    echo "status: in-flight"
-    echo "duration_s: "
-    echo "error_stage: "
-    echo "approval: ${approval:-none}"
-    echo "task_refs: "
+    rfm_line id "$id"
+    rfm_line kind "$intent"
+    rfm_line environment "$env_name"
+    rfm_line class "$klass"
+    rfm_line tag "$tag"
+    rfm_line sha "$sha"
+    rfm_line branch "$branch"
+    rfm_line user "$who"
+    rfm_line host "$host"
+    rfm_line started "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+    rfm_line finished ""
+    rfm_line status in-flight
+    rfm_line duration_s ""
+    rfm_line error_stage ""
+    rfm_line approval "$approval"
+    rfm_line task_refs ""
     echo "---"
     echo ""
     echo "# $id"
@@ -194,31 +203,41 @@ cmd_close() {
     *" $status "*) ;;
     *) echo "error: status must be one of: $VALID_STATUS" >&2; return 2 ;;
   esac
+  valid_id "$id" || return 2
+  case "$duration" in
+    *[!0-9]*) echo "error: duration must be whole seconds, got '$duration'" >&2; return 2 ;;
+  esac
   local f="$RECORDS_DIR/$id.md"
   [ -f "$f" ] || { echo "error: no such deploy record: $id" >&2; return 1; }
 
-  local tmp; tmp="$(mktemp "${TMPDIR:-/tmp}/deploys.XXXXXX")"
-  awk -v st="$status" -v dur="$duration" -v es="$error_stage" \
-      -v fin="$(date -u '+%Y-%m-%d %H:%M:%S UTC')" '
-    NR==1 && $0=="---" { infm=1; print; next }
-    infm && $0=="---"  { infm=0; print; next }
-    infm {
-      if ($0 ~ /^status:/)      { print "status: " st;      next }
-      if ($0 ~ /^duration_s:/)  { print "duration_s: " dur; next }
-      if ($0 ~ /^error_stage:/) { print "error_stage: " es; next }
-      if ($0 ~ /^finished:/)    { print "finished: " fin;   next }
-    }
-    { print }
-  ' "$f" > "$tmp" && mv "$tmp" "$f"
+  # All four keys in one rename, through the library. Before 0.54.0 this was
+  # an exact-fence awk: a record with a BOM or CRLF was never closed (it stayed
+  # in-flight, rc 0), a trailing space on the fence rewrote body lines, and the
+  # temp file in $TMPDIR left the record mode 0600. A refusal (no readable
+  # frontmatter, a key that appears twice) now leaves the record byte-identical
+  # and the library says why. error_stage is free text from a pipeline: it is
+  # made one line, not refused.
+  rfm_set "$f" status "$status" duration_s "$duration" \
+    error_stage "$(rfm_clean "$error_stage")" \
+    finished "$(date -u '+%Y-%m-%d %H:%M:%S UTC')" || return 1
 
   cmd_index >/dev/null
   printf '%s\n' "$id"
 }
 
 # --------------------------------------------------------------- index
+# The view is built in memory, then published with one same-directory rename
+# that keeps the file's mode (it used to be a temp in $TMPDIR, moved across
+# devices, which left DEPLOYS.md 0600).
 cmd_index() {
   ensure_dirs
-  local tmp; tmp="$(mktemp "${TMPDIR:-/tmp}/deploys.XXXXXX")"
+  local body
+  body="$(index_body)" || return 1
+  printf '%s\n' "$body" | rfm_write_atomic "$INDEX" || return 1
+  echo "wrote $INDEX"
+}
+
+index_body() {
   {
     echo "# Deploys"
     echo ""
@@ -250,8 +269,7 @@ cmd_index() {
     done < <(ls -1 "$RECORDS_DIR"/???-*.md 2>/dev/null | sort -r || true)
     echo ""
     echo "_Regenerate with \`.claude/skills/deploys/deploys.sh index\`._"
-  } > "$tmp" && mv "$tmp" "$INDEX"
-  echo "wrote $INDEX"
+  }
 }
 
 # ---------------------------------------------------------------- list
@@ -315,9 +333,13 @@ cmd_check() {
     echo "  run: .claude/skills/deploys/deploys.sh index" >&2
     return 3
   fi
-  local stuck
-  stuck="$(grep -l '^status: in-flight' "$RECORDS_DIR"/???-*.md 2>/dev/null | wc -l | tr -d ' ' || true)"
-  if [ "${stuck:-0}" -gt 0 ]; then
+  # Each record's own status field — a `grep '^status:'` over the files also
+  # counted a matching line in a record's notes, and missed a CRLF record.
+  local stuck=0 f
+  while IFS= read -r f; do
+    if [ "$(field "$f" status)" = in-flight ]; then stuck=$(( stuck + 1 )); fi
+  done < <(ls -1 "$RECORDS_DIR"/???-*.md 2>/dev/null || true)
+  if [ "$stuck" -gt 0 ]; then
     echo "⚠ $stuck deploy(s) still marked in-flight — a run died without closing." >&2
   fi
   echo "✓ ledger consistent: $recorded record(s)"
