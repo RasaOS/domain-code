@@ -5,6 +5,8 @@ created: 2026-09-23
 created_by: claude
 updated: 2026-09-23
 phase: P7
+completed_by: claude
+x-outcome: shipped
 ---
 # TASK-062: Adopt rasa.module.tasks v1.0.0 and migrate consumers' ledgers on update
 
@@ -42,3 +44,33 @@ Out of scope: TASK-041's full `/sync` port (three-way diff, `/promote`); retirin
 - `sync.sh plan` + `apply --hold` against fresh clones of five consumers: vsi-web 123 tasks / 1 error, vsi-ios 140 / 1, kernel 256 / 0, rasa-console 350 / 5, rasa-website 0 / 0. Every remaining error is I-24 — a ROADMAP line naming a task file that does not exist — which the module never auto-fixes; each is listed in that project's MIGRATION-REVIEW.md. kernel's plan correctly flagged one real local edit (`.claude/skills/deploy/SKILL.md`), which `--hold` left untouched.
 - Hooks exercised in a scratch install: the PreToolUse deny-once flow, `stamp` (same-day re-stamp stays valid; a raw edit trips I-34 as a control), and two real commits through the pre-commit hook.
 - Follow-ups filed outside this task: upstream the ledger preparation into module-tasks; stop bin/init cloning a `kit/` stash; the two writers of `tasks/CHANGES.md`.
+
+Gate satisfied 2026-09-23 by claude — gate: all seven pass - CI 8/8 green, PR #11 merged as d2844e5, tagged v0.53.0
+
+## Completion report
+
+| | |
+|---|---|
+| **Outcome** | done |
+| **Type** | change |
+| **Branch** | `task/TASK-062-adopt-module-tasks-v1` |
+| **PR** | [#11](https://github.com/RasaOS/domain-code/pull/11), merged as `d2844e5`; tagged `v0.53.0` |
+| **Tests** | CI 8/8 green (manifest + schema, bash 3.2 floor, stock macOS bash, lint); local gates as recorded in Notes |
+| **Build** | n/a — no build step in this repository |
+
+**Done-gate** (per `.claude/done-gate.md`, declared in the close-out PR)
+- Manifest: pass · `bin/check-manifest` OK, 27 vendored files byte-identical to module-tasks v1.0.0.
+- Lint: pass · `bin/lint` clean.
+- Scripts: pass · every script parses with its own interpreter (CI "Scripts parse"); `bin/check-bash32` clean.
+- Behaviour: pass · `bin/test-contract` green; `bin/init` smoke-tested into an empty repo and over clones of five consumers; hooks exercised in a scratch install (Notes).
+- Ledger: pass · `content/bin/check-tasks .` — 62 tasks, 0 errors.
+- CI: pass · PR #11, 8/8 checks green.
+- Merged: pass · PR #11 merged to `main` as `d2844e5` with the owner's explicit go-ahead, 2026-09-23.
+
+**What changed** — rasa.module.tasks v1.0.0 vendored and pinned; code-task-rules.md + done-gate seed; bin/init migrates a pre-1.0 ledger; hooks file through bin/task; /sync rebuilt on sync.sh; ~60 shipped files swept; this ledger migrated; 0.53.0.
+
+**What to do next** (in order)
+1. Upgrade each consumer (vsi-web, vsi-ios, kernel, rasa-console, rasa-website, …) with the command in CHANGELOG v0.53.0, then work its MIGRATION-REVIEW.md to zero errors.
+2. Pick up the three follow-ups filed from this task (module-tasks migrator upstreaming, the `kit/` stash, the two CHANGES.md writers).
+
+**Things I noticed** — tasks/PHASES.md is still seeded beside ROADMAP's phase registry; /contribute still rests on the pre-canon lockfile (TASK-041).

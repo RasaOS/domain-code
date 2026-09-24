@@ -164,6 +164,7 @@ and nothing tests whether a skill still *behaves* correctly —
 - TASK-044 — Behavior evals for shipped skills: prove a skill still does what it claims, not merely that it can be invoked
 - TASK-045 — Pin and record the model and harness a run used; define a supported range and a canary cohort for Element updates
 - TASK-062 — Adopt rasa.module.tasks v1.0.0 and migrate consumers' ledgers on update
+- TASK-063 — Shipped docs tell agents to prefix bin/task notes that bin/task already prefixes
 
 ## Phase P8 — External commitments
 
