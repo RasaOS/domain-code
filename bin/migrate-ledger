@@ -19,8 +19,10 @@
 #      gives each bare task file a one-line block (its id, from its name),
 #      prefixes `Phase ` to a heading whose first word is a phase the tasks
 #      actually use, and rewrites numbered or backticked task lines into the
-#      canonical bullet, joining wrapped continuation lines. Nothing else in
-#      the file is touched, and order is preserved.
+#      canonical bullet, joining wrapped continuation lines. The one line it
+#      deletes is a task line whose title is still an unfilled `{{Title}}`
+#      placeholder from this Element's own pre-0.53 ROADMAP seed. Nothing else
+#      in the file is touched, and order is preserved.
 #   2. Supply history. This is an engineering domain, so version control is
 #      a fair assumption here in a way it is not for the module: created,
 #      created_by and completed_by are read from git, so the migrated ledger
@@ -29,7 +31,9 @@
 #      uncommitted changes, so everything it writes is a plain `git diff`
 #      and `git checkout -- tasks && git clean -fd tasks` undoes it. In a git
 #      repository no backup folder is left behind (git is the backup); in a
-#      project without one, migrate-tasks' own backup is kept.
+#      project without one, the untouched ledger is copied to
+#      tasks.pre-1.0.0-<stamp>/ first. If the converter refuses, tasks/ is
+#      put back exactly as it was.
 #
 # Exit: 0 migrated (or already v1.0.0, or no ledger) and validating clean ·
 #       1 migrated but the validator still reports errors a human must fix ·
@@ -42,6 +46,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 ELEMENT = os.path.dirname(HERE)
@@ -157,7 +162,7 @@ def prepare(tasks):
         lines = read(roadmap).split("\n")
         out = []
         fence = None
-        headings = lists = 0
+        headings = lists = placeholders = 0
         i = 0
         while i < len(lines):
             ln = lines[i]
@@ -193,6 +198,14 @@ def prepare(tasks):
                         break
                     title += " " + nxt.strip()
                     j += 1
+                if "{{" in title and "}}" in title:
+                    # An unfilled placeholder from rasa.domain.code's own
+                    # pre-0.53 ROADMAP seed (`- TASK-001 — {{Title}}`). It
+                    # names no task anybody filed; left in, it is a dangling
+                    # entry (I-24) the moment the validator runs.
+                    placeholders += 1
+                    i = j
+                    continue
                 canon = "- %s — %s" % (m.group(1), title)
                 if canon != ln or j != i + 1:
                     lists += 1
@@ -201,8 +214,10 @@ def prepare(tasks):
                 continue
             out.append(ln)
             i += 1
-        if headings or lists:
+        if headings or lists or placeholders:
             write(roadmap, "\n".join(out))
+            if placeholders:
+                done.append("ROADMAP.md: %d unfilled template line(s) (`{{Title}}`) removed" % placeholders)
             if headings:
                 done.append("ROADMAP.md: %d phase heading(s) given the `## Phase <id>` form" % headings)
             if lists:
@@ -277,23 +292,37 @@ def main(argv=None):
             die("refusing to --apply: tasks/ has uncommitted changes, and the migration\n"
                 "must be reviewable as one clean diff. Commit or stash them first:\n%s" % dirty)
 
+    backup = None
+    if not git:
+        # prepare() edits in place, and migrate-tasks' own backup is taken
+        # AFTER it — so without version control the untouched original would
+        # exist nowhere. Keep it ourselves.
+        backup = os.path.join(project, "tasks.pre-1.0.0-%s" % time.strftime("%Y%m%d%H%M%S"))
+        shutil.copytree(tasks, backup, symlinks=True)
+
     for line in prepare(tasks):
         say("  prepare: " + line)
     say("")
 
-    margs = ["--apply", "--validate-with", CHECK, project]
+    margs = ["--apply", "--no-backup", "--validate-with", CHECK, project]
     if git:
         # tasks/ was clean a moment ago; the only uncommitted changes in it
         # now are prepare()'s own, which is what --force is for.
-        margs = ["--force", "--no-backup",
+        margs = ["--force",
                  "--created-from", GIT_CREATED,
                  "--created-by-from", GIT_CREATED_BY,
                  "--completed-by-from", GIT_COMPLETED_BY] + margs
     rc = run_migrate(margs)
     if rc == 2:
+        # migrate-tasks exits 2 only before it swaps anything in, so the one
+        # change on disk is prepare()'s. Put the ledger back as it was.
         if git:
-            say("\nmigrate-ledger: the migration did not run. Undo the preparation with:")
-            say("  git -C %s checkout -- tasks" % project)
+            subprocess.run(["git", "-C", project, "checkout", "--", "tasks"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        elif backup:
+            shutil.rmtree(tasks, ignore_errors=True)
+            os.rename(backup, tasks)
+        say("\nmigrate-ledger: the migration did not run; tasks/ is as it was.")
         return 2
 
     if git:
@@ -305,7 +334,7 @@ def main(argv=None):
     say("Next:")
     say("  1. Read tasks/MIGRATION-REVIEW.md — every judgement the migration could not make.")
     say("  2. Review the diff:  git -C %s diff --stat" % project if git else
-        "  2. Compare against the backup folder migrate-tasks left beside tasks/.")
+        "  2. Compare against the original, kept at %s" % backup)
     say("  3. Commit it on its own, before any other work.")
     return 0 if rc == 0 else 1
 
