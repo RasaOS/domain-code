@@ -33,4 +33,3 @@ phase: P2
   - The comparison on fleet copies (R3's 1,550 comparisons) runs with this tool at the release-candidate step (plan 1.16).
 - Gates: check-frontmatter clean (its grep list went from 48 sites to 29), check-manifest, check-bash32 (53 files), check-invocations, schema OK, test-contract 38/38, test-root 21/21, test-release 16/16, test-writers 62/62, every script parses.
 - Left for 0.55.0: `build/deploy` discards a failed `deploys.sh open` (`2>/dev/null || true`), so a refused open (an actor with a control character, say) still deploys, without a record. Making the ledger open mandatory belongs to the deploy and release hardening.
-

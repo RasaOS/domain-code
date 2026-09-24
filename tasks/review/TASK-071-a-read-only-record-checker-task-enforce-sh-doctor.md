@@ -32,4 +32,3 @@ phase: P2
   - The warnings are real drift: 159 legacy `status:` fields in ledgers not yet on module-tasks v1.0.0, one duplicate task id, one placeholder id, and one pre-0.48 tracker heading.
   - Three `name` false positives on dated test stamps were found this way and fixed.
 - The per-repo fleet baseline (plan 1.16, "doctor reports 0 W-class findings") runs with this at the release-candidate step.
-

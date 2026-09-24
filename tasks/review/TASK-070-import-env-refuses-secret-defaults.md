@@ -36,4 +36,3 @@ phase: P1
   - It keeps CRLF and the file mode.
 - `bin/test-writers`: 88 cases, of which 14 are import-env and 2 are the new goldens. Against 0.53.1, 11 of the 14 import-env cases fail, and 51 of the 88 overall.
 - This clears the last three sites of the grep gate, so TASK-069 can make it hard.
-

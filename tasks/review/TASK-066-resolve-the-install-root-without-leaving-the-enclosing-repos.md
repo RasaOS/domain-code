@@ -26,4 +26,3 @@ phase: P2
 - `bin/test-contract` lays its temp project out as `bin/init` does (library + lockfile): 37/37.
 - Smoke: every converted script resolves its install from the project root and from a subdirectory of a fresh `bin/init` install.
 - Consequence to know: the Element's scripts run inside the Element's own source checkout (which has no lockfile) need `RASA_ROOT=.`.
-
