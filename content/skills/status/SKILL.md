@@ -75,7 +75,8 @@ bash <skill-dir>/status.sh dashboard   (default)
       - §2 dashboard box (production, branch, worktrees, in-flight, pending)
       - Recent commits (markdown table, last 10)
       - Open pull requests (markdown table via `gh` if available)
-      - In flight (bullet list of tasks/active/*.md titles)
+      - In flight (bullet list of tasks/active/*.md and
+        tasks/review/*.md titles)
       - Top of roadmap (first ~5 list items from tasks/ROADMAP.md)
       - Inbox (unread count + list, for your `@handle`)
 
@@ -189,13 +190,15 @@ deterministic.)*
 
 ## In flight
 
-- **TASK-XXX — <title>** — `tasks/active/<file>.md`
+- **TASK-XXX: <title>** — `tasks/active/<file>.md`
+- **TASK-XXX: <title>** — in review · `tasks/review/<file>.md`
 - …
 
-*(Bulleted list from `tasks/active/*.md`. Title is the first H1
-of each file. If `tasks/active/` doesn't exist or is empty, the
-script renders "No active tasks." or "No `tasks/active/` directory
-in this project.")*
+*(Bulleted list from `tasks/active/*.md`, then `tasks/review/*.md`
+— a PR open, done-gate pending. Title is the first H1 of each
+file. If both are empty, the script renders "No active tasks.";
+if neither directory exists, "No `tasks/active/` directory in this
+project.")*
 
 ## Top of roadmap
 

@@ -1,21 +1,22 @@
 ---
 name: auto-task
-description: Autonomous variant of /task — files a Spec-category task and expands it to a full, implementation-ready spec without asking any questions. Decides the phase, runs the reconnaissance, drills the requirements, and resolves every judgment call itself, flagging each as an assumption. For Bug-category tasks use /auto-bug; for urgent prod fixes use /auto-hotfix. Triggered when the user wants a Spec task fully spec'd hands-off — e.g. "/auto-task", "spec this autonomously", "auto-spec a task for X", "file and fully spec this without asking me", "just write the task spec yourself".
+description: Autonomous variant of /task — files a `change` task and expands it to a full, implementation-ready spec without asking any questions. Decides the phase, runs the reconnaissance, drills the requirements, and resolves every judgment call itself, flagging each as an assumption. For a `defect` use /auto-bug; for urgent prod fixes use /auto-hotfix. Triggered when the user wants a `change` task fully spec'd hands-off — e.g. "/auto-task", "spec this autonomously", "auto-spec a task for X", "file and fully spec this without asking me", "just write the task spec yourself".
 ---
 
-# /auto-task — autonomous Spec-category task spec
+# /auto-task — autonomous change task spec
 
-`/task` (Operation 1, Spec category), run with nobody at the
-keyboard. The normal `/task` skill asks which phase, stub-or-spec,
-and a round of user-context questions before finalizing.
-`/auto-task` answers all of them itself, flags each answer as an
-assumption, and hands back a complete spec.
+`/task` (**File a task** as a `change`, then **Expand**), run
+with nobody at the keyboard. The normal `/task` skill asks which
+phase, outline-or-full, and a round of user-context questions
+before finalizing. `/auto-task` answers all of them itself,
+flags each answer as an assumption, and hands back a complete
+spec.
 
-**This skill files only Spec-category tasks.** For Bug-category
-tasks (fixing broken behavior with reproduction steps), use
-`/auto-bug`. For Hotfix-category tasks (urgent prod fixes), use
-`/auto-hotfix`. Per `task-rules.md` "Categories", the three are
-distinct work types with distinct templates.
+**This skill files only `change` tasks.** For a `defect`
+(fixing broken behavior with reproduction steps), use
+`/auto-bug`. For a hotfix (an urgent prod fix — a `defect` with
+`priority: now`), use `/auto-hotfix`. Per `code-task-rules.md`
+§3–§4, the three are distinct work.
 
 Per CLAUDE.md ethos: calibrated confidence. A decision grounded in
 the repo is a decision; a decision that needed product knowledge
@@ -28,55 +29,71 @@ the repo doesn't hold is a flagged assumption, surfaced loudly.
   completion, stop only at hard gates, end with the autonomy
   report. This SKILL.md only states what's specific to `auto-task`.
 - **The operation is `/task`.** Read `task/SKILL.md` and follow its
-  **Operation 1** (file a new task) and **Operation 3** (expand a
-  stub to a full spec). `/auto-task` does not redefine the work —
-  it runs `/task`'s work without the questions.
-- **Always a full spec.** `/task` defaults to a stub; `/auto-task`
-  always produces a complete spec via `task-template.md`. The
-  point of the autonomous variant is a finished, actionable
-  artifact — a stub would just defer the questions.
-- **Diligence is not skipped.** Operation 3's reconnaissance —
+  **File a task** and **Expand an outline into a full task**
+  (`task/expanding-a-task.md`). `/auto-task` does not redefine the
+  work — it runs `/task`'s work without the questions.
+- **Always a full spec.** `/task` defaults to an outline;
+  `/auto-task` always produces a complete spec in the shape of
+  `.claude/task-templates/change.md`. The point of the autonomous
+  variant is a finished, actionable artifact — a stub would just
+  defer the questions.
+- **Diligence is not skipped.** The expansion's reconnaissance —
   internal (read the repo) and external (fetch current docs) — is
   done in full. Autonomy means *deciding* the open questions, not
   *skipping* the homework. An autonomous spec built on no recon is
   a bug.
 - **Questions become decisions + assumptions.** Every point where
-  `/task` would ask — phase placement, the requirements drilling
-  in Step 3.5, the user-context check in Step 3.8 — is resolved by
-  picking the best-grounded option and recording it as a ⚠️
-  assumption in the report.
+  `/task` would ask — phase placement, drilling the acceptance
+  criteria in step 9, the questions only the user can answer in
+  step 10 — is resolved by picking the best-grounded option and
+  recording it as a ⚠️ assumption in the report.
 - **Spec-file fast-path is the default.** Per
   `autonomy-rules.md` "Exception 2", `/auto-task` auto-commits the
   spec and auto-merges a `spec-only` PR to `main` when the
   working tree contains *only* allowlisted spec files
   (`tasks/**/*.md`, `tasks/PHASES.md`, `tasks/ROADMAP.md`,
-  `tasks/RELEASES.md`). If any non-spec file is dirty, fall back
-  to "leave uncommitted" — the file lands in `tasks/backlog/` (or
-  `tasks/triage/`), the user commits manually, and the autonomy
-  report notes why the fast-path was skipped.
+  `tasks/RELEASES.md`, `tasks/history.tsv`). If any non-spec file
+  is dirty, fall back to "leave uncommitted" — the file lands in
+  `tasks/backlog/` (or `tasks/triage/`), the user commits
+  manually, and the autonomy report notes why the fast-path was
+  skipped.
 
 ## Process
 
 1. **Read `autonomy-rules.md` and `task/SKILL.md`.** The contract
    and the operation.
-2. **Run `/task` Operation 1 autonomously, Spec category.** Set
-   `category: spec` in frontmatter. Determine the phase from
-   `tasks/PHASES.md` — pick the best-fitting phase; if none fits,
-   file to `tasks/triage/`. Assign the next `TASK-NNN`. (For Bug
-   or Hotfix category, the user should invoke `/auto-bug` or
-   `/auto-hotfix` instead.)
-3. **Run `/task` Operation 3 autonomously.** Full reconnaissance
-   (internal + external). Where Step 3.5 (requirements drilling)
-   and Step 3.8 (user-context check) would put questions to the
-   user, decide each — grounded in the recon — and log it as an
-   assumption.
-4. **Write the full spec** to `tasks/backlog/TASK-NNN-slug.md`
-   using `task-template.md`'s shape. Update `tasks/ROADMAP.md`.
+2. **Run `/task`'s File a task autonomously, as a `change`.**
+   Determine the phase from the `## Phase` headings and scope
+   paragraphs in `tasks/ROADMAP.md` — pick the best-fitting phase;
+   if none fits, file to `tasks/triage/` (omit `--phase`). Then:
+
+   ```bash
+   .claude/bin/task new --type change --phase <P> \
+     --by "$(bash .claude/skills/task-enforce/task-enforce.sh who)" "<title>"
+   ```
+
+   The actor is `$RASA_ACTOR` folded to a lowercase handle. The
+   command allocates the next `TASK-NNN` and writes the
+   `tasks/history.tsv` line and, with a phase, the
+   `tasks/ROADMAP.md` line. (For a `defect` or a hotfix, the user
+   should invoke `/auto-bug` or `/auto-hotfix` instead.)
+3. **Run `/task`'s Expand autonomously**
+   (`task/expanding-a-task.md`). Full reconnaissance (internal +
+   external). Where step 9 (drilling the acceptance criteria) and
+   step 10 (the questions only the user can answer) would put
+   questions to the user, decide each — grounded in the recon —
+   and log it as an assumption.
+4. **Write the full spec** into the file the command reported
+   (`tasks/backlog/TASK-NNN-slug.md`, or `tasks/triage/…`), in
+   `.claude/task-templates/change.md`'s shape, then run
+   `.claude/bin/check-tasks --fix` (I-34).
 5. **Spec-file fast-path** (per `autonomy-rules.md` Exception 2).
    Check the working tree:
    - If every dirty file matches the spec-file allowlist
      (`tasks/**/*.md`, `tasks/PHASES.md`, `tasks/ROADMAP.md`,
-     `tasks/RELEASES.md`) and nothing else is dirty: create a
+     `tasks/RELEASES.md`, and `tasks/history.tsv` — the log
+     `bin/task` appends to on every filing; never
+     `tasks/tasks.config.yml`) and nothing else is dirty: create a
      `spec/TASK-NNN-slug` branch from a fresh `main`, commit the
      spec there (`TASK-NNN spec — <title>`), push, open a PR
      labeled `spec-only` with the autonomy report's assumptions in
@@ -120,8 +137,9 @@ the repo doesn't hold is a flagged assumption, surfaced loudly.
 ## What "done" looks like
 
 A complete, implementation-ready spec in `tasks/backlog/` (or
-`tasks/triage/`), `ROADMAP.md` updated, plus one autonomy report
-listing every decision made on the user's behalf.
+`tasks/triage/`), `ROADMAP.md` updated when it has a phase, plus
+one autonomy report listing every decision made on the user's
+behalf.
 
 If the spec-file fast-path engaged: the spec is on `main` via a
 merged `spec-only` PR, the team has visibility, the autonomy

@@ -26,7 +26,7 @@ the spec, the test should fail, and that failure is the finding.
   to run it, grouped into suites. `/auto-test` writes real tests
   in the project's native framework, not pseudo-tests.
 - **The spec's test plan is the source.** When a task spec exists,
-  its "Test plan" section is the contract — implement those
+  its "Verification" section is the contract — implement those
   scenarios. Where the plan is thin or absent, derive scenarios
   from the acceptance criteria and the observable behavior, and
   flag each derived scenario as an assumption.
@@ -128,7 +128,7 @@ operation.
 ## Process
 
 1. **Read `autonomy-rules.md`, `test-rules.md`, and the task
-   spec** (its Test plan + acceptance criteria). Plus `CLAUDE.md`
+   spec** (its Verification + acceptance criteria). Plus `CLAUDE.md`
    for the test command, the test-infrastructure note, and any
    environment-specific gotchas.
 2. **Select the test type(s)** per "Test type selection" — what

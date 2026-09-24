@@ -47,8 +47,11 @@ Walk these. Skip any that don't exist in the repo.
 - Any `docs/` directory
 
 **Task system (`.claude/` + `tasks/`):**
-- `.claude/task-rules.md` — execution rules
-- `.claude/task-template.md` — task spec format
+- `.claude/task-rules.md` — the task lifecycle (vendored from
+  `rasa.module.tasks`; drift there is reported, not edited here)
+- `.claude/code-task-rules.md` — this domain's engineering rules
+- `.claude/done-gate.md` — what "done" requires here
+- `.claude/task-templates/` — task spec format, one per type
 - `tasks/PHASES.md` — phase scopes + status
 - `tasks/ROADMAP.md` — phase + task registry
 - `tasks/AUDIT.md` — chronological log
@@ -86,10 +89,13 @@ For each doc, compare claims to reality:
 - **.env.example** — does it list every `VITE_*` / `PW_*` var the
   code reads? (Grep the codebase for `import.meta.env.` and
   `process.env.` to find them.)
-- **task-rules.md** — are the documented rules still followed in
-  recent task closing reports / PRs?
+- **task-rules.md / code-task-rules.md / done-gate.md** — are the
+  documented rules still followed in recent completion reports /
+  PRs?
 - **PHASES.md / ROADMAP.md** — do the listed phases and tasks match
-  the contents of `tasks/{backlog,active,blocked,completed}/`?
+  the stage directories? Run `.claude/bin/check-tasks`: ROADMAP
+  drift is its I-20 – I-24 lines. `PHASES.md` against ROADMAP's
+  `## Phase` headings is by eye.
 - **AUDIT.md** — does the most recent entry reflect the most
   recent shipped work? (Check git log against the audit's top
   entries.)
@@ -115,9 +121,9 @@ changes; only use `Write` for full rewrites the user explicitly
 requested.
 
 After edits:
-- If `task-rules.md` says doc updates require an audit-log entry
-  (it does — process changes get their own entries), append one
-  to `AUDIT.md`.
+- If an edit changes process — the task rules, the done-gate —
+  `code-task-rules.md` §12 wants a 📜 entry; append one to
+  `AUDIT.md`.
 - Don't commit unless the user says so.
 
 ## Severity rubric

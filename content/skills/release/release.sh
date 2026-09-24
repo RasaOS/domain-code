@@ -7,7 +7,7 @@
 #
 # TWO LAYERS, AND THE WHOLE POINT IS THAT THEY ARE SEPARATE SECTIONS
 #
-#   ### Targeted   fluid. Any task status. Freely moved between releases.
+#   ### Targeted   fluid. A task in any stage. Freely moved between releases.
 #                  NEVER read by /release. Cannot ship by accident.
 #   ### Bundled    committed. Requires tasks/completed/<ID>-*.md.
 #                  This is the release manifest.
@@ -489,8 +489,8 @@ cmd_bundle() {
     echo "error: $version is already shipped — a shipped release is frozen" >&2; return 3; }
 
   # THE COMPLETION GATE. Only completed work is bundled — the directory
-  # decides, because task-rules.md calls status and directory "the same
-  # fact recorded twice" and a mismatch a bug to fix, not a tiebreak.
+  # decides, because the directory IS the state (task-rules.md §1: there
+  # is no status field to disagree with it).
   #
   # It lives here rather than only in the skill so that no caller can
   # forget it. /release-add runs `.claude/bin/task pass` first when git
@@ -587,10 +587,11 @@ cmd_ship() {
   echo "shipped $version ($tag)"
 }
 
-# Title lookup: completed → active → backlog → triage, else a placeholder.
+# Title lookup: completed → review → active → blocked → backlog → triage →
+# closed, else a placeholder.
 _title_for() {
   local id="$1" f
-  for d in completed active blocked backlog triage; do
+  for d in completed review active blocked backlog triage closed; do
     f="$(find "$ROOT/tasks/$d" -name "$id-*.md" 2>/dev/null | head -1 || true)"
     if [ -n "$f" ]; then
       # Below frontmatter only, and accept BOTH H1 forms: the colon form

@@ -5,8 +5,9 @@ batch of tasks reaches "all closing reports posted, all PRs open, all
 gates green." It defines the integration branch, the post-handoff
 standby state, and the merge-to-main confirmation gate. **Read this
 file when wrapping a phase / batch of tasks.** It extends
-`task-rules.md`; the Git flow safety rules in `git-flow-rules.md` and
-the deploy tagging rules in `release-rules.md` also apply.
+`code-task-rules.md` (and through it `task-rules.md`); the Git flow
+safety rules in `git-flow-rules.md` and the deploy tagging rules in
+`release-rules.md` also apply.
 
 ## Batch handoff (mandatory)
 
@@ -36,9 +37,11 @@ clicking through tabs to find a URL.
 Wait for the reviewer's verdict. While waiting:
 
 - **Do** accept new task ideas, bug reports, or notes the reviewer
-  surfaces during testing. Draft full task specs into
-  `tasks/backlog/` **without committing** — keep the worktree clean
-  for their session. Same pattern used during the prior review window.
+  surfaces during testing. File them with `/task`
+  (`.claude/bin/task new` — `tasks/triage/`, or `tasks/backlog/`
+  with `--phase`) and draft the specs there **without committing**
+  — keep the worktree clean for their session. Same pattern used
+  during the prior review window.
 - **Do** answer questions about what's in the integration branch.
 - **Do not** start new feature work. Don't speculatively merge more
   PRs. Don't auto-deploy. Don't kill the running process.
@@ -50,7 +53,10 @@ take minutes or hours.
 ### Step 4a — On approval ("merge", "ship it", "looks good")
 
 - Merge integration → main with `gh pr merge --merge --delete-branch`
-- Verify the child PRs auto-close as merged
+- Verify the child PRs auto-close as merged, then
+  `.claude/bin/task pass <id> --by <who>` each task — its PR is
+  merged, so the done-gate's "Merged" gate now holds (`review/` →
+  `completed/`)
 - Clean up local + remote stale branches and pull main fresh
 - **Ask** explicitly: "Deploy now, or hold? If yes, I'll tag the
   release as `vX.Y.Z` — confirm the version." Do not auto-deploy.
@@ -67,8 +73,9 @@ options:
 2. **Per-task isolation.** Identify which specific task(s) failed
    verification. Drop those PRs from the integration merge, keep the
    passing ones. Re-build the integration branch from the passing
-   subset. Re-task only the failing ones with the reviewer's feedback
-   baked into the new spec.
+   subset. Send only the failing ones back with
+   `.claude/bin/task reject <id> --note "<the reviewer's feedback>"`,
+   and bake that feedback into the spec.
 
 Recommend (2) by default — it salvages the work that did pass.
 Recommend (1) only if the failure is structural (e.g., a shared

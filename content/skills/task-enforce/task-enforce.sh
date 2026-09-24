@@ -36,6 +36,7 @@
 #   task-enforce.sh clear                 unlink (next code edit re-gates)
 #   task-enforce.sh new "<title>"         file a task (triage/) and link it
 #   task-enforce.sh stamp <id> <key> <v>  set an x- key (code-task-rules.md §7)
+#   task-enforce.sh who                   the actor handle for bin/task --by
 #   task-enforce.sh classify <path>       show how a path classifies
 #
 # Tasks are filed through .claude/bin/task (rasa.module.tasks v1.0.0), never
@@ -665,6 +666,12 @@ main() {
     stamp)
       [ $# -ge 3 ] || { echo "error: stamp needs TASK-NNN <key> <value>" >&2; return 2; }
       cmd_stamp "$1" "$2" "$3" ;;
+    who)
+      # For `.claude/bin/task <verb> --by "$(… who)"`: RASA_ACTOR folded into
+      # the handle grammar bin/task enforces, so an agent:runner style value
+      # does not fail its check. Prints `unknown` when nothing identifies
+      # the actor — bin/task's own word for an unrecorded one.
+      local h; h="$(actor_handle)"; printf '%s\n' "${h:-unknown}" ;;
     classify)
       [ $# -ge 1 ] || { echo "error: classify needs a path" >&2; return 2; }
       local r; r="$(repo_root)" || return 1

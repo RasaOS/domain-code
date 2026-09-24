@@ -348,25 +348,29 @@ def gather_open_prs(root: Path) -> list[dict[str, Any]] | None:
 
 
 def gather_active_tasks(root: Path) -> list[dict[str, str]]:
-    active_dir = root / "tasks" / "active"
-    if not active_dir.is_dir():
-        return []
+    # In flight = active/ (being worked) + review/ (finished, PR open, waiting
+    # on the done-gate). The directory is the state; there is no status field.
     out = []
-    for path in sorted(active_dir.iterdir()):
-        if path.suffix not in (".md", ".markdown") or path.name.startswith("."):
+    for stage in ("active", "review"):
+        stage_dir = root / "tasks" / stage
+        if not stage_dir.is_dir():
             continue
-        title = path.stem
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-            # Strip a leading frontmatter block first: a `#` line inside it is a
-            # YAML comment, not the title.
-            body = re.sub(r"\\A---\\n.*?\\n---\\n", "", text, count=1, flags=re.S)
-            m = re.search(r"^#\s+(.+)$", body, re.M)
-            if m:
-                title = m.group(1).strip()
-        except OSError:
-            pass
-        out.append({"file": path.name, "title": title})
+        for path in sorted(stage_dir.iterdir()):
+            if path.suffix not in (".md", ".markdown") or path.name.startswith("."):
+                continue
+            title = path.stem
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+                # Strip a leading frontmatter block first: a `#` line inside it is a
+                # comment, not the title. (This pattern was double-escaped in a raw
+                # string until 0.53.0 and never matched.)
+                body = re.sub(r"\A---\n.*?\n---\n", "", text, count=1, flags=re.S)
+                m = re.search(r"^#\s+(.+)$", body, re.M)
+                if m:
+                    title = m.group(1).strip()
+            except OSError:
+                pass
+            out.append({"file": path.name, "title": title, "stage": stage})
     return out
 
 
@@ -378,7 +382,7 @@ def gather_phases(root: Path) -> list[dict[str, Any]]:
     phases: list[dict[str, Any]] = []
     cur: dict[str, Any] | None = None
     for line in text.splitlines():
-        m = re.match(r"^##\s+(Phase\s+[\dA-Z].*)$", line.strip())
+        m = re.match(r"^##\s+(Phase\s+\w.*)$", line.strip())
         if m:
             if cur:
                 phases.append(cur)

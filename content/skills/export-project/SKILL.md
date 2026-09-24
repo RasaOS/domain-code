@@ -72,7 +72,8 @@ the highest-leverage files yourself.
 ### Step 3 — Detect what's worth highlighting
 
 - **Active phase** from `PHASES.md` + `ROADMAP.md`.
-- **Top 3 in-flight tasks** from `tasks/active/`.
+- **Top 3 in-flight tasks** from `tasks/active/` and
+  `tasks/review/`.
 - **Last 3 shipped items** from `tasks/AUDIT.md`.
 - **Most-recent decision** from `docs/decisions/` (if present).
 - **Available skills** from `.claude/skills/*/SKILL.md`

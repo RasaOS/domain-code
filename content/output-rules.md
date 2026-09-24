@@ -86,7 +86,7 @@ These stay as plain prose or normal markdown:
 - **Multi-turn dialogue, clarifying questions, back-and-forth**
   — the meta-shape of conversation itself.
 - **Git commit messages, PR titles/bodies** — those have their
-  own conventions (covered by `task-rules.md`).
+  own conventions (covered by `code-task-rules.md` §10).
 - **One-line affirmations or confirmations** ("yes, done",
   "got it", "stopping here") — short prose is the right tool.
 

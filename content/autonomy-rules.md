@@ -135,8 +135,12 @@ The carve-out:
 
 - **Allowlist.** Every file in the PR must match the spec-file
   allowlist: `tasks/**/*.md`, `tasks/PHASES.md`,
-  `tasks/ROADMAP.md`, `tasks/RELEASES.md`. Any file outside the
-  allowlist disqualifies the fast-path.
+  `tasks/ROADMAP.md`, `tasks/RELEASES.md`, and
+  `tasks/history.tsv` — the transition log `.claude/bin/task`
+  appends to on every filing and move; data, not code. Any file
+  outside the allowlist disqualifies the fast-path, including
+  `tasks/tasks.config.yml`, which declares the ledger's actors and
+  targets and is a decision, not a spec.
 - **Clean tree precondition.** The working tree must contain no
   non-spec dirty files at the moment the fast-path runs. If it
   does, fall back to "leave uncommitted" — same as the default.

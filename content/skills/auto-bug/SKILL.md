@@ -1,15 +1,16 @@
 ---
 name: auto-bug
-description: Autonomous variant of /task for Bug-category tasks — files a bug task and expands it to a full, implementation-ready spec without asking. Reproduces the bug from the user's description where possible, captures steps to reproduce, expected vs. actual behavior, root-cause notes, and acceptance criteria for the fix. Every judgment call is flagged as an assumption. Triggered when the user wants a bug fully spec'd hands-off — e.g. "/auto-bug", "file and fully spec this bug yourself", "auto-spec a bug for the broken login", "the dashboard shows yesterday's date — file and spec it autonomously".
+description: Autonomous variant of /task for bugs — files a `defect` task and expands it to a full, implementation-ready spec without asking. Reproduces the bug from the user's description where possible, captures steps to reproduce, expected vs. actual behavior, root-cause notes, and acceptance criteria for the fix. Every judgment call is flagged as an assumption. Triggered when the user wants a bug fully spec'd hands-off — e.g. "/auto-bug", "file and fully spec this bug yourself", "auto-spec a bug for the broken login", "the dashboard shows yesterday's date — file and spec it autonomously".
 ---
 
-# /auto-bug — autonomous Bug-category task spec
+# /auto-bug — autonomous defect task spec
 
-`/task` Operation 1, Bug category, run with nobody at the
-keyboard. The normal `/task` flow asks the category, the phase,
-and a round of context questions; `/auto-bug` decides all of them
-itself, flags each as an assumption, and hands back a complete
-Bug spec using `task-template-bug.md`.
+`/task`'s **File a task** with `--type defect`, run with nobody
+at the keyboard. The normal `/task` flow asks the type, the
+phase, and a round of context questions; `/auto-bug` decides all
+of them itself, flags each as an assumption, and hands back a
+complete defect spec in the shape of
+`.claude/task-templates/defect.md`.
 
 Per CLAUDE.md ethos: a bug is something *verifiably broken*, not
 something subjectively wrong. The spec captures real reproduction
@@ -21,23 +22,25 @@ steps and the observable wrong behavior — not what the developer
 - **Autonomous per `autonomy-rules.md`.** Read that file — the
   contract, the hard-gate list, the report template. This
   SKILL.md states only what's specific to `/auto-bug`.
-- **The operation is `/task` Operation 1 with Bug category.** Read
-  `task/SKILL.md` and `task-rules.md` "Categories". `/auto-bug`
-  follows that operation; it does not redefine the work.
-- **Always a full spec.** A Bug task always gets the full
-  `task-template-bug.md` template filled in. No stub-content for
-  bugs that have been triaged — if the work is real enough to be
-  filed as a bug, it's real enough to be reproducible.
-- **Reproduce where possible.** Operation 3.5 (requirements
-  drilling) for a bug specifically means: try to reproduce the
-  symptom from the user's description, capture the actual
-  observable behavior, then ground the spec in what you saw —
-  not what the user assumed.
+- **The operation is `/task`'s File a task, `--type defect`.**
+  Read `task/SKILL.md` and `code-task-rules.md` §3 (types).
+  `/auto-bug` follows that operation; it does not redefine the
+  work.
+- **Always a full spec.** A `defect` task always gets the full
+  `.claude/task-templates/defect.md` shape filled in. No stub
+  depth for bugs that have been triaged — if the work is real
+  enough to be filed as a bug, it's real enough to be
+  reproducible.
+- **Reproduce where possible.** Requirements drilling (step 9 of
+  `task/expanding-a-task.md`) for a bug specifically means: try
+  to reproduce the symptom from the user's description, capture
+  the actual observable behavior, then ground the spec in what
+  you saw — not what the user assumed.
 - **Root cause is a flagged assumption, not a guarantee.** If
   the root cause is determinable without fixing (a clear
   reading of the broken code), state it. If not, leave the
-  template's "Root cause" section as `Unknown — to be determined
-  during fix.` and flag the gap.
+  template's "Cause, so far as it is known without fixing it"
+  section as `Not yet known.` and flag the gap.
 - **Phase is the broken functionality's phase, not a "bugs"
   phase.** A login bug belongs to the auth phase. The skill
   decides phase by reading where the broken code lives.
@@ -51,8 +54,8 @@ steps and the observable wrong behavior — not what the developer
 ## Process
 
 1. **Read `autonomy-rules.md`, `task/SKILL.md`, `task-rules.md`,
-   and `task-template-bug.md`.** Plus the project's `CLAUDE.md`
-   for verification commands.
+   and `.claude/task-templates/defect.md`.** Plus the project's
+   `CLAUDE.md` for verification commands.
 2. **Parse the bug from the user's description.** Extract: the
    user-visible symptom, the affected functionality, any
    reproduction hints the user gave.
@@ -67,13 +70,24 @@ steps and the observable wrong behavior — not what the developer
    shared utility). Flag the choice as an assumption.
 5. **Run full reconnaissance** — internal (the broken code, its
    tests, its callers) and external (current docs for the
-   framework, if relevant). The Bug template's "Root cause"
-   section is filled from this recon where possible.
-6. **Assign ID.** Next available `TASK-NNN` (Bug uses the regular
-   TASK-NNN space, not HOTFIX-NNN).
-7. **Write the full Bug spec** to `tasks/backlog/TASK-NNN-slug.md`
-   using `task-template-bug.md`'s shape. Update `tasks/ROADMAP.md`
-   under the bug's phase.
+   framework, if relevant). The defect template's cause section
+   is filled from this recon where possible.
+6. **File it.**
+
+   ```bash
+   .claude/bin/task new --type defect --phase <P> \
+     --by "$(bash .claude/skills/task-enforce/task-enforce.sh who)" "<what is wrong>"
+   ```
+
+   The actor is `$RASA_ACTOR` folded to a lowercase handle. The
+   command allocates the next `TASK-NNN` (a bug and a hotfix
+   share the one id space), lands the file in `tasks/backlog/`,
+   and writes the `tasks/history.tsv` and `tasks/ROADMAP.md`
+   lines.
+7. **Write the full defect spec** into the file the command
+   reported (`tasks/backlog/TASK-NNN-slug.md`), in
+   `.claude/task-templates/defect.md`'s shape, then run
+   `.claude/bin/check-tasks --fix` (I-34).
 8. **Spec-file fast-path** per `autonomy-rules.md` Exception 2.
    Same allowlist as `/auto-task`.
 9. **Render the autonomy report** — the bug spec path, every
@@ -82,8 +96,8 @@ steps and the observable wrong behavior — not what the developer
 
 ## When NOT to use this skill
 
-- **The work is a new feature, not a fix** → `/auto-task` (Spec
-  category).
+- **The work is a new feature, not a fix** → `/auto-task` (a
+  `change`).
 - **The bug is *urgent* — prod is broken right now** →
   `/auto-hotfix`. The procedural distinction matters; route
   through the hotfix flow.
@@ -94,7 +108,7 @@ steps and the observable wrong behavior — not what the developer
 
 ## What "done" looks like
 
-A complete, implementation-ready Bug spec in `tasks/backlog/`,
+A complete, implementation-ready defect spec in `tasks/backlog/`,
 `ROADMAP.md` updated under the broken functionality's phase,
 plus one autonomy report. If the spec-file fast-path engaged:
 the spec is on `main` via a merged `spec-only` PR. Otherwise:

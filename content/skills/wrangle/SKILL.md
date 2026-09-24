@@ -1,6 +1,6 @@
 ---
 name: wrangle
-description: Wrangle a chaotic or unfamiliar codebase into something clean, organized, and understood. Two phases — Phase 1 is a read-only deep audit (architecture, flows, data models, data/UI layers, infra, startup, auth) that writes durable `.md` reference docs under `docs/wrangle/` AND produces a tight Claude-targeted summary at `.claude/context/project-map.md` so future sessions land cold with project context already loaded. Phase 2 is a tailored plan of low-risk cleanups (dead code, commented-out blocks, obvious smells) plus offers for deeper reviews, and can file that plan into `tasks/backlog/` so the work is delegable instead of living in the transcript — nothing edited or filed without explicit user consent. Triggered when the user wants to "wrangle", "tame", "make sense of", or "clean up" an existing codebase — e.g. "/wrangle", "wrangle this repo", "I just inherited this, help me understand it", "let's tame this codebase".
+description: Wrangle a chaotic or unfamiliar codebase into something clean, organized, and understood. Two phases — Phase 1 is a read-only deep audit (architecture, flows, data models, data/UI layers, infra, startup, auth) that writes durable `.md` reference docs under `docs/wrangle/` AND produces a tight Claude-targeted summary at `.claude/context/project-map.md` so future sessions land cold with project context already loaded. Phase 2 is a tailored plan of low-risk cleanups (dead code, commented-out blocks, obvious smells) plus offers for deeper reviews, and can file that plan into `tasks/triage/` so the work is delegable instead of living in the transcript — nothing edited or filed without explicit user consent. Triggered when the user wants to "wrangle", "tame", "make sense of", or "clean up" an existing codebase — e.g. "/wrangle", "wrangle this repo", "I just inherited this, help me understand it", "let's tame this codebase".
 ---
 
 # /wrangle — Tame an existing codebase
@@ -108,7 +108,7 @@ in a CLI tool) — note the absence rather than padding.
     `pyproject.toml`, `build.gradle*`, `Gemfile.lock`,
     `go.mod`, `Cargo.lock`, etc.). This file becomes the
     **starting reference for future task work's external
-    reconnaissance** (per `/task` Operation 3, which fetches
+    reconnaissance** (per `/task`'s Expand, which fetches
     current docs from these sources before drafting specs).
 
 ### Where to write
@@ -177,7 +177,7 @@ external dependency.
 # Dependencies & external services
 
 > **For future task work.** When `/task` does external
-> reconnaissance (per `/task` Operation 3, Step 3.3), this file
+> reconnaissance (per `/task`'s Expand, step 6), this file
 > is the starting list of doc URLs to fetch. Keep it current —
 > re-run `/wrangle` after major dep changes.
 
@@ -513,7 +513,7 @@ and commit when ready.
 through `/audit` or `/plan`.
 
 **To make this stick**: say "file them" and I'll put Tier 1 and
-Tier 2 into `tasks/backlog/`, so the work can be picked up later —
+Tier 2 into `tasks/triage/`, so the work can be picked up later —
 by you or by an agent — instead of living in this conversation.
 ```
 
@@ -521,7 +521,7 @@ by you or by an agent — instead of living in this conversation.
 
 **Only when the user asks.** A rendered plan is not delegable work:
 it cannot be picked up by `/auto-task`, it does not appear in
-`/status`, and it is gone when the session ends — which makes the
+`/backlog`, and it is gone when the session ends — which makes the
 most valuable output of a wrangle the most perishable.
 
 Filing executes nothing. It converts "here is what I found" into
@@ -530,32 +530,38 @@ Filing executes nothing. It converts "here is what I found" into
 1. **Use the allocator, never hand-written ids.** Per item:
 
    ```bash
-   .claude/skills/task-enforce/task-enforce.sh new "<the item's short claim>"
+   .claude/bin/task new --type upkeep --by <who> "<the item's short claim>"    # Tier 1
+   .claude/bin/task new --type inquiry --by <who> "<the item's short claim>"   # Tier 2
    ```
 
-   That mints a correctly-shaped stub — `category: stub`,
-   `origin: manual`, `outcome: unrecorded`, a real `filed` stamp —
-   with a collision-safe id. Hand-writing task files races the id
-   allocator, and two items can take the same number.
+   That files a stub into `tasks/triage/` — a real `created`
+   stamp and a `tasks/history.tsv` line — with a collision-safe
+   id. A Tier 1 cleanup is `upkeep` (it changes no outcome); a
+   Tier 2 review is an `inquiry` (its deliverable is an answer).
+   `<who>` is resolved as `task/SKILL.md` "Who is acting" says.
+   Hand-writing task files races the id allocator, and two items
+   can take the same number.
 
-2. **`new` also sets the current-task pointer.** Filing several
-   leaves the last one current, which is not what was asked for.
-   Run `task-enforce.sh clear` afterwards, unless the user said to
-   start on one.
+2. **Filing does not link the work.** `bin/task new` leaves the
+   `/task-enforce` current-task pointer alone, which is what was
+   asked for. If the user said to start on one, it needs a phase
+   first (`/task` graduate), then `.claude/bin/task start <id>`
+   and `task-enforce.sh set <id>`.
 
 3. **Fill in the body** from the plan item: the one-line why, the
    `file:line` citations Phase 1 produced, and the effort/risk
    estimate. Cross-reference `docs/wrangle/<area>.md` so the task
    carries its own evidence instead of requiring the reader to
    re-derive it. A stub that says only "remove dead code" is not
-   delegable either.
+   delegable either. Then run `.claude/bin/check-tasks --fix`
+   (I-34).
 
 4. **Tier 3 is NOT filed.** Those are questions for the user —
    decisions, not work. A question filed as a task looks like
    something an agent can close, and it is not. They stay in the
    report.
 
-5. **Report the ids and the count**, so the user can run `/status`
+5. **Report the ids and the count**, so the user can run `/backlog`
    and see them immediately.
 
 ### Applying Tier 1 items

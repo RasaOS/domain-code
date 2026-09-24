@@ -20,7 +20,9 @@ over gaps.
   1. `README.md` — the public front door.
   2. `CLAUDE.md` — the working contract (tech stack, conventions,
      gotchas).
-  3. `.claude/task-rules.md` — execution rules.
+  3. `.claude/task-rules.md`, then `.claude/code-task-rules.md`
+     and `.claude/done-gate.md` — the task lifecycle, this
+     domain's engineering rules, and what "done" requires here.
   4. `tasks/PHASES.md` — phase-level scope.
   5. `tasks/ROADMAP.md` — phase + task registry.
   6. Top of `tasks/AUDIT.md` — most recent shipped work + recent
@@ -104,13 +106,16 @@ rather than working around it silently.
 
 ## 3. How work flows here
 
-Pulled from `.claude/task-rules.md` + the available skills.
+Pulled from `.claude/task-rules.md` and
+`.claude/code-task-rules.md`, plus the available skills.
 
 The shape of work in this repo, in one paragraph: <e.g. "Tasks
-are filed in `tasks/backlog/` as stubs, expanded to full specs
-when picked up, moved to `tasks/active/` while in-flight, then
-to `tasks/completed/` after merge. One task = one PR. Every task
-has a paired E2E spec.">
+are filed with `/task` as stubs, expanded to full specs when
+picked up, started into `tasks/active/` while the branch is
+worked, submitted to `tasks/review/` when the PR opens, and
+passed into `tasks/completed/` once the done-gate passes and the
+PR merges. One task = one PR. Every task has a paired E2E
+spec.">
 
 **Day-to-day commands:**
 - `/status` — "where do things stand"
@@ -125,7 +130,8 @@ has a paired E2E spec.">
 or run `/skills`.
 
 **Hard rules — the three that bite first:**
-1. <pull the most-likely-to-bite rule from task-rules.md, ~1 line>
+1. <pull the most-likely-to-bite rule from task-rules.md /
+   code-task-rules.md, ~1 line>
 2. <…>
 3. <…>
 
@@ -157,8 +163,10 @@ A specific order, not generic advice.
 
 1. **Read [`CLAUDE.md`](CLAUDE.md) end-to-end.** It's the
    working contract — every gotcha is in there.
-2. **Read [`.claude/task-rules.md`](.claude/task-rules.md).**
-   Know the rules before you propose a change.
+2. **Read [`.claude/task-rules.md`](.claude/task-rules.md),**
+   then [`.claude/code-task-rules.md`](.claude/code-task-rules.md)
+   and [`.claude/done-gate.md`](.claude/done-gate.md). Know the
+   rules before you propose a change.
 3. **Run the project locally** with the commands in section 2.
    If anything breaks, file it as a real bug, don't paper over.
 4. **Run `/status`** to see where things stand.
@@ -179,9 +187,9 @@ A specific order, not generic advice.
   go through a skill. Be specific.
 
 The contract is honest reporting both ways. If you don't know,
-say so. If you disagree with a rule, say why — `task-rules.md`
-isn't sacred, but it's the current contract until we change it
-together.
+say so. If you disagree with a rule, say why — the task rules
+aren't sacred, but they're the current contract until we change
+them together.
 
 ---
 

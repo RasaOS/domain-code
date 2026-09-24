@@ -1,6 +1,6 @@
 ---
 name: task-guard
-description: Toggle enforcement of the change-audit rule — every code or configuration change must be linked to a task. When ON, installs a git pre-commit hook that checks each commit: if it touches code/runtime config with no active task, a minimal stub task is auto-created and rides into the commit, and a row is appended to the change ledger (tasks/CHANGES.md). Never blocks a commit — it auto-creates so the audit trail is never broken. Subcommands: on, off, status. Triggered when the user wants change-to-task enforcement — e.g. "/task-guard on", "/task-guard off", "/task-guard status", "enforce tasks for every change", "make sure every code change has a task", "lock down change auditing".
+description: Toggle enforcement of the change-audit rule — every code or configuration change must be linked to a task. When ON, installs a git pre-commit hook that checks each commit: if it touches code/runtime config with no linked task (the /task-enforce current task, else one in tasks/active/ or tasks/review/), a task is filed into tasks/triage/ through .claude/bin/task and rides into the commit with its tasks/history.tsv line, and a row is appended to the change ledger (tasks/CHANGES.md). Never blocks a commit — it auto-creates so the audit trail is never broken. Subcommands: on, off, status. Triggered when the user wants change-to-task enforcement — e.g. "/task-guard on", "/task-guard off", "/task-guard status", "enforce tasks for every change", "make sure every code change has a task", "lock down change auditing".
 ---
 
 # /task-guard — enforce the change-audit rule
@@ -20,8 +20,9 @@ normally skip the task system entirely. `/task-guard` makes that
 enforcement automatic.
 
 `/task-guard on` installs a pre-commit hook that holds the line.
-The rule it enforces is documented in `task-rules.md` ("Every
-change is task-linked"); this skill is the mechanism.
+The rule it enforces is documented in `task-rules.md` §12 and
+`code-task-rules.md` §6 ("Every change is task-linked"); this
+skill is the mechanism.
 
 Built on the kit's git-hook pattern (see `/git-guard`). The script
 `task-guard.sh` owns every mechanic; this SKILL.md only routes the
@@ -31,7 +32,7 @@ Built on the kit's git-hook pattern (see `/git-guard`). The script
 
 | Hook | Type | What it does |
 |---|---|---|
-| `pre-commit` → `guard-commit` | git | On every commit: if staged files include a code / runtime-config change, ensure it's task-linked. No active task → auto-create a stub and ride it into the commit. Append a row to the change ledger. **Never rejects the commit.** |
+| `pre-commit` → `guard-commit` | git | On every commit: if staged files include a code / runtime-config change, ensure it's task-linked. No linked task → file one into `tasks/triage/` and ride it into the commit. Append a row to the change ledger. **Never rejects the commit.** |
 
 The git hook lives in the repo's shared hooks dir (worktree-aware
 via `git rev-parse --git-common-dir`). It is **per-machine** —
@@ -40,13 +41,17 @@ once on each machine, per project.
 
 ## The model — auto-create, never block
 
-`/task-guard` does not stop you to ask for a task. When an
-auditable change has no active task, the hook **creates one** — a
-minimal stub at `tasks/active/TASK-NNN-auto-<slug>.md`, flagged
-`STATUS: STUB — not spec'd`, with a "why not spec'd" note (the
-change was a direct fix made without filing a task). The stub and
-a change-ledger row ride into the *same commit* as the change, so
-the audit trail closes itself with zero friction.
+`/task-guard` does not stop you to ask for a task. A commit is
+linked, in order, to the `/task-enforce` current-task pointer;
+else to what is in flight in `tasks/active/` or `tasks/review/`
+(an open PR — a fix-up commit on it belongs to it). When an auditable
+change has none, the hook **files one** with
+`.claude/bin/task new` — a `change` in `tasks/triage/`, stamped
+`x-origin: auto-guard`, titled after the first changed file — and
+makes it the current task, so the next unlinked commit links to
+it instead of filing another. The task, its `tasks/history.tsv`
+line and a change-ledger row ride into the *same commit* as the
+change, so the audit trail closes itself with zero friction.
 
 That is the whole point: a hotfix made in thirty seconds still
 ends up with a task and a ledger row, without the developer having
@@ -55,7 +60,7 @@ to stop and think about it.
 ## What counts as an auditable change
 
 Source code and runtime/user-facing configuration. **Not**
-auditable — and so never triggering a stub: anything under
+auditable — and so never triggering a task: anything under
 `tasks/`, `docs/`, or `.claude/`, and any `*.md`, `LICENSE`,
 `.gitignore`-class file. A docs-only or task-only commit passes
 through untouched.
@@ -64,10 +69,10 @@ through untouched.
 
 `tasks/CHANGES.md` — append-only. One row per auditable commit:
 the timestamp, the author, the linked task, the files, and — for
-auto-created stubs — the note that it wasn't spec'd. Each row
-rides in the same commit as its change, so `git blame
-tasks/CHANGES.md` recovers the exact commit for any row. This is
-the long-term audit-and-review surface.
+an auto-filed task — a note that it is in `tasks/triage/` waiting
+for a real title. Each row rides in the same commit as its
+change, so `git blame tasks/CHANGES.md` recovers the exact commit
+for any row. This is the long-term audit-and-review surface.
 
 ## Interface
 
@@ -85,7 +90,8 @@ Exit codes: `0` success, `1` operational, `2` usage.
 ## Behavior contract
 
 - **Script-driven.** `task-guard.sh` owns the hook install, the
-  auditable-file classification, stub creation, and the ledger.
+  auditable-file classification, filing the task (through
+  `.claude/bin/task`), and the ledger.
   This SKILL.md routes `on` / `off` / `status`. Always invoke as
   `bash <skill-dir>/task-guard.sh ...`.
 - **Per-machine.** Git hooks are not version-controlled. Run `on`
@@ -93,10 +99,11 @@ Exit codes: `0` success, `1` operational, `2` usage.
 - **Never blocks a commit.** The `guard-commit` handler always
   exits 0. It enforces by auto-creating, not by rejecting — a
   rejected commit is friction the user explicitly didn't want.
-- **The hook commits nothing on its own.** It stages the stub and
-  the ledger row into the commit the user is *already making*.
-  That's the user committing, not the skill auto-committing —
-  the kit's "never auto-commit" rule is intact.
+- **The hook commits nothing on its own.** It stages the task,
+  its `tasks/history.tsv` line and the ledger row into the commit
+  the user is *already making*. That's the user committing, not
+  the skill auto-committing — the Element's "never auto-commit"
+  rule is intact.
 - **Idempotent.** `on` twice is a no-op; `off` when off is a
   no-op. The git-hook edit uses a sentinel block, so `off` removes
   cleanly and co-existing hooks (e.g. `/git-guard`'s) are
@@ -128,13 +135,14 @@ machine only**. Other machines need their own `/task-guard on`.
 - **Per-machine install.** A teammate who hasn't run `/task-guard
   on` commits unguarded. The enforcement is only as complete as
   the installs.
-- **`--no-verify` bypasses it.** `task-rules.md` already forbids
-  `--no-verify`; `/task-guard` relies on that rule holding, it
-  can't out-muscle a deliberate bypass.
-- **The stub is crude.** A pre-commit hook is bash — the
-  auto-stub's title and details are mechanical. It's a real,
-  linked, audit-complete task, but it is *not* a spec. Spec it
-  retroactively with `/task` if the change warrants it.
+- **`--no-verify` bypasses it.** `code-task-rules.md` §6 already
+  forbids `--no-verify`; `/task-guard` relies on that rule
+  holding, it can't out-muscle a deliberate bypass.
+- **The auto-filed task is crude.** A pre-commit hook is bash —
+  its title and details are mechanical. It's a real, linked,
+  audit-complete task, but it is *not* a spec. Retitle it, then
+  graduate it (or close it) with `/task`; expand it if the change
+  warrants it.
 
 These are real. `/task-guard` closes the common gap — the honest
 quick-fix that just forgot a task — not a determined bypass.
@@ -145,8 +153,10 @@ quick-fix that just forgot a task — not a determined bypass.
   / `off`. Direct edits break idempotent removal.
 - **Don't hand-edit `tasks/CHANGES.md`.** It's written by the
   hook; hand-edits corrupt the audit trail.
-- **Don't treat the auto-stub as a finished spec.** It's an
-  audit-trail placeholder. Expand or close it deliberately.
+- **Don't treat the auto-filed task as a finished spec.** It's an
+  audit-trail placeholder. Graduate, expand or close it
+  deliberately — with `.claude/bin/task`, never by moving the
+  file.
 - **Don't render `guard-commit` output in chat** as if the user
   asked for it — it's for the hook.
 
@@ -158,9 +168,11 @@ quick-fix that just forgot a task — not a determined bypass.
 - **Commit `--amend` / interactive rebase** — `pre-commit` re-runs
   per replayed commit, which can append a duplicate ledger row.
   Harmless but noisy; trim by hand if it matters.
-- **Multiple active tasks** — the hook can't know which one a
-  commit belongs to, so the ledger row records all active task
-  IDs. Cleaner ledger rows come from one active task at a time.
+- **Multiple tasks in flight** — with no current-task pointer
+  set, the hook can't know which one a commit belongs to, so the
+  ledger row records every task ID in `tasks/active/` and
+  `tasks/review/`. Cleaner ledger rows come from setting the
+  pointer (`/task-enforce set TASK-NNN`).
 - **Merge commits** — git skips `pre-commit` for merges; merges
   are not ledgered.
 
@@ -179,6 +191,6 @@ quick-fix that just forgot a task — not a determined bypass.
 The user has run `on`, `off`, or `status` and seen the brief
 result. With it ON: from the next commit, every code or
 configuration change is linked to a task — a real one if work was
-filed, an auto-created stub if not — and recorded in
-`tasks/CHANGES.md`. The audit trail has no gaps, and the developer
-was never stopped to make it so.
+filed, one auto-filed into `tasks/triage/` if not — and recorded
+in `tasks/CHANGES.md`. The audit trail has no gaps, and the
+developer was never stopped to make it so.

@@ -7,9 +7,9 @@ newest first.
 - `/release-add` bundles completed work into one.
 - `/release` ships it and stamps this file.
 
-Targeted work is fluid — any task status, moved freely, never shipped.
-Bundled work is committed — completed only, and it is what `/release`
-reads as the manifest.
+Targeted work is fluid — a task in any stage, moved freely, never
+shipped. Bundled work is committed — `completed/` only, and it is what
+`/release` reads as the manifest.
 
 States: 📋 Planned · 🚧 Next (has bundled work) · ✅ Shipped.
 Format reference: `.claude/release-rules.md`.

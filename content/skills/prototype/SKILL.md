@@ -48,11 +48,18 @@ Two parts:
 
 - **Isolation is the load-bearing rule.** Never read or write
   main `tasks/` files (`tasks/ROADMAP.md`, `tasks/PHASES.md`,
-  `tasks/AUDIT.md`, `tasks/{backlog,active,blocked,completed}/`). The
-  prototype is invisible to main planning by design. Graduation
+  `tasks/AUDIT.md`, `tasks/history.tsv`, the stage directories
+  `tasks/{triage,backlog,active,review,blocked,completed,closed}/`).
+  The prototype is invisible to main planning by design. Graduation
   is the **only** path from prototype scope into main.
+- **The prototype tree is not a ledger.** `.claude/bin/task` and
+  `.claude/bin/check-tasks` manage main `tasks/` only; a sub-folder
+  like `tasks/proto/<slug>/` is left alone (`task-rules.md` I-01).
+  So inside the bubble a stage change is a plain file move, and
+  nothing reaches main `tasks/` except through `graduate`, which
+  files through `.claude/bin/task`.
 - **Work happens on `proto/<slug>` and its sub-branches.** Per
-  the git-flow Rule 1 in `task-rules.md`, each task within the
+  git-flow Rule 1 (`git-flow-rules.md`), each task within the
   prototype gets its own sub-branch (`task/TASK-XXX-<slug>` off
   `proto/<slug>`). `/prototype` does NOT implement tasks — it
   manages spec lifecycle. Implementation follows the same
@@ -92,7 +99,7 @@ checked out; otherwise prompts to `start`.
 | `start <slug>` | create branch + scaffolding + brief |
 | `resume <slug>` | switch to existing prototype |
 | `add <title>` | file a stub task in the prototype's backlog |
-| `spec <id>` | expand stub → full spec (same rigor as /task Op 3) |
+| `spec <id>` | expand stub → full spec (same rigor as /task Expand) |
 | `move <id> active` | mv backlog/<id> → active/ |
 | `move <id> completed` | mv active/<id> → completed/ |
 | `status` | §2 dashboard of prototype state |
@@ -234,27 +241,26 @@ File a stub task into the prototype's backlog.
    ```markdown
    ---
    id: TASK-NNN
-   category: stub
-   phase: Phase 1: <prototype slug> prototype
-   status: backlog
-   owner: unassigned
-   blocked_by:
-   outcome: unrecorded
-   filed: <YYYY-MM-DD HH:MM UTC>
-   origin: manual
+   type: change
+   created: <YYYY-MM-DD>
+   created_by: <handle>
+   updated: <YYYY-MM-DD>
+   phase: 1
    ---
 
    # TASK-NNN: <title>
-
-   > STATUS: STUB — full spec drafted before implementation
 
    <one-line user story or "TODO: user story">
    <one-line why or "TODO: why">
    ```
 
-   Prototype tasks live under their own `tasks/proto/<slug>/` tree, so they
-   are counted separately from the main backlog — but they carry the same
-   frontmatter, so the same readers and counters work on them.
+   `type` is whichever of the five fits (`code-task-rules.md` §3);
+   `created_by` is resolved as `/task` "Who is acting" says. It is a
+   stub until `## Acceptance criteria` holds a real checkbox — depth
+   is derived, never declared. Prototype tasks live under their own
+   `tasks/proto/<slug>/` tree, so they are counted separately from the
+   main backlog — but they carry the same v1.0.0 frontmatter keys
+   (never `status:`), so graduation can file them without a rewrite.
 4. **Append to ROADMAP.** Add the task line under the phase's
    bullet list in `tasks/proto/<slug>/ROADMAP.md`.
 5. Render a §25 INFO alert with the file path:
@@ -273,11 +279,11 @@ File a stub task into the prototype's backlog.
 ### Step 4 — spec <id>
 
 Expand a stub into a full spec, using the **same rigor as
-`/task` Operation 3** — code reconnaissance, requirements
-drilling, per-file rationale. Scope is
-`tasks/proto/<slug>/backlog/`, not main.
+`/task`'s Expand operation** (`.claude/skills/task/expanding-a-task.md`)
+— code reconnaissance, requirements drilling, per-file rationale.
+Scope is `tasks/proto/<slug>/backlog/`, not main.
 
-The flow mirrors `/task` Operation 3 exactly:
+The flow mirrors that operation:
 
 1. Read the stub.
 2. **Code reconnaissance.** Read CLAUDE.md (project facts),
@@ -290,8 +296,8 @@ The flow mirrors `/task` Operation 3 exactly:
    max, error); what MUST NOT change; specific test scenarios.
 4. **Per-file rationale.** For each file in "Files expected to
    change," state WHAT changes and WHY.
-5. Render the full spec via `task-template.md` shape, written
-   to `tasks/proto/<slug>/backlog/TASK-NNN-<slug>.md`,
+5. Render the full spec in the `.claude/task-templates/<type>.md`
+   shape, written to `tasks/proto/<slug>/backlog/TASK-NNN-<slug>.md`,
    overwriting the stub.
 6. Show the rendered spec; wait for sign-off; write.
 
@@ -304,7 +310,8 @@ which the user creates when starting the work.
 
 Lifecycle the task through the prototype's pipeline.
 
-`active`:
+`active` (a plain move — the prototype tree is not a ledger
+`.claude/bin/task` manages, see the contract above):
 ```sh
 git mv tasks/proto/<slug>/backlog/TASK-NNN-*.md tasks/proto/<slug>/active/
 ```
@@ -389,15 +396,23 @@ action — confirm scope before moving anything.
    existing phase or a new phase to be created. Ask the user to
    confirm: *"Graduating N tasks → Phase X. Confirm?"*
 3. **On confirm:**
-   - For each task, `git mv tasks/proto/<slug>/<state>/<file>
-     tasks/<state>/<file>`. Renumber IDs if they collide with
-     existing main task IDs (warn).
-   - Append task lines to main `tasks/ROADMAP.md` under the
-     chosen phase.
-   - Update each spec file's "Phase" header to match the new
-     phase name.
+   - For each task, file it into main — never `git mv` it:
+     `.claude/bin/task new --type <type> --phase <P> "<title>"`
+     (plus `--target` if the project declares targets). The
+     allocator gives it a fresh main id (so ids cannot collide),
+     and `--phase` writes its phase and its `tasks/ROADMAP.md`
+     line — a new phase is declared first (`/task phase`). Carry
+     the proto file's body (below its H1) across into the new
+     file, then run `.claude/bin/check-tasks --fix`.
+   - Bring each to the stage it had with the verbs —
+     `.claude/bin/task start` for work the prototype started or
+     finished, `block` (with its `## Blocker`) for blocked work —
+     never further than `active/`: nothing is done in main until
+     the graduation PR merges and its done-gate passes.
+   - Delete the graduated proto file, so it is not graduated twice.
    - Add an entry to main `tasks/AUDIT.md`:
      `🏗 Graduated prototype <slug> — <N> tasks → Phase <name>.`
+     with each old proto id → new main id.
 4. **Don't merge.** Per Rule 2, the user owns any merge-to-main
    step. Graduation produces uncommitted file moves; the user
    commits and routes through the normal review/merge flow.
@@ -497,8 +512,8 @@ Destructive. Confirm twice.
 ## What you must NOT do
 
 - **Don't touch main `tasks/`.** Not its ROADMAP, not its PHASES,
-  not its AUDIT, not its backlog/active/blocked/completed. The prototype is
-  invisible to main task planning by design.
+  not its AUDIT, not its stage directories or `history.tsv`. The
+  prototype is invisible to main task planning by design.
 - **Don't merge to `main`** during a prototype session. Per
   git-flow Rule 2, every merge to main is user-confirmed.
   Graduation only stages tasks; it doesn't merge.
@@ -528,9 +543,9 @@ Destructive. Confirm twice.
   uncommitted work.
 - **User on a non-proto branch when running task ops** (`add`,
   `spec`, `move`): require they checkout a proto branch first.
-- **Graduation with ID collision**: rename the graduating task
-  to next-available main ID, warn the user, document the
-  rename in AUDIT.
+- **Graduation renumbers every task**: `.claude/bin/task new`
+  allocates the main id, so a collision cannot happen — document
+  each old → new id in AUDIT.
 - **`git mv` on untracked file**: use plain `mv` instead. Same
   effect, no git error.
 - **No `proto/*` branches exist** when running `list`: render a

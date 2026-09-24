@@ -3,9 +3,10 @@
 No code change without a task. Enforced at **change time**, by denying
 the tool call — not at commit time, after the fact.
 
-`task-rules.md` already said every code and running-config change is
-task-linked and that a stub is acceptable but nothing is not. This is the
-mechanism that makes that true instead of aspirational.
+`task-rules.md` §12 and `code-task-rules.md` §6 already say every code
+and running-config change is task-linked and that a stub is acceptable but
+nothing is not. This is the mechanism that makes that true instead of
+aspirational.
 
 ## The one thing to internalize
 
@@ -20,8 +21,9 @@ When the user asks for a code change, your first action is:
 .claude/skills/task-enforce/task-enforce.sh new "what this work actually is"
 ```
 
-That files a stub, links it, and every edit afterwards proceeds silently.
-One command, no interruption, and the trail says something true.
+That files a stub into `tasks/triage/` through `.claude/bin/task new`
+(`x-origin: manual`), links it, and every edit afterwards proceeds
+silently. One command, no interruption, and the trail says something true.
 
 If the work belongs to a task that already exists:
 
@@ -37,16 +39,19 @@ The `PreToolUse` guard on `Edit|Write|MultiEdit|NotebookEdit`:
 2. `docs` and `meta` are **recorded and allowed**. Touching a README is
    not a task.
 3. `code` with a linked task → recorded and allowed.
-4. `code` with nothing linked → **denied once**. A stub is filed, linked,
-   and the retry proceeds.
+4. `code` with nothing linked → **denied once**. A stub is filed into
+   `tasks/triage/` (`x-origin: auto-fallback`), linked, and the retry
+   proceeds.
 
 **One deny per task, not per edit.** The cost of the audit trail is a
 single interrupted tool call.
 
 When you get that deny: retry the edit, then **open the stub and fix the
-title and the "What this is" section**. It was named after a filename.
-`task-enforce.sh status` counts stubs still carrying
-`origin: auto-fallback` so they do not quietly accumulate.
+title (its H1) and the `## Intent` section**. It was named after a
+filename. Run `.claude/bin/check-tasks --fix` after the edit (I-34), then
+graduate it into a phase (`/task graduate`) or close it.
+`task-enforce.sh status` counts stubs in `triage/` still carrying
+`x-origin: auto-fallback` so they do not quietly accumulate.
 
 ## Classification
 
@@ -144,7 +149,9 @@ a run that creates the file sets a default at all.
 
 ## See also
 
-- `task-rules.md` — the task contract this enforces.
-- `task-template-stub.md` — the shape of a filed stub.
+- `task-rules.md` §12 + `code-task-rules.md` §6 — the task contract this
+  enforces.
+- `.claude/task-templates/change.md` — the body a filed stub starts from
+  (`bin/task new --type change`).
 - `.claude/skills/task-enforce/` — the engine.
 - `/task-guard` — the commit-time reconciler underneath this.

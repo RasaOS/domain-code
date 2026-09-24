@@ -1,12 +1,14 @@
 # iOS task rules (platform extensions)
 
-Platform-specific extensions to `task-rules.md` for iOS projects. Read
-this when working on iOS code or any task that touches the iOS app.
+Platform-specific extensions to `code-task-rules.md` (which extends
+`task-rules.md`) for iOS projects. Read this when working on iOS
+code or any task that touches the iOS app.
 
-The universal `task-rules.md` is generic and references "the project's
-verification command," "the project's protected files," etc. This file
-fills those in for any iOS project. **Project-specific values (scheme
-name, bundle ID, baseline warning count, etc.) still live in `CLAUDE.md`.**
+`code-task-rules.md` and `.claude/done-gate.md` are generic and reference
+"the project's build command," "the project's test command," the gated
+files (`code-task-rules.md` §9), etc. This file fills those in for any
+iOS project. **Project-specific values (scheme name, bundle ID,
+baseline warning count, etc.) still live in `CLAUDE.md`.**
 
 ## Verification gate
 

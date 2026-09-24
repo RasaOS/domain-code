@@ -2,7 +2,8 @@
 
 Build it right the first time. These rules apply to **every** task,
 every project, every language. They're the discipline layer that sits
-between `task-rules.md` (process) and the platform extensions (stack).
+between `task-rules.md` + `code-task-rules.md` (process) and the platform
+extensions (stack).
 **Read this file before you write code.**
 
 > **Why this file exists.** Cutting corners early compounds. A

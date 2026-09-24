@@ -157,7 +157,7 @@ decision:
 
 ### Step 4 — Append AUDIT.md entry
 
-Per task-rules.md "Audit log":
+Per `code-task-rules.md` §12 (the audit log):
 
 ```markdown
 - 📜 **ADR NNNN — <short title>** filed. <one-line summary>.

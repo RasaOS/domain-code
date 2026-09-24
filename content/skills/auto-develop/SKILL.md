@@ -28,10 +28,17 @@ excuse for sloppy work — `craft-rules.md` applies in full.
   task named by the user. If no spec exists, stop: this skill
   implements specs, it doesn't invent them. Point the user at
   `/auto-task`.
-- **Stay inside the spec's file list.** The spec's "Files expected
-  to change" is the boundary. If implementation genuinely needs a
-  file outside it, that's a flagged assumption — note it, proceed
-  only if it's non-gated and safe.
+- **Work begins with `start`.** A spec still in `tasks/backlog/`
+  moves first, before any code:
+  `.claude/bin/task start <id> --by "$(bash .claude/skills/task-enforce/task-enforce.sh who)"` —
+  the actor is `$RASA_ACTOR` folded to a lowercase handle, and
+  `active/` is a branch being worked (`code-task-rules.md` §2).
+  Never move the file by hand. `/auto-develop` never runs
+  `submit` or `pass`: those follow the PR and the merge.
+- **Stay inside the spec's file list.** The spec's "Artifacts
+  expected to change" is the boundary. If implementation
+  genuinely needs a file outside it, that's a flagged assumption
+  — note it, proceed only if it's non-gated and safe.
 - **Bound by `craft-rules.md` and `task-rules.md`.** Follow the
   repo's existing patterns, naming, type discipline, error
   handling. Autonomy decides *what* to write; the craft rules
@@ -46,6 +53,8 @@ excuse for sloppy work — `craft-rules.md` applies in full.
   so "the build is green" is a claim it has no way to check.
 - **Hard gates stop the run.** A locked `/contract`, a gated file,
   anything destructive — stop and surface per `autonomy-rules.md`.
+  A gated file is a blocker (`task-rules.md` §13): write the
+  task's `## Blocker`, then `.claude/bin/task block <id>`.
   Never auto-commit, never merge, never deploy.
 
 ## Process

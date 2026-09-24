@@ -99,10 +99,11 @@ turns ran out. Step 6 is where that honesty is enforced.
 ## Process
 
 1. **Read the contracts.** `autonomy-rules.md`, `craft-rules.md`,
-   `git-flow-rules.md`, `task-rules.md`, `test-rules.md`, and
-   `CLAUDE.md` (project facts, the verification command, gated
-   files). And the skills the mission will follow — `instruct`,
-   `auto-task`, `auto-phase`, `auto-develop`, `auto-test`.
+   `git-flow-rules.md`, `task-rules.md`, `code-task-rules.md`,
+   `test-rules.md`, and `CLAUDE.md` (project facts, the
+   verification command, gated files). And the skills the
+   mission will follow — `instruct`, `auto-task`, `auto-phase`,
+   `auto-develop`, `auto-test`.
 
 2. **Parse the goal and set up the branch.** From the user's
    prompt, extract the **mission envelope**: the **goal
@@ -148,18 +149,28 @@ turns ran out. Step 6 is where that honesty is enforced.
      tasks; spec them following `auto-phase/SKILL.md`.
    Render the task list and the order they will run.
 
-5. **Execute each task, in order.** For each: move its spec to
-   `tasks/active/`, implement it following `auto-develop/SKILL.md`,
+5. **Execute each task, in order.** For each: start it with
+   `.claude/bin/task start <id> --by "$(bash .claude/skills/task-enforce/task-enforce.sh who)"` —
+   the actor is `$RASA_ACTOR` folded to a lowercase handle; a
+   task left in `tasks/triage/` needs `task graduate <id>
+   --phase <P>` first, and if no declared phase fits, that is a
+   hard gate. Implement it following `auto-develop/SKILL.md`,
    write and run its tests following `auto-test/SKILL.md` (real,
    reusable test stamps per `test-rules.md`). When the acceptance
-   criteria hold and the tests pass, commit the task to the branch
-   — spec, code, and tests together, `TASK-NNN — <title>` — and
-   move the spec to `tasks/completed/` **and flip the frontmatter to
-   match** — `task-enforce.sh stamp <id> status completed`, then
-   `stamp <id> outcome shipped` once the work is actually in. A directory
-   move alone leaves `status:` lying, and this is the one path designed to
-   run unattended, so nobody is watching to catch it. A hard gate hit here
-   stops the mission.
+   criteria hold and the tests pass, tick them in the task file,
+   run `.claude/bin/check-tasks --fix` (I-34), and commit the
+   task to the branch — spec, code, and tests together,
+   `TASK-NNN — <title>`. That commit is the mission's
+   checkpoint: a resumed run treats a task whose commit is on the
+   branch as done. The file stays in `tasks/active/` — a draft PR
+   is still `active/`, and `completed/` needs the done-gate
+   passed **and the PR merged** (`code-task-rules.md` §2), which
+   is the user's call, so `/mission` never runs `submit` or
+   `pass`. Never move a task by hand. A task the mission drops is
+   `.claude/bin/task close <id> --resolution <R> --by <actor>`,
+   with the why in `## Notes`. A hard gate hit here stops the
+   mission; a gated file or an external dependency goes into the
+   task's `## Blocker`, then `.claude/bin/task block <id>`.
 
 6. **Two-pass verification re-walk.** With every task done,
    re-walk the *goal*, not the task list. Re-read the changed
@@ -189,8 +200,12 @@ turns ran out. Step 6 is where that honesty is enforced.
    project's GitHub tooling) — title from the goal, body carrying
    the mission summary: the goal and its recipe, the tasks done
    with their commits, the verification result (both passes), how
-   to validate and the command to run the tests, and every
-   flagged assumption. If the goal asked for a handoff doc,
+   to validate and the command to run the tests, every flagged
+   assumption, and what finishes each task once the user marks
+   the PR ready and merges it — `.claude/bin/task submit <id>`,
+   then `.claude/bin/task pass <id> --by <who> --note "gate: …"`,
+   then `task-enforce.sh stamp <id> x-outcome shipped` once the
+   work is actually in. If the goal asked for a handoff doc,
    produce it following `handoff/SKILL.md`. Never merge to
    `main`.
 
@@ -275,10 +290,12 @@ clause and a turn bound, or the loop will spin against a gate.
 
 ## What "done" looks like for a /mission session
 
-A `feat/` branch with one commit per completed task, every task's
-spec in `tasks/completed/`, **two consecutive clean verification
-re-walks**, and a **draft PR** open for the user to validate —
-plus one autonomy report listing every decision the mission made.
+A `feat/` branch with one commit per finished task, every task's
+spec in `tasks/active/` with its criteria ticked (waiting on the
+merge for `submit` and `pass`), **two consecutive clean
+verification re-walks**, and a **draft PR** open for the user to
+validate — plus one autonomy report listing every decision the
+mission made.
 If the goal asked for a preview deploy, the PR body carries the
 preview URL (or the deploy error). The goal's definition of done
 is *verified twice over*, not assumed. The user reviews the PR,

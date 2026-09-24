@@ -82,7 +82,7 @@ passed.
 - The body carries what is broken in production, the smallest fix, the
   rollback plan and the post-fix verification — the `defect` template has
   the sections.
-- It ships with a 🔥 `tasks/AUDIT.md` entry and a postmortem (§11).
+- It ships with a 🔥 `tasks/AUDIT.md` entry and a postmortem (§13).
 - If the urgency passes before it ships, drop the priority to `high`. The id
   never changes.
 
@@ -199,9 +199,15 @@ this domain its table carries four more rows:
 ```
 
 Test results are real numbers from the run, never "tests pass". A chore PR
-uses the same shape; "What changed" may be one line. Post the report in chat
-as well — the reviewer reads the table in five seconds and decides whether to
-dig in.
+uses the same shape; "What changed" may be one line.
+
+**Two moments, one table.** When the PR opens (`submit`), post the table in
+chat as the hand-off — Branch, PR, Tests, Build, what changed, what the
+reviewer should do next — so the reviewer reads it in five seconds and
+decides whether to dig in. The task is in `review/`; nothing is *done* yet,
+so there is no Outcome row. The completion report proper — with its Outcome
+of done / blocked / failed and the done-gate results — goes into the task
+file when the gate is run, before `pass`.
 
 **Iteration versus gate.** While working, run only this task's test in the
 project's focused mode. Before `submit`, run the unfiltered headless command

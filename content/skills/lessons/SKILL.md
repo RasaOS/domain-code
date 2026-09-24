@@ -57,7 +57,8 @@ If the user invoked with a single-line argument
 
 Otherwise (default), enter **full mode**. Collect:
 - **Task title** — ask if not obvious from context. Prefer the
-  in-flight task name from `tasks/active/` if available.
+  in-flight task name from `tasks/active/` or `tasks/review/` if
+  available.
 - **Task slug** — kebab-case derivation of the title.
 - **Date** — today, `YYYY-MM-DD`.
 - **Outcome** — shipped / partial / abandoned. One word.
@@ -100,8 +101,8 @@ Agent({
 > 5. **🔭 Forward warnings** — "if you ever do X again, watch
 >    out for Y." Cite the place we'd want the warning.
 > 6. **🎓 Graduation candidates** — lessons that look broad
->    enough to belong as project rules (CLAUDE.md), kit rules
->    (`task-rules.md`), formal decisions, regrets, or
+>    enough to belong as project rules (CLAUDE.md), Element rules
+>    (`code-task-rules.md`), formal decisions, regrets, or
 >    postmortems. Tag each with the suggested skill route.
 >
 > Output as structured markdown with the headers above.
@@ -298,8 +299,9 @@ See per-task note + INDEX.md shapes in Step 4.
 ## What you must NOT do
 
 - **Don't summarize what happened.** A summary belongs in
-  `tasks/AUDIT.md` (via `/release` or `/task done`). This
-  skill captures *learnings*, which are different.
+  `tasks/AUDIT.md` (via `/release`, or the 📦 entry when a task
+  passes — `code-task-rules.md` §12). This skill captures
+  *learnings*, which are different.
 - **Don't fabricate.** If the sub-agent can't verify an item
   from the conversation context, it doesn't go in the note.
 - **Don't capture secrets.** Credentials, API keys, internal
@@ -345,11 +347,10 @@ project. None of these are mandatory.
 
 ### Pattern A — Pair with task-completion (recommended)
 
-When the user marks a task done (e.g. moves a file from
-`tasks/active/` to `tasks/completed/`, or invokes a future
-`/task done` flow), invoke `/lessons` next. This keeps
-captures tightly bound to task boundaries — the moment most
-worth introspecting.
+When a task passes its done-gate (`.claude/bin/task pass`,
+`tasks/review/` → `tasks/completed/`, usually via `/task`),
+invoke `/lessons` next. This keeps captures tightly bound to
+task boundaries — the moment most worth introspecting.
 
 The user types two commands; the second is `/lessons`.
 

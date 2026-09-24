@@ -14,8 +14,8 @@ is the converter.
 It is a **pre-task**. The deliverable is the *recipe* — the
 instruction set the AI will follow next. This skill never
 executes the steps; it produces the contract that some later
-session executes against. Same idea as `task-template.md`: a
-fixed shape, always filled, tailored for AI guidance.
+session executes against. Same idea as `.claude/task-templates/`:
+a fixed shape, always filled, tailored for AI guidance.
 
 Per CLAUDE.md ethos: calibrated confidence. Every judgment call
 made while decomposing is surfaced as a flagged assumption — the
@@ -331,8 +331,8 @@ Re-run with a correction if any assumption is wrong.*
   `/task`. `/instruct` produces an ephemeral chat recipe, not a
   spec in `tasks/`.
 - **Strategic / phase-level thinking** → use `/plan`.
-- **Expanding a stub into a full spec** → use `/task`
-  Operation 3 — that's a contract with recon, not a step list.
+- **Expanding a stub into a full spec** → use `/task`'s
+  Expand — that's a contract with recon, not a step list.
 - **Actually doing the work** → just do it, or follow a recipe
   `/instruct` already produced. This skill never executes.
 - **Exploring an open-ended problem with no defined endpoint**

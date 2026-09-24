@@ -307,8 +307,8 @@ The per-recipient inbox file at `.claude/inbox/<recipient>.md`:
 
 ## When NOT to use this skill
 
-- **Filing a real task** (with spec, owner, scope) → `/task`.
-  Inbox is for under-the-radar communication.
+- **Filing a real task** (an id, a type, a place in the ledger) →
+  `/task`. Inbox is for under-the-radar communication.
 - **Capturing a project rule** → `/codify`.
 - **Recording a decision** → `/decision`.
 - **End-of-session handoff** → `/handoff` (which writes to

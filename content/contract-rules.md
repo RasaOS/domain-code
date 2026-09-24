@@ -123,7 +123,7 @@ The ledger is itself under `contracts/` and therefore also guarded
   through a direct edit.
 - If the contract is locked, the task is **blocked** until the user
   resolves it (see "The lock"). Treat this like any other hard
-  blocker: document it in the task's blocker notes and stop.
+  blocker: document it in the task's `## Blocker` section and stop.
 - Adding a *new* contract is not blocked — `new` is always allowed.
   Locking applies to *changing an existing* contract.
 

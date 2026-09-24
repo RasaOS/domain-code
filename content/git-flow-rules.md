@@ -5,8 +5,9 @@ and where deploy commands are allowed to run. They protect the
 project from agents (Claude included) silently shipping code, merging
 unreviewed work into `main`, or deploying without authorization.
 **Read this file before any task that touches branches, merges, or
-deploys.** It extends `task-rules.md`; the rules are non-negotiable
-and apply to every Claude session, every project, every release.
+deploys.** It extends `code-task-rules.md` (and through it
+`task-rules.md`); the rules are non-negotiable and apply to every
+Claude session, every project, every release.
 
 ## Git flow discipline (the safety rules)
 
@@ -28,7 +29,7 @@ Naming:
 |---|---|
 | `task/TASK-XXX-short-slug` | Per-task work (the default) |
 | `chore/<slug>` | Non-task work — docs, scaffolding, dep upgrades |
-| `hotfix/HOTFIX-NNN-slug` | Emergency production fixes |
+| `hotfix/TASK-NNN-slug` | Emergency production fixes — a `defect` with `priority: now` (`code-task-rules.md` §4) |
 | `feat/<slug>` | Feature work bigger than one task or spanning tasks |
 | `proto/<slug>` | Prototype work (per `/prototype`) |
 | `integration/<range>` | Multi-task integration branch (per Batch handoff) |
@@ -86,7 +87,9 @@ rule so it is reviewable; the per-skill SKILL.md cites this rule.
 - **`/auto-task` and `/auto-phase` — spec-file fast-path.** May
   auto-merge a PR to `main` *iff* every file in the PR matches
   the spec-file allowlist (`tasks/**/*.md`, `tasks/PHASES.md`,
-  `tasks/ROADMAP.md`, `tasks/RELEASES.md`) and the working tree
+  `tasks/ROADMAP.md`, `tasks/RELEASES.md`, `tasks/history.tsv` —
+  the log `.claude/bin/task` appends to on every filing and move;
+  `tasks/tasks.config.yml` stays excluded) and the working tree
   is otherwise clean. Push to a short-lived `spec/<id>` branch
   with a real PR record, merge via `gh pr merge --squash`. Any
   non-spec dirty file falls back to "leave uncommitted" — same as

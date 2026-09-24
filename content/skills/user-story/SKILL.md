@@ -29,10 +29,11 @@ more. Acceptance criteria are verifiable, not aspirational.
   distinct stories, render the most central one and note the
   others in a "Related stories" tail — don't dump five blocks at
   once.
-- **Spec-task shape.** Use the shape from `task-template.md`'s
-  "User story" + "Scope" + "Acceptance criteria" sections,
-  trimmed. Skip the file-list, execution-order, and test-plan
-  sections — those belong to a filed task, not a story.
+- **Spec-task shape.** Use the shape from
+  `.claude/task-templates/change.md`'s "Intent" + "Scope" +
+  "Acceptance criteria" sections, trimmed. Skip the
+  artifacts-expected, approach, and verification sections — those
+  belong to a filed task, not a story.
 - **Fleshed out, not invented.** Fill the As-a/I-want/So-that
   with what the user described, plus reasonable inferences
   grounded in the project (read `CLAUDE.md` if available). Where
