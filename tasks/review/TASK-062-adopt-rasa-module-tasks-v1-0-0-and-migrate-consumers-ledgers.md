@@ -24,16 +24,21 @@ Out of scope: TASK-041's full `/sync` port (three-way diff, `/promote`); retirin
 
 ## Acceptance criteria
 
-- [ ] `bin/check-manifest` passes, and fails when a vendored file is edited in place.
-- [ ] This repository's `tasks/` validates with `content/bin/check-tasks`: zero errors.
-- [ ] No shipped file writes `status:` / `category:` or moves a task with `git mv`; `bin/lint`, `bin/check-invocations`, `bin/check-bash32` and `bin/test-contract` pass.
-- [ ] `bin/init` into an empty directory installs a ledger that validates with zero errors.
-- [ ] `bin/init` re-run over a copy of a real 0.x consumer ledger migrates it to zero errors, leaving the change uncommitted.
-- [ ] `task-enforce.sh` and `task-guard.sh` file tasks through `.claude/bin/task` and the result validates.
-- [ ] Version 0.53.0 with a BREAKING changelog entry naming the upgrade command.
+- [x] `bin/check-manifest` passes, and fails when a vendored file is edited in place.
+- [x] This repository's `tasks/` validates with `content/bin/check-tasks`: zero errors.
+- [x] No shipped file writes `status:` / `category:` or moves a task with `git mv`; `bin/lint`, `bin/check-invocations`, `bin/check-bash32` and `bin/test-contract` pass.
+- [x] `bin/init` into an empty directory installs a ledger that validates with zero errors.
+- [x] `bin/init` re-run over a copy of a real 0.x consumer ledger migrates it to zero errors, leaving the change uncommitted.
+- [x] `task-enforce.sh` and `task-guard.sh` file tasks through `.claude/bin/task` and the result validates.
+- [x] Version 0.53.0 with a BREAKING changelog entry naming the upgrade command.
 
 ## Expected files
 
 `vendored.json`, `rasa.json`, `bin/{check-manifest,init,migrate-ledger,migrate-tasks}`, `content/{task-rules.md,code-task-rules.md,task-templates/,bin/}`, `content/skills/{task,backlog,roadmap,task-enforce,task-guard,sync,sync-all}/`, every skill / mode / rule that references the task shape, `seed/{done-gate.md.template,tasks/}`, `tasks/`, `CHANGELOG.md`, `README.md`, `VERSION`.
 
 ## Notes
+
+- Verified 2026-09-23 on `5eb47fa`: check-manifest (27 vendored files byte-identical to module-tasks v1.0.0), lint, check-invocations, check-bash32 (bash 3.2 gate), test-contract, and this ledger (62 tasks, 0 errors) all pass; `bin/init` into an empty git repo gives a ledger with 0 errors.
+- `sync.sh plan` + `apply --hold` against fresh clones of five consumers: vsi-web 123 tasks / 1 error, vsi-ios 140 / 1, kernel 256 / 0, rasa-console 350 / 5, rasa-website 0 / 0. Every remaining error is I-24 — a ROADMAP line naming a task file that does not exist — which the module never auto-fixes; each is listed in that project's MIGRATION-REVIEW.md. kernel's plan correctly flagged one real local edit (`.claude/skills/deploy/SKILL.md`), which `--hold` left untouched.
+- Hooks exercised in a scratch install: the PreToolUse deny-once flow, `stamp` (same-day re-stamp stays valid; a raw edit trips I-34 as a control), and two real commits through the pre-commit hook.
+- Follow-ups filed outside this task: upstream the ledger preparation into module-tasks; stop bin/init cloning a `kit/` stash; the two writers of `tasks/CHANGES.md`.
