@@ -203,7 +203,8 @@ turns ran out. Step 6 is where that honesty is enforced.
    to validate and the command to run the tests, every flagged
    assumption, and what finishes each task once the user marks
    the PR ready and merges it — `.claude/bin/task submit <id>`,
-   then `.claude/bin/task pass <id> --by <who> --note "gate: …"`,
+   then `.claude/bin/task pass <id> --by <who> --note "<evidence>"`
+   (recorded as `gate: <evidence>`),
    then `task-enforce.sh stamp <id> x-outcome shipped` once the
    work is actually in. If the goal asked for a handoff doc,
    produce it following `handoff/SKILL.md`. Never merge to

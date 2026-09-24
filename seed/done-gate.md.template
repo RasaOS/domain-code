@@ -22,8 +22,8 @@ A task moves `review/` → `completed/` with `.claude/bin/task pass <id> --by
 1. every acceptance criterion on the task is met and actually verified, and
 2. **every gate below passes.**
 
-If a gate fails, `.claude/bin/task reject <id> --note "gate: <which>"` sends
-it back to `active/`. It does not sit in `review/` waiting to be forgiven,
+If a gate fails, `.claude/bin/task reject <id> --note "<which gate, and why>"`
+sends it back to `active/`. It does not sit in `review/` waiting to be forgiven,
 and no gate is waived to finish faster: no disabled test, no `--no-verify`,
 no "it passes locally".
 
@@ -31,8 +31,9 @@ no "it passes locally".
 
 Into the task's `## Completion report` (task-rules.md §11), before `pass`
 moves it: the real test count and time, the build result, the PR number.
-The `--note` on `pass` names the gate in `tasks/history.tsv`, for example
-`gate: build clean, 214 tests green, PR #88 merged`.
+The `--note` on `pass` names the evidence in `tasks/history.tsv` — pass it
+bare (`--note "build clean, 214 tests green, PR #88 merged"`); the tool
+records it as `gate: …`, and `reject` as `gate not passed: …`.
 
 ---
 

@@ -5,6 +5,8 @@ created: 2026-09-23
 created_by: claude
 updated: 2026-09-23
 phase: P7
+completed_by: claude
+x-outcome: shipped
 ---
 # TASK-062: Adopt rasa.module.tasks v1.0.0 and migrate consumers' ledgers on update
 
@@ -39,6 +41,37 @@ Out of scope: TASK-041's full `/sync` port (three-way diff, `/promote`); retirin
 ## Notes
 
 - Verified 2026-09-23 on `5eb47fa`: check-manifest (27 vendored files byte-identical to module-tasks v1.0.0), lint, check-invocations, check-bash32 (bash 3.2 gate), test-contract, and this ledger (62 tasks, 0 errors) all pass; `bin/init` into an empty git repo gives a ledger with 0 errors.
-- `sync.sh plan` + `apply --hold` against fresh clones of five consumers: vsi-web 123 tasks / 1 error, vsi-ios 140 / 1, kernel 256 / 0, rasa-console 350 / 5, rasa-website 0 / 0. Every remaining error is I-24 — a ROADMAP line naming a task file that does not exist — which the module never auto-fixes; each is listed in that project's MIGRATION-REVIEW.md. kernel's plan correctly flagged one real local edit (`.claude/skills/deploy/SKILL.md`), which `--hold` left untouched.
+- `sync.sh plan` + `apply --hold` against copies of five installed ledgers (up to 350 tasks): all converted; every remaining error is I-24 — a ROADMAP line naming a task file that does not exist — which the module never auto-fixes; each is listed in that ledger's MIGRATION-REVIEW.md. One copy's plan correctly flagged a real local edit, which `--hold` left untouched.
 - Hooks exercised in a scratch install: the PreToolUse deny-once flow, `stamp` (same-day re-stamp stays valid; a raw edit trips I-34 as a control), and two real commits through the pre-commit hook.
 - Follow-ups filed outside this task: upstream the ledger preparation into module-tasks; stop bin/init cloning a `kit/` stash; the two writers of `tasks/CHANGES.md`.
+
+Gate satisfied 2026-09-23 by claude — all eight gates recorded in the completion report; Public remedied in 0.53.1
+
+## Completion report
+
+| | |
+|---|---|
+| **Outcome** | done |
+| **Type** | change |
+| **Branch** | `task/TASK-062-adopt-module-tasks-v1` |
+| **PR** | [#11](https://github.com/RasaOS/domain-code/pull/11), merged as `d2844e5`; tagged `v0.53.0` |
+| **Tests** | CI 8/8 green (manifest + schema, bash 3.2 floor, stock macOS bash, lint); local gates as in Notes |
+| **Build** | n/a — no build step in this repository |
+
+**Done-gate** (per `.claude/done-gate.md`)
+- Manifest: pass · `bin/check-manifest` OK, 27 vendored files byte-identical to module-tasks v1.0.0.
+- Lint: pass · `bin/lint` clean.
+- Scripts: pass · every script parses with its own interpreter (CI "Scripts parse"); `bin/check-bash32` clean.
+- Behaviour: pass · `bin/test-contract` green; `bin/init` smoke-tested into an empty repo and over copies of installed ledgers; hooks exercised in a scratch install.
+- Ledger: pass · `content/bin/check-tasks .` — 0 errors.
+- CI: pass · PR #11, 8/8 checks green.
+- Merged: pass · PR #11 merged to `main` as `d2844e5` with the owner's explicit go-ahead.
+- Public: not yet a gate at merge — added by this close-out because the change failed it: the v0.53.0 notes and this task's notes named private repositories. Remedied by TASK-063 (0.53.1) in every file going forward; history and the v0.53.0 tag keep them.
+
+**What changed** — rasa.module.tasks v1.0.0 vendored and pinned; code-task-rules.md + done-gate seed; bin/init migrates a pre-1.0 ledger; hooks file through bin/task; /sync rebuilt on sync.sh; ~60 shipped files swept; this ledger migrated; 0.53.0.
+
+**What to do next**
+1. Keep existing installations off 0.53.x until a later release opens the upgrade (TASK-063, v0.53.1).
+2. The follow-ups filed outside this task: upstreaming the ledger preparation into module-tasks; `bin/init`'s `kit/` stash; the two writers of `tasks/CHANGES.md`.
+
+**Things I noticed** — tasks/PHASES.md is still seeded beside ROADMAP's phase registry; /contribute still rests on the pre-canon lockfile (TASK-041).

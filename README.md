@@ -18,7 +18,7 @@ the Element primitive) was locked to canon vocabulary in the
 2026-05-22 drift-fix pass. See `~/rAI/rasa-os/DRIFT_REPORT.md` for
 the audit trail.
 
-**Version:** 0.53.0 — see `CHANGELOG.md`.
+**Version:** 0.53.1 — see `CHANGELOG.md`.
 
 ---
 
@@ -53,18 +53,16 @@ ROADMAP is normalized. It runs only when `tasks/` has no uncommitted changes,
 leaves the result uncommitted, and writes `tasks/MIGRATION-REVIEW.md` with
 every judgement it could not make.
 
-A project on 0.52 or older (its `/sync` cannot run — it predates the
-canonical lockfile), from the project root, with `tasks/` committed:
+> **Not yet for existing installations.** Do not upgrade an installed
+> project to 0.53.x. The ledger shape changed, and tools outside this
+> Element that read or write task frontmatter directly (a board, a
+> dispatcher) have not been updated for it. Existing installations stay on
+> the version they have until a later release opens the upgrade; new
+> installations are unaffected. See CHANGELOG v0.53.1.
 
-```sh
-git clone https://github.com/RasaOS/domain-code /tmp/domain-code
-/tmp/domain-code/bin/migrate-ledger .     # optional: preview the ledger migration
-/tmp/domain-code/bin/init .
-.claude/bin/check-tasks                   # then work MIGRATION-REVIEW.md to zero errors
-```
-
-From 0.53.0 on, `/sync` does the same with a plan first and a decision on
-every locally edited file (`/sync-all` for hands-off).
+Once it opens, `/sync` does it with a plan first and a decision on every
+locally edited file (`/sync-all` for hands-off); a project whose `/sync`
+predates the canonical lockfile runs a fresh clone's `bin/init` once.
 
 ---
 
