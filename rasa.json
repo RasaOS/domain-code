@@ -36,7 +36,7 @@
     "elements": [
       {
         "name": "rasa.module.tasks",
-        "version": ">=0.1.0"
+        "version": ">=1.0.0"
       },
       {
         "name": "rasa.module.releases",
@@ -112,7 +112,25 @@
         "from": "content/task-rules.md",
         "to": ".claude/task-rules.md",
         "policy": "file-replace",
-        "note": "Universal execution rules. Project-specific commands come from CLAUDE.md."
+        "note": "The task lifecycle spine, vendored byte-identical from rasa.module.tasks v1.0.0 (see vendored.json; bin/check-manifest fails on any edit). Seven stage directories are the state - triage, backlog, active, review, blocked, completed, closed - and there is no status: field. Domain-neutral by design: everything engineering-specific lives in .claude/code-task-rules.md and .claude/done-gate.md."
+      },
+      {
+        "from": "content/code-task-rules.md",
+        "to": ".claude/code-task-rules.md",
+        "policy": "file-replace",
+        "note": "The engineering extension to the vendored task spine (task-rules.md section 16's <domain>-task-rules.md seam): one task per PR, branch and PR conventions, what review/ means here (a PR is open), the change ledger, schema discipline, gated files, hotfixes as priority: now, postmortems, the parade run. Adds to task-rules.md; never overrides it."
+      },
+      {
+        "from": "content/task-templates/",
+        "to": ".claude/task-templates/",
+        "policy": "directory-mirror",
+        "note": "One body template per task type (change / defect / upkeep / inquiry / record), written by .claude/bin/task new. Vendored byte-identical from rasa.module.tasks v1.0.0. Replaces the four task-template*.md files, which encoded the retired stub / spec / bug / hotfix categories."
+      },
+      {
+        "from": "content/bin/",
+        "to": ".claude/bin/",
+        "policy": "directory-mirror",
+        "note": "The two task programs, vendored byte-identical from rasa.module.tasks v1.0.0: bin/task (the twelve lifecycle verbs - each one atomic write of frontmatter, tasks/history.tsv line and file move) and bin/check-tasks (the validator for every invariant the spine states). Pure standard library. Every skill and hook in this Element that files or moves a task calls these; none writes task frontmatter by hand."
       },
       {
         "from": "content/craft-rules.md",
@@ -191,11 +209,6 @@
         "to": ".claude/web-conventions.md",
         "policy": "file-replace",
         "note": "Web platform conventions reference. Default stack is JSX + JSDoc + Vite + React 18 + Tailwind + Firebase + Playwright. Includes architecture (separation of concerns), routing (React Router from day one), Firebase patterns, hosting cache headers, common gotchas. Added in v0.10.0."
-      },
-      {
-        "from": "content/task-template.md",
-        "to": ".claude/task-template.md",
-        "policy": "file-replace"
       },
       {
         "from": "content/migration-rules.md",
@@ -292,30 +305,6 @@
         "to": ".claude/dashboard/",
         "policy": "opt-in",
         "note": "Opt-in status dashboard (self-contained Python + HTML, stdlib only). Registered so rasa.json is a complete inventory of content/, but intentionally NOT auto-installed: bin/init skips opt-in entries, and /sync skips any non-mirror/replace policy. Add it per project via the /dashboard skill or `cp -r content/dashboard .claude/`. See content/dashboard/README.md."
-      },
-      {
-        "from": "content/intake-template.md",
-        "to": ".claude/intake-template.md",
-        "policy": "file-replace",
-        "note": "Task-intake template. Source for triage skills."
-      },
-      {
-        "from": "content/task-template-bug.md",
-        "to": ".claude/task-template-bug.md",
-        "policy": "file-replace",
-        "note": "Bug-shape task template."
-      },
-      {
-        "from": "content/task-template-hotfix.md",
-        "to": ".claude/task-template-hotfix.md",
-        "policy": "file-replace",
-        "note": "Hotfix-shape task template."
-      },
-      {
-        "from": "content/task-template-stub.md",
-        "to": ".claude/task-template-stub.md",
-        "policy": "file-replace",
-        "note": "Stub-shape task template — minimal seed entries."
       }
     ]
   },
@@ -333,9 +322,82 @@
         "policy": "skip-if-exists"
       },
       {
-        "from": "seed/ROADMAP.md.template",
+        "from": "seed/done-gate.md.template",
+        "to": ".claude/done-gate.md",
+        "policy": "skip-if-exists",
+        "note": "What 'done' means in an engineering project - the gate bin/task pass enforces on the review/ -> completed/ move: build clean, the headless verification suite green, the run check, a paired test, the PR merged. rasa.module.tasks delegates exactly this one concern to its parent domain; this is rasa.domain.code's answer. Project-owned: edit the commands to match CLAUDE.md."
+      },
+      {
+        "from": "seed/tasks/ROADMAP.md.template",
         "to": "tasks/ROADMAP.md",
-        "policy": "skip-if-exists"
+        "policy": "skip-if-exists",
+        "note": "The phase registry, vendored from rasa.module.tasks v1.0.0. Every phase is a `## Phase <id> - <name>` heading and every phased task is listed under exactly one; bin/check-tasks proves the frontmatter and this file agree. Replaces the old template, whose placeholder task lines were dangling references (I-24) on the first validator run."
+      },
+      {
+        "from": "seed/tasks/README.md.template",
+        "to": "tasks/README.md",
+        "policy": "skip-if-exists",
+        "note": "Human orientation to tasks/: the seven directories, intake vs triage, the required keys, the two commands. Vendored from rasa.module.tasks v1.0.0."
+      },
+      {
+        "from": "seed/tasks/intake.md.template",
+        "to": "tasks/intake.md",
+        "policy": "skip-if-exists",
+        "note": "Pre-triage capture: dated prose, no ids. Vendored from rasa.module.tasks v1.0.0; replaces the retired .claude/intake-template.md."
+      },
+      {
+        "from": "seed/tasks/tasks.config.yml.template",
+        "to": "tasks/tasks.config.yml",
+        "policy": "init-only-with-sha",
+        "note": "The ledger's declarations (targets, actors, id series) and its schema marker. Vendored from rasa.module.tasks v1.0.0. bin/init holds this back while a pre-1.0 ledger is unmigrated: the marker is what tells bin/migrate-tasks a ledger is already converted, so seeding it first would hide the old ledger from the migration."
+      },
+      {
+        "from": "seed/tasks/history.tsv.template",
+        "to": "tasks/history.tsv",
+        "policy": "skip-if-exists",
+        "note": "The append-only transition log, header row only; written by .claude/bin/task, never by hand. Vendored from rasa.module.tasks v1.0.0. Held back with tasks.config.yml while a pre-1.0 ledger is unmigrated."
+      },
+      {
+        "from": "seed/tasks/triage/.keep",
+        "to": "tasks/triage/.keep",
+        "policy": "skip-if-exists",
+        "note": "Stage directory scaffold (vendored). triage/: filed, has an id, nothing promised - no phase allowed."
+      },
+      {
+        "from": "seed/tasks/backlog/.keep",
+        "to": "tasks/backlog/.keep",
+        "policy": "skip-if-exists",
+        "note": "Stage directory scaffold (vendored). backlog/: phased, not started."
+      },
+      {
+        "from": "seed/tasks/active/.keep",
+        "to": "tasks/active/.keep",
+        "policy": "skip-if-exists",
+        "note": "Stage directory scaffold (vendored). active/: in flight."
+      },
+      {
+        "from": "seed/tasks/review/.keep",
+        "to": "tasks/review/.keep",
+        "policy": "skip-if-exists",
+        "note": "Stage directory scaffold (vendored). review/: finished; the done-gate has not passed - in this domain, a PR is open."
+      },
+      {
+        "from": "seed/tasks/blocked/.keep",
+        "to": "tasks/blocked/.keep",
+        "policy": "skip-if-exists",
+        "note": "Stage directory scaffold (vendored). blocked/: cannot proceed; needs a ## Blocker section."
+      },
+      {
+        "from": "seed/tasks/completed/.keep",
+        "to": "tasks/completed/.keep",
+        "policy": "skip-if-exists",
+        "note": "Stage directory scaffold (vendored). completed/: terminal - the done-gate passed and the PR merged."
+      },
+      {
+        "from": "seed/tasks/closed/.keep",
+        "to": "tasks/closed/.keep",
+        "policy": "skip-if-exists",
+        "note": "Stage directory scaffold (vendored). closed/: terminal - ended without being done, with a resolution."
       },
       {
         "from": "seed/AUDIT.md.template",

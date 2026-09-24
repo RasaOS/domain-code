@@ -7,11 +7,19 @@
 # never registered in rasa.json, it silently never ships — and nothing
 # else catches it. This script does.
 #
-# Two checks, both directions:
+# Three checks:
 #   1. Coverage — every git-tracked file under content/ and seed/ is
 #      registered in rasa.json (matched by an exact element.files /
 #      seed.files 'from', or by an ancestor directory entry).
 #   2. Dangling — every rasa.json 'from' points at a path that exists.
+#   3. Vendored — every file vendored.json records is byte-identical to the
+#      upstream release it was copied from (sha256). A vendored file edited
+#      in place is a fork nobody decided on; this is what catches it.
+#
+# Usage: bin/check-manifest [--vendor-from <upstream-checkout>]
+#   --vendor-from also compares each vendored file against that checkout's
+#   working tree and lists what moved — the re-vendoring aid. It never
+#   changes the verdict of check 3, which is always against the recorded pin.
 #
 # Run it before tagging an Element release, or wire it into CI.
 #
@@ -21,6 +29,18 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MANIFEST="$REPO_ROOT/rasa.json"
+VENDORED="$REPO_ROOT/vendored.json"
+
+VENDOR_FROM=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --vendor-from)
+      [ $# -ge 2 ] || { echo "ERROR: --vendor-from needs a path" >&2; exit 2; }
+      VENDOR_FROM="$2"; shift 2 ;;
+    -h|--help) sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "ERROR: unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "ERROR: bin/check-manifest requires python3." >&2
@@ -35,10 +55,10 @@ if ! git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   exit 1
 fi
 
-python3 - "$REPO_ROOT" "$MANIFEST" <<'PYEOF'
-import json, os, subprocess, sys
+python3 - "$REPO_ROOT" "$MANIFEST" "$VENDORED" "$VENDOR_FROM" <<'PYEOF'
+import hashlib, json, os, subprocess, sys
 
-repo, manifest_path = sys.argv[1], sys.argv[2]
+repo, manifest_path, vendored_path, vendor_from = sys.argv[1:5]
 
 try:
     manifest = json.load(open(manifest_path))
@@ -70,7 +90,44 @@ def covered(path):
 
 uncovered = sorted(p for p in tracked if not covered(p))
 dangling = sorted(f for f in froms if not os.path.exists(os.path.join(repo, f)))
-problems = len(uncovered) + len(dangling)
+
+
+def sha256_of(path):
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
+
+
+# Check 3 — vendored files match their recorded upstream release.
+vendor_bad = []
+vendor_moved = []
+vendor_count = 0
+if os.path.exists(vendored_path):
+    try:
+        vendored = json.load(open(vendored_path))
+    except (OSError, ValueError) as exc:
+        vendored = {}
+        vendor_bad.append("vendored.json does not parse: %s" % exc)
+    for name, pin in sorted(vendored.items()):
+        if name.startswith("_") or not isinstance(pin, dict):
+            continue
+        for entry in pin.get("files", []):
+            vendor_count += 1
+            local = os.path.join(repo, entry["path"])
+            if not os.path.isfile(local):
+                vendor_bad.append("%s (%s): missing" % (entry["path"], name))
+                continue
+            if sha256_of(local) != entry["sha256"]:
+                vendor_bad.append("%s (%s %s): edited in place — differs from the "
+                                  "recorded upstream bytes" % (entry["path"], name,
+                                                               pin.get("version", "?")))
+            if vendor_from:
+                upstream = os.path.join(vendor_from, entry["upstream"])
+                if not os.path.isfile(upstream):
+                    vendor_moved.append("%s: gone upstream (%s)" % (entry["path"], entry["upstream"]))
+                elif sha256_of(upstream) != entry["sha256"]:
+                    vendor_moved.append("%s: changed upstream (%s)" % (entry["path"], entry["upstream"]))
+
+problems = len(uncovered) + len(dangling) + len(vendor_bad)
 
 print("bin/check-manifest — rasa.json coverage")
 print()
@@ -87,9 +144,27 @@ if dangling:
         print("  x  %s" % f)
     print()
 
+if vendor_bad:
+    print("VENDORED — a file copied from another Element no longer matches its pin:")
+    for v in vendor_bad:
+        print("  x  %s" % v)
+    print("     Fix it upstream, release it, and re-vendor; never edit the copy.")
+    print()
+
+if vendor_from:
+    print("UPSTREAM (%s) vs the recorded pin — informational, not a failure:" % vendor_from)
+    if vendor_moved:
+        for v in vendor_moved:
+            print("  ~  %s" % v)
+    else:
+        print("  =  every vendored file is identical upstream")
+    print()
+
 if problems == 0:
     print("OK   rasa.json is a complete inventory.")
     print("     %d tracked files under content/ + seed/, all registered." % len(tracked))
+    if vendor_count:
+        print("     %d vendored files, all byte-identical to their pinned upstream." % vendor_count)
     sys.exit(0)
 
 print("FAIL %d problem(s) — rasa.json and the Element tree have drifted." % problems)

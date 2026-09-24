@@ -1,658 +1,491 @@
 ---
 name: task
-description: Task management assistant. Creates new task specs, places them in the right phase, moves tasks between phases, expands stubs to full specs, helps detail task requirements. Action-oriented but conversational where placement or scope is unclear. Triggered when the user wants to file or organize tasks — e.g. "/task", "add a task for X", "move TASK-Y to Phase Z", "flesh out TASK-N", "what phase should this go in".
+description: Drive the task lifecycle — file a task, triage it, give it a phase, start it, park it, block or unblock it, submit it for the done-gate, pass or reject it, close it without doing it, reopen it, declare a dependency between two tasks, expand an outline into a full task, declare a new phase, capture or promote an intake note, and check or repair the ledger. Writes; every state change runs through .claude/bin/task so the file, the log and the move happen as one act. Use for "/task", "file a task for X", "I am starting TASK-N", "I am blocked on TASK-N", "TASK-N is finished", "close TASK-N as superseded", "TASK-N depends on TASK-M", "which phase does this go in", "flesh out TASK-N". Not for rendering the ledger — use /backlog or /roadmap for that.
 ---
 
-# /task — Task assistant
+# /task — the lifecycle driver
 
-You manage the per-task lifecycle: filing, placing, prioritizing,
-detailing. Companion to `/plan` (which thinks at the phase
-level). When in doubt about scope or phase fit, ask — don't
-guess.
+You decide **what** should happen and then let `.claude/bin/task` make
+it happen. The command is what moves a task: in one atomic act it
+writes the conditional frontmatter, appends a line to
+`tasks/history.tsv`, and moves the file. Splitting those three apart is
+the exact failure this module exists to prevent, so **never do any of
+them by hand.**
 
-## Behavior contract
+What is genuinely yours is the conversation: working out what the user
+actually wants filed, which type it is, which phase it belongs to, what
+"done" will mean for it, and turning a one-line idea into something a
+worker can act on.
 
-- **Read state first.** Always read `tasks/ROADMAP.md` and the
-  current contents of `tasks/{backlog,active,blocked,completed}/` before
-  acting. The phase listings in ROADMAP are the registry.
-- **Respect the priority rule.** Default to a stub. Full specs
-  only when the user explicitly uses these exact signals:
-  "emergency", "urgent", "do it now", "needs to ship before X",
-  "this is next up", or "top priority". Any other phrasing →
-  stub + ask "backlog only, or should this jump the queue?"
-  See `task-rules.md` "Adding tasks to the backlog (priority rule)".
-- **Respect the phase structure rule.** Every new task belongs to a
-  phase — or, when there's no phase for it yet, to the triage holding
-  area (`tasks/triage/`). If the user doesn't name a phase, ASK; if
-  there's still no home, file to triage rather than forcing one.
-  Never invent a phase.
-- **Edits are conservative by default.** Don't commit unless
-  explicitly approved. Drafts go to `tasks/backlog/` and
-  ROADMAP.md updates go through your normal git flow only when
-  the user says so.
-- **Auto-assign IDs.** Next available `TASK-NNN` (zero-padded
-  three digits, with letter suffix for subdivisions like
-  `018a`). Skip numbers already used.
-- **Reconnaissance before spec.** When expanding a stub to a
-  full spec (Operation 3), do **real reconnaissance** — read
-  the repo (internal), and fetch the current official docs for
-  the frameworks involved (external). Render a recon report
-  before drafting. The spec is the **contract between the task
-  builder (planner) and the task developer (implementer)** —
-  thorough recon upfront pays back many times during
-  implementation.
-- **Don't draft from memory.** LLM training cutoffs lag the
-  actual state of frameworks, APIs, and platform conventions.
-  For any framework-specific work, **WebFetch the current
-  official documentation** before drafting. The agent that's
-  going to implement this task will have the same stale-
-  knowledge problem; the spec's job is to feed it accurate,
-  current context.
+The authoritative lifecycle is `.claude/task-rules.md`. This skill
+executes that contract; it does not redefine it. If they disagree,
+`task-rules.md` wins.
 
-## Two-tier Operation 3
+## Two adapters, never inlined
 
-**Simple tasks** (text updates, clear bug fixes, small tweaks):
-Steps 3.1 → 3.2 → 3.3 → 3.4 → 3.5 → 3.6 → 3.7 → 3.8.
-Skip 3.4.5.
+This skill says nothing about what this project produces or how "done"
+is checked. Where it needs a project-specific fact it reads:
 
-**Complex tasks** (schema changes, design work, perf-sensitive,
-cross-team, breaking changes, feature flags):
-Steps 3.1 → 3.2 → 3.3 → 3.4 → **3.4.5 (approach validation)** →
-3.5 → 3.6 → 3.7 → 3.8. Include relevant optional sections in 3.7.
+- **`.claude/done-gate.md`** — what "done" requires here. Read it
+  before any `pass`. Never invent a check that is not in it.
+- **`.claude/<domain>-task-rules.md`** — the optional extension with
+  this project's extra discipline. Read it when the work at hand
+  touches its concerns.
 
-## Common operations
+## The command surface
 
-### Operation 1 — File a new task
+Run everything from the project root.
 
-1. **Confirm intent.** "Filing a new task for: <reflect-back>.
-   Right?"
-2. **Determine category.** Per `task-rules.md` "Categories":
-   - `stub` — light tracking, no full spec ever.
-   - `spec` — feature work (default).
-   - `bug` — fix broken behavior.
-   - `hotfix` — urgent prod fix (separate `HOTFIX-NNN` id space,
-     skips phase, files straight to `active/`; see Operation 8).
-   If the user didn't say, ask: "Spec, Bug, Stub, or Hotfix?"
-3. **Determine phase — or triage.** Hotfix skips this step
-   (no phase). For other categories: if the user didn't say,
-   ask: "Which phase does this belong to?" Show the current
-   phase names from PHASES.md. The user picks one, proposes a
-   new phase (a `/plan` job — hand off), or has no home for it
-   yet — in which case file it to triage (Operation 6) and stop.
-4. **Determine content level.** Per the priority signal rule in
-   `task-rules.md`:
-   - **Stub category** → always stub-content.
-   - **Spec/Bug category** → stub-content by default;
-     full-content only on urgency signal ("emergency", "urgent",
-     "do it now", "needs to ship before X", "this is next up",
-     "top priority"). If unsure, ask: "backlog only, or should
-     this jump the queue?"
-   - **Hotfix category** → always full-content.
-5. **Assign ID.** Next available `TASK-NNN` (or `HOTFIX-NNN` for
-   the Hotfix category).
-6. **Draft the file** using the template for the category:
-   - `stub` → `task-template-stub.md` at
-     `tasks/backlog/<PHASE>/TASK-NNN-slug.md`.
-   - `spec` → `task-template.md` at
-     `tasks/backlog/TASK-NNN-slug.md` (stub-content or
-     full-content per Step 4).
-   - `bug` → `task-template-bug.md` at
-     `tasks/backlog/TASK-NNN-slug.md`.
-   - `hotfix` → `task-template-hotfix.md` at
-     `tasks/active/HOTFIX-NNN-slug.md` (straight to active per
-     Operation 8).
-7. **Update `ROADMAP.md`.** Add the task line under its phase's
-   bulleted list. Order: by ID; insert in the right place.
-   Hotfix tasks are not in `ROADMAP.md` — skip this step for them.
-8. **Don't commit yet.** Show the user what was drafted and
-   ask if they want to commit.
-
-### Operation 2 — Move a task between phases
-
-1. **Confirm.** "Move TASK-NNN from Phase X to Phase Y?"
-2. **Edit `ROADMAP.md` only.** Remove the task line from the
-   old phase's list, add it to the new phase's list (in ID
-   order).
-3. **Don't move the spec file.** It stays in
-   `backlog/active/blocked/completed` based on state, not phase.
-4. **Don't commit yet.**
-
-### Operation 3 — Expand a stub to a full spec
-
-A spec is the contract between the **task builder** (the
-planner doing this step) and the **task developer** (the agent
-or human who'll implement). The developer's job gets
-dramatically easier when the spec is thorough — they shouldn't
-have to re-derive things the builder already figured out.
-
-This operation takes its time. Code reading, external doc
-research, requirements drilling — the up-front cost pays back
-several times over during implementation.
-
-#### Step 3.1 — Read the stub
-
-Quote the title + user story back. Confirm you're working on
-the intended task.
-
-#### Step 3.1.5 — Task splitting assessment
-
-Should this be one task or multiple?
-
-Ask:
-- Are there 2+ independent unit-of-work items here?
-- Could they ship separately?
-- Do they touch completely different files/domains?
-
-If yes to any: propose splitting. Example: "Update header"
-+ "add header tests" = one task. But "update header" + "refactor
-sidebar" = two tasks.
-
-If split: create separate stubs for each, update ROADMAP, show
-the user the split.
-
-#### Step 3.2a — Initial reconnaissance (context + conventions)
-
-Read in parallel:
-
-- **`CLAUDE.md`** — project facts, platform, gated files,
-  verification commands, project-specific rules.
-- **The stub itself** — every line, not just the title.
-- **Files referenced in the stub** — if the stub mentions
-  patterns or modules, read them.
-- **Likely-touched files** — derive from topic + repo
-  structure.
-
-**Extract and document:**
-- Tech stack, frameworks, languages
-- Code style conventions (naming, casing, patterns)
-- Project-specific rules or constraints
-- What gated files or schema ownership applies
-
-Goal: understand what we're dealing with and what the codebase expects.
-
-#### Step 3.2b — Pattern matching reconnaissance (find what to follow)
-
-Based on 3.2a findings, search for related code in the codebase
-that does similar things. Don't reinvent the wheel.
-
-**Search for:**
-- Existing code doing similar work (CRUD, API endpoints, UI
-  patterns, migrations, etc.). If the task is "add work order
-  CRUD," find existing CRUD slices (parts, inspections) and
-  read them. If "add webhook endpoint," find existing endpoints.
-- **Code conventions in action** — naming, file layout, error
-  handling, logging, testing patterns. The new code should
-  match how this repo already does this kind of thing.
-- **Reusable functionality** — shared utilities, helpers,
-  libraries already in the codebase.
-
-Goal: ground every design decision in what already exists.
-Build like the team already builds.
-
-#### Step 3.2.7 — Precedent & related work check
-
-Don't repeat mistakes. Search the project for what's been done
-before on the same or similar files/functionality.
-
-**Search:**
-- **`tasks/completed/`** — completed similar work. Read the spec and
-  any blocker notes. What went well? What was hard?
-- **`tasks/archive/`** — deferred or abandoned work on this
-  area. Why was it paused? What did we learn?
-- **`tasks/active/`** — what's in progress touching the same
-  files? Coordinate to avoid conflicts.
-- **`docs/decisions/`** — architectural decisions affecting
-  this area. What was decided and why?
-- **`docs/postmortems/`** — incidents in this domain. What
-  broke? What guard rails are missing?
-
-**Document findings:**
-- Prior work on same files/feature
-- Gotchas discovered in past attempts
-- Lessons learned (what to do / what not to do)
-- Active work that might conflict
-- Architectural constraints from decisions
-
-These findings go into the recon report (Step 3.4).
-
-#### Step 3.3 — External reconnaissance (read current docs)
-
-LLM training cutoffs lag the real state of frameworks and APIs.
-**Before spec'ing anything that touches a framework, fetch
-current official documentation** for the patterns the task
-will use. Don't draft framework code from memory — your
-memory is stale.
-
-**Detect the stack first:**
-
-- Platform — `CLAUDE.md` `## Platform` declaration is
-  authoritative.
-- Frameworks — repo manifests:
-  - **iOS / macOS** — `*.xcodeproj`, `Package.swift`,
-    `Podfile`. Frameworks: SwiftUI, UIKit, AVKit, AVFoundation,
-    SwiftData, Core Data, Combine, etc.
-  - **Android** — `build.gradle*`, `libs.versions.toml`.
-    Frameworks: Jetpack Compose, Room, CameraX, Hilt,
-    Coroutines, etc.
-  - **Web** — `package.json` deps. Frameworks: React, Vue,
-    Next.js, Svelte, etc.
-  - **Python** — `pyproject.toml` / `requirements.txt`.
-    Frameworks: Flask, FastAPI, Django, SQLAlchemy, Pydantic,
-    etc.
-  - **Go** — `go.mod`. Frameworks: gin, echo, fiber, gorm,
-    sqlc, etc.
-- The task's domain — UI? API endpoint? data layer? auth?
-  concurrency? Each constrains what to fetch.
-
-**Fetch the docs that matter for THIS task. Examples:**
-
-- **Apple** — `https://developer.apple.com/documentation/<framework>/<symbol>`
-  e.g. `developer.apple.com/documentation/avkit/avplayerviewcontroller`,
-  `developer.apple.com/documentation/swiftui/list`.
-- **Android** — `https://developer.android.com/jetpack/compose/<topic>`
-  or `https://developer.android.com/reference/<package>/<class>`.
-- **React** — `https://react.dev/reference/...` /
-  `https://react.dev/learn/<topic>`.
-- **Vue** — `https://vuejs.org/guide/<topic>` /
-  `https://vuejs.org/api/<symbol>`.
-- **Next.js** — `https://nextjs.org/docs/<area>/<topic>`.
-- **Flask** — `https://flask.palletsprojects.com/en/stable/<topic>/`.
-- **FastAPI** — `https://fastapi.tiangolo.com/<topic>/`.
-- **Django** — `https://docs.djangoproject.com/en/stable/<topic>/`.
-
-Use the `WebFetch` tool. **Targeted, not exhaustive** — fetch
-the pages for the specific symbols / topics this task will
-touch, not the whole framework. Example: if the task is about
-playing video, fetch the platform's specific player class +
-its essential modifiers. Don't fetch the entire media-framework
-tree. (Per-platform examples live in the relevant
-`<platform>-task-rules.md`.)
-
-**Look for** in each fetched page:
-- Current API surface (signatures, modifiers, params)
-- Best-practice patterns the docs explicitly recommend
-- Deprecated APIs to avoid
-- Gotchas / requirements (entitlements, capabilities, version
-  constraints)
-- Code examples that show the canonical usage
-
-#### Step 3.4 — Synthesize a recon report
-
-Before drafting the spec, render a tight summary. The user
-sees this before any spec is drafted, so they can correct your
-read of the territory:
-
-```markdown
-## Reconnaissance — TASK-NNN
-
-### Codebase conventions (from 3.2a)
-- **Tech stack:** <languages, frameworks, key tools>
-- **Code style:** <naming (camelCase/snake_case), file layout,
-  module structure, error handling, logging patterns>
-- **Project rules:** <gated files, schema ownership, specific
-  constraints>
-
-### Related code & patterns (from 3.2b)
-- <existing pattern at file:line — what we'll match>
-- <existing utility at file:line — what we'll reuse>
-- <similar feature at file:line — code style to follow>
-
-### Precedent & lessons learned (from 3.2.7)
-- **Prior work:** TASK-NNN tackled this in [date]. Result: <outcome>.
-  Key lesson: <what we learned>
-- **Gotchas to avoid:** <specific pitfall from past attempts>
-- **Active conflicts:** TASK-MMM is in progress touching the same
-  file at [location]. Coordinate with [person] on sequencing.
-- **Architectural constraint:** Decision from YYYY-MM-DD: <what
-  was decided and why>
-
-### What exists in this repo
-- <pattern 1, file:line — one-line description>
-- <pattern 2, file:line — one-line description>
-
-### Integration points
-- <where this hooks in, with file:line>
-- <data flowing in/out, with file:line>
-
-### Current docs say (external)
-- **<framework> · <symbol>** — <key fact>. Source:
-  <full URL>
-- **<framework> · <pattern>** — <recommended approach>.
-  Source: <URL>
-- **Gotcha** — <thing the docs warn about>. Source: <URL>
-
-### Open questions for the user
-- <thing the docs don't decide>
-- <thing the existing code doesn't decide>
-- <constraint the task may violate that needs ruling>
+```
+.claude/bin/task <verb> [args]
+.claude/bin/check-tasks [--fix]
 ```
 
-Show this report. The conventions and related patterns sections
-answer: "what does this codebase already do like this, and how
-should we match it?" Wait for the user's read. They may correct,
-add, or clear items before you draft.
+Twelve verbs. Every directory is reachable and escapable:
 
-#### Step 3.4.5 — Approach validation (complex tasks only)
+| from | verb | to |
+|---|---|---|
+| — | `new --type T [--phase P] [--target …] [--priority …] [--series S] [--by WHO] "<title>"` | `triage/`, or `backlog/` with `--phase`, or `active/` with `--priority now` |
+| `triage/` | `graduate --phase P [--target …]` | `backlog/` |
+| `backlog/` | `demote` | `triage/` |
+| `backlog/` | `start` | `active/` |
+| `active/` | `park` | `backlog/` |
+| `active/` `backlog/` `review/` | `block` | `blocked/` |
+| `blocked/` | `unblock` | wherever it came from |
+| `active/` | `submit` | `review/` |
+| `review/` | `reject --note "<failing gate>"` | `active/` |
+| `review/` | `pass --by WHO [--note "…"]` | `completed/` |
+| any | `close --resolution R --by WHO [--ref ID]` | `closed/` |
+| `completed/` `closed/` | `reopen --note "<reason>"` | `active/`, `backlog/` or `triage/` |
 
-For tasks touching schema, design, perf, dependencies, or
-backwards-compat, propose the approach before drafting:
+**If the installed command rejects a flag or exits non-zero, stop.**
+Show the user the exact command and the exact error. Do not work around
+it by editing files — a hand-edit is precisely the drift this module
+exists to make impossible.
 
-```markdown
-## Proposed approach — TASK-NNN
+**One field has no flag on any verb: `needs:`.** Every other
+person-written value — `--type`, `--phase`, `--target`, `--priority` —
+is reachable above. A dependency is not, so it is the one thing this
+skill writes into frontmatter by hand, followed by `check-tasks --fix`.
+See **Declare a dependency** below; do not improvise it, and do not
+pass `--needs`, which the command rejects.
 
-<One-line what we're building>
+## Routing
 
-**Why this approach:**
-- Matches existing pattern at [file:line]
-- Doesn't conflict with [constraint]
-- Leaves room for [future work]
+| the user says | do this |
+|---|---|
+| `/task` bare, or an ambiguous ask | say what you can do in one line, ask which |
+| "file / add / track / we need to …" | **File a task** |
+| "which phase does this belong in?" | **Placement** |
+| `/task phase`, "we need a new phase for …" | **Declare a phase** |
+| `/task check` | **Check** |
+| `/task repair` | **Check**, then **Repair** |
+| "graduate TASK-N", "give TASK-N a phase" | `graduate` |
+| "TASK-N is not ready / put it back in triage" | `demote` |
+| "I am starting TASK-N", "picking up TASK-N" | `start` |
+| "putting TASK-N down", "not working on it now" | `park` |
+| "blocked on TASK-N", "TASK-N is stuck on …" | **Block** |
+| "TASK-N is unblocked / that cleared" | `unblock` |
+| "TASK-N cannot start until TASK-M is done", "TASK-N depends on TASK-M", "do TASK-M first" | **Declare a dependency** |
+| "TASK-N no longer waits on TASK-M", "that dependency is not real" | **Declare a dependency** (the removal half) |
+| "what is waiting on what?", "what does TASK-N depend on?" | read it: `.claude/bin/task show TASK-N` prints `needs:`; `/backlog` marks every waiting task |
+| "TASK-N is finished / ready for the gate" | **Finish** (`submit`) |
+| "the gate failed", "send TASK-N back" | `reject` |
+| "TASK-N passed / it is done" | **Finish** (`pass`) |
+| "we are not doing TASK-N", "superseded by", "duplicate of", "obsolete" | **Close** |
+| "reopen TASK-N", "TASK-N came back" | `reopen` |
+| "flesh out TASK-N", "expand TASK-N", "write the full task" | **Expand** |
+| "note this down", "do not lose this thought" | **Intake capture** |
+| "promote that intake note" | **Intake promote** |
+| "drop that intake note" | **Intake drop** |
+| "is the ledger OK?", an anomalies line from a view | **Check**, then **Repair** |
 
-**Contextual checks** (mark yes/no/skip as applicable):
-- [ ] Schema change / migration needed?
-- [ ] Perf implications / pagination / indexing?
-- [ ] Breaking change / backwards-compat issue?
-- [ ] Needs design review?
-- [ ] Blocks or blocked by other tasks?
-- [ ] Touches gated files (requires approval)?
-- [ ] Needs feature flag / gradual rollout?
+## Who is acting
 
-**Risks:** [if any]
+Every verb that records a person needs one. Resolve in this order and
+do not skip ahead:
 
-Sound right?
+1. an explicit `--by` the user gave you,
+2. `$RASA_TASK_WHO`,
+3. the first line of `tasks/.who`,
+4. ask the user — and offer to write the answer to `tasks/.who` so
+   they are asked once, not every time.
+
+Never substitute `unknown` to avoid asking. On a project with a
+`migrated_on` date, `unknown` on a new task is a hard validator error,
+by design: the attribution debt is allowed to shrink and not to grow.
+
+## The five things you must never do by hand
+
+1. **Never move a task file.** `mv` writes the directory without
+   writing the log. Use the verb.
+2. **Never write `id`, `created`, `created_by`, `updated`,
+   `completed_by`, `resolution` or `resolution_ref`.** The command owns
+   them.
+3. **Never write a `status:` key.** State is the directory in v1.0.0.
+   The key is a hard validator error.
+4. **Never invent a frontmatter key.** Unknown bare keys are a hard
+   error. A project-specific fact goes under an `x-` prefix, which is
+   preserved and never interpreted.
+5. **Never edit a task file without bumping its date.** The digest
+   ledger catches an edited file whose `updated` did not move, and
+   reports it as an error. After any edit you made yourself — body or
+   `needs:` — run `.claude/bin/check-tasks --fix`, which sets `updated`
+   to today and accepts the new content. Tell the user you did.
+
+You **may** freely write the body: the H1, `## Acceptance criteria`,
+`## Blocker`, `## Notes`. That is what the templates at
+`.claude/task-templates/` are for, and it is where all the real
+authoring happens.
+
+You **may** also write one frontmatter key by hand — `needs:`, and
+only `needs:`, because it is the one person-written field with no flag
+on any verb. **Declare a dependency** below is the whole procedure.
+Nothing else in the frontmatter is yours: rules 1–4 stand unchanged.
+
+---
+
+## File a task
+
+1. **Reflect it back in one line.** *"Filing: <restatement>. Right?"*
+2. **Pick the type.** Ask if it is not obvious — one question, five
+   options:
+   - `change` — something becomes different than it was
+   - `defect` — something is wrong and must be put right
+   - `upkeep` — maintenance that keeps things working as they are
+   - `inquiry` — find something out; the deliverable is an answer
+   - `record` — capture, document, or file something
+
+   There is no type for urgency. Urgency is `--priority now`, which
+   composes with any type.
+3. **Phase, or triage.** If the user names a phase, use `--phase`. If
+   they do not, show the declared phase ids and names from
+   `tasks/ROADMAP.md` and ask. If nothing fits, file to `triage/` —
+   that is exactly what it is for. Never guess a phase, and never
+   invent one silently; declaring a phase is its own operation below.
+4. **Target, if this project declares one.** Read
+   `tasks/tasks.config.yml`. If `targets:` is non-empty, a task outside
+   `triage/` must carry `--target`, and the value must be one of the
+   declared ones. If `targets:` is empty or absent, `--target` is
+   forbidden — do not pass it.
+5. **Priority.** Default is `normal`; pass nothing. `--priority now`
+   files straight to `active/` and means work starts now — confirm that
+   is what they mean before using it.
+6. **Run it.**
+   ```
+   .claude/bin/task new --type change --phase 2 --by jmr "Amend the retention schedule"
+   ```
+7. **Write the body.** Open the file the command reports and fill it
+   from `.claude/task-templates/<type>.md`. A task filed to `triage/`
+   or `backlog/` is an **outline** by default — title, one line of what
+   it is, one line of why. Do not write a full task unless the user
+   asked for one; **Expand** is the operation for that, later, when it
+   is about to be worked.
+8. **Dependencies, only if the user stated one.** If they said this
+   cannot start until another task finishes, and named it, add
+   `needs:` now — see **Declare a dependency**. If they did not say so,
+   do not infer one: a dependency nobody asked for is a queue nobody
+   agreed to, and the expansion step exists to surface real ones later.
+9. **Show what landed** — the path, the id, the phase, and any
+   `needs:` — and stop.
+
+## Triage pass
+
+Walk `tasks/triage/` with the user, oldest first. For each: graduate
+it, close it, or leave it. A triage list nobody walks is the same as no
+list.
+
+- **Graduate** — it has a home:
+  `.claude/bin/task graduate TASK-N --phase 3 --target filings`
+- **Close** — it will not be done:
+  `.claude/bin/task close TASK-N --resolution obsolete --by jmr`
+- **Leave** — say why, in one line, in the task's `## Notes`, then run
+  `check-tasks --fix` so its date is honest.
+
+## Move it
+
+Thin by design. Confirm the task and the intent, run the verb, report
+the new directory.
+
+- `start` / `park` — picking work up and putting it down.
+- `block` — **write the `## Blocker` section first**, in the body, in
+  the user's own words: what is blocking, and what would unblock it. A
+  task in `blocked/` with an empty blocker is a validator error, and an
+  unexplained blocker is a task nobody can clear. Then
+  `.claude/bin/task block TASK-N`.
+- `unblock` — the command returns the task to whichever state it came
+  from, read from the log. Do not name a destination.
+
+## Declare a dependency (`needs:`)
+
+`needs:` is the only dependency field (`.claude/task-rules.md` §8): the
+ids that must finish before this one can. Like `type`, `phase`,
+`target` and `priority` it is **written by a person** — but unlike all
+four of those it has **no flag on any verb**, and the command says so:
+
+```
+$ .claude/bin/task new --type change --needs TASK-LIT-038 "File the exhibit"
+task: error: unrecognized arguments: --needs
 ```
 
-Wait for approval. If user says "try a different approach," iterate
-3.2-3.4 before proceeding. For simple tasks (text updates, bug fixes
-with clear scope), skip this step.
+So the sanctioned path is two steps, and the second is not optional.
 
-#### Step 3.5 — Requirements drilling
+1. **Write the key into the frontmatter by hand.** One line, a flow
+   list, no indentation — the grammar in `.claude/task-rules.md` §3
+   accepts nothing else. Put it where the contract's own example puts
+   it, after `priority:` if there is one:
 
-With the recon report on the table, sharpen the questions:
+   ```yaml
+   needs: [TASK-LIT-038]
+   ```
 
-- **Concrete observable behavior.** Not "feature works." A
-  specific claim a test or a pair of human eyes can verify.
-- **Edge cases.** Empty state. Max state. Error state.
-  Concurrency edge cases. Network failure cases. The specific
-  ones for THIS feature, named explicitly.
-- **Constraints.** What MUST NOT change? Schema-owned by
-  another team? UI conventions to respect? Performance budget?
-  Memory constraints? Backwards compat?
-- **Test contract.** Specific test scenarios — not "E2E test"
-  but "test case A: user X does Y, asserts Z" with concrete
-  inputs and expected outputs.
-- **Acceptance bar.** A short bullet list, each item
-  independently verifiable.
+   More than one: `needs: [TASK-LIT-038, TASK-LIT-041]`.
 
-Push back on vague answers. *"Make it nice"* isn't a
-constraint; *"matches existing inspection list visual density
-(one row per item, no avatars, ≤44pt row height)"* is.
+2. **Run `.claude/bin/check-tasks --fix`.** Until you do, the digest
+   ledger reports the edit as a hard error:
 
-#### Step 3.6 — Per-file rationale
+   ```
+   I-34  the file changed but 'updated' still reads 2026-09-14 [--fix]
+        → --fix sets 'updated' to today and accepts the new content
+   ```
 
-For each file in "Files expected to change":
+   `--fix` prints exactly what it did, under `APPLIED`:
+   `accepted the new content as current in the digest ledger`, plus
+   `set 'updated: <today>'` when the date had actually fallen behind —
+   edit and fix on the same day and you will see only the first. Show
+   the user whichever lines appear. Never leave the error standing for
+   someone else to find.
 
-- **WHAT** specifically changes (added function, modified
-  handler, new component, schema migration, etc.).
-- **WHY** (which acceptance criterion does this file deliver?
-  which integration point does it satisfy?).
-- **Anything gated or schema-owned** (per `task-rules.md` and
-  CLAUDE.md). Flag for the user — these are blockers if
-  approval isn't pre-cleared.
+**This is not repairing around the tooling.** There is no verb here to
+route around. `needs:` is person-written, the same way
+`## Acceptance criteria` is person-written, and step 2 is what keeps
+the date honest in place of the stamp a verb would have made. What
+stays forbidden is unchanged: the directory, the log, and the seven
+command-owned keys.
 
-The file list should be exhaustive. The implementing developer
-must not need to touch a file outside this list without
-updating the task first (per `task-rules.md` "Scope
-discipline").
+### What the validator will hold you to
 
-#### Step 3.7 — Draft the full spec
+All of it fires on the next `check-tasks`, so get it right while you
+are looking at the file:
 
-Use `task-template.md`'s shape. The spec should be
-**self-sufficient** — a developer reading only the spec, with
-no chat context, should be able to implement.
+| what you wrote | what happens |
+|---|---|
+| an id that is not in this ledger | **I-26** error — `'needs: TASK-LIT-999' names a task that is not in this ledger` |
+| this task's own id | **I-26** error — `a task cannot need itself` |
+| the same id twice | **I-26** error — `'TASK-LIT-038' is listed twice in 'needs'` |
+| anything but a one-line flow list of ids | **I-26** error — `'needs' must be a flow list of task ids` |
+| a loop of any length | **I-27** error, and it prints the cycle: `TASK-LIT-001 -> TASK-LIT-002 -> TASK-LIT-001` |
+| this task reaches `completed/` with a need that has not | **I-28** warning — `this task is completed but needs TASK-LIT-001, which is still in backlog/` |
 
-**Required sections (every spec):**
-- "References" cites internal patterns and external doc URLs.
-- "Files expected to change" lists every file with WHAT/WHY.
-- "Acceptance criteria" is the sharp bar drilled in 3.5.
-- "Test plan" lists specific scenarios drilled in 3.5.
-- "Open questions / risks" carries forward unresolved items.
+I-26 and I-27 are errors `--fix` cannot touch — only a person knows
+which of the ids was the wrong one. Walk them with the user one at a
+time.
 
-**Optional sections (include only if applicable):**
-- **Decision rationale:** if alternatives exist and recon
-  revealed non-obvious choices.
-- **Risk & dependencies:** if schema-owned, gated files, or
-  blocks/blocked-by other work.
-- **Performance & scale:** if perf implications or scale
-  thresholds matter (pagination, indexing, etc.).
-- **Observability:** if this needs metrics, dashboards, or
-  alerts to verify success.
-- **Deployment strategy:** if rolling out in stages or
-  coordinating with other teams.
-- **Design & accessibility:** if UI/UX or a11y constraints
-  apply.
-- **Backwards compatibility:** if this is a breaking change or
-  requires migration.
+### Two things that are easy to get wrong
 
-#### Step 3.8 — User-context check (judgment calls only the user can make)
+- **`needs:` moves nothing.** It is a declaration, not a transition. A
+  task waiting on another is *not* thereby in `blocked/`, and adding
+  the key will not put it there. The two are complementary and both are
+  fine to use at once: `needs:` names **which task**, the `## Blocker`
+  section and `.claude/bin/task block` say **what is in the way and
+  why**. Use `blocked/` when the user wants the task out of the working
+  view; use `needs:` when they want the order recorded.
+- **To drop a dependency, delete the line** — by hand, then
+  `check-tasks --fix`, exactly as above. Do not leave `needs: []`
+  behind: the validator accepts an empty list without complaint, which
+  is precisely why it is the wrong way to say "none" — it reads as a
+  declaration and checks as nothing. Remove the key.
 
-Before the final sign-off, scan your draft for **judgment calls
-that depend on user knowledge** — things the code doesn't say,
-the docs don't say, and you can't decide on your behalf. Every
-unresolved judgment call here is a question the implementing
-developer would otherwise ask the user later. Capture it now.
+### The gap, stated plainly
 
-Common categories:
+Every other person-written field is reachable through a flag, so the
+file, the log and the date move as one act. `needs:` is not, which is
+why this one field costs a hand-edit and a `--fix`. If the installed
+`.claude/bin/task` has grown a `--needs` flag — check with
+`.claude/bin/task new --help` — **use the flag and ignore the two steps
+above.** It is strictly better: it stamps `updated` itself and leaves
+no window in which the ledger is red.
 
-- **Business / product decisions.** Naming, copy, behavior
-  preferences, prioritization between equally valid options.
-  *"We could call this 'archive' or 'hide' — which fits the
-  product voice?"*
-- **UX / interaction preferences.** Animation, density, error
-  message tone, defaults, keyboard shortcuts.
-  *"Tap-and-hold or long-press to delete? The existing pattern
-  is split."*
-- **Trade-offs between equivalent technical paths.** When two
-  patterns work and recon found both being used.
-  *"This area uses both Combine and async/await. New code
-  should follow which?"*
-- **Real-world edge cases.** Behavior that depends on
-  customer / user behavior the code can't tell you.
-  *"What happens when a user has 10,000 inspections? Is
-  pagination required for the MVP, or acceptable to do later?"*
-- **Constraints from outside the repo.** Customer agreements,
-  deployment timing, integration contracts with other teams.
-  *"Does this need to be feature-flagged because the iOS app
-  needs to land first?"*
+## Finish it
 
-For each unresolved item, ask explicitly. Don't assume.
-Don't decide on the user's behalf. Format:
+This is where the done-gate finally has a position, and it is the one
+place this skill is worth more than the command alone.
 
-```markdown
-## User-context questions before I finalize this spec
+1. **`submit`.** Work is finished but unverified:
+   `.claude/bin/task submit TASK-N`. It lands in `review/`. It is not
+   done yet, and the ledger no longer pretends otherwise.
+2. **Read `.claude/done-gate.md`.** That file, and only that file, says
+   what must hold. If it is missing or still holds its seeded
+   placeholder text, say so plainly and stop — an ungated `pass` is a
+   claim nobody checked.
+3. **Walk the gate with the user, item by item.** Against the task's
+   own `## Acceptance criteria`, not against your impression of the
+   work. Do not mark an item satisfied on the user's say-so without
+   asking what satisfied it.
+4. **Then one of two things:**
+   - Everything holds →
+     `.claude/bin/task pass TASK-N --by jmr --note "gate: <what was checked, and when>"`
+   - Something does not →
+     `.claude/bin/task reject TASK-N --note "<the item that failed>"`.
+     It returns to `active/`. The note names the failing item so the
+     next attempt knows what to aim at.
 
-1. <specific question with two or three concrete options
-   to choose between>
-2. <specific question, with what's at stake if we pick wrong>
-3. ...
+Never run `pass` in the same breath as `submit`. If the gate is
+genuinely instantaneous, that is still two commands and two log lines,
+and the log is the record.
 
-If everything's settled, just say "good, finalize."
+## Close it
+
+For work that ends **without** being done. Never use `pass` for this —
+that is what makes the completed count a number people can trust.
+
+Pick the resolution with the user:
+
+| resolution | means | needs |
+|---|---|---|
+| `superseded` | another task took this over | `--ref <id>` |
+| `duplicate` | this was already filed | `--ref <id>` |
+| `obsolete` | the reason for it went away | — |
+| `wont-do` | a decision was taken not to | — |
+
+```
+.claude/bin/task close TASK-N --resolution superseded --ref TASK-M --by jmr
 ```
 
-Wait for answers (or "good, finalize"). Bake the answers into
-the spec — typically into Acceptance criteria, Test plan, or
-Open questions sections.
+Then write the *why* into `## Notes` and run `check-tasks --fix`. The
+resolution says what happened; the note says why, and it is the only
+part a future reader cannot reconstruct.
 
-If the spec genuinely has no judgment calls left (everything is
-grounded in code + docs), say so explicitly: *"No user-context
-questions — all decisions grounded in recon. Finalizing."*
-Don't fabricate questions to look thorough.
+## Reopen
 
-#### Step 3.9 — Show, sign-off, write
+`.claude/bin/task reopen TASK-N --note "<why it came back>"`. Ask for
+the destination: `active/` if work restarts now, `backlog/` if it is
+queued, `triage/` if it needs rethinking. The old terminal lines stay
+in the log — a reopened task's history is the point of reopening it.
 
-Render the full spec (now with user-context answers baked in);
-the user confirms or pushes back. On confirmation, write to
-`tasks/backlog/<file>.md` overwriting the stub. Don't commit.
+## Expand an outline into a full task
 
-### Operation 4 — Reprioritize within a phase
+The operation that turns one line into something a worker can act on
+without asking. It involves real reading and takes real time.
 
-The phase's task order in ROADMAP.md implies suggested ship
-order. To reprioritize:
+**Read `expanding-a-task.md`, in this skill's own directory, and follow
+it.** It is a separate file because it is long, because it is only
+needed for this one operation, and because inlining it here made the
+rest of the lifecycle unreadable. Do not attempt the expansion from
+memory of what a good task looks like.
 
-1. **Confirm new order.**
-2. **Edit `ROADMAP.md`.** Reorder bullet lines under the phase.
-3. **Don't commit yet.**
+The short version, so you know what you are agreeing to: read the
+outline, consider whether it is one task or several, gather what this
+project already has that bears on it, read the current authority the
+work turns on rather than recalling it, show the user a context report,
+drill the acceptance criteria until each one is independently
+checkable, map each to `.claude/done-gate.md`, ask the questions only
+the user can answer, then write the file. Eleven steps, and step 11 is
+the one that writes.
 
-### Operation 5 — "What phase should this go in?"
+## Placement — "which phase does this go in?"
 
-The user has an idea but doesn't know where it fits.
+1. Ask one or two questions about the outcome the user wants.
+2. Read the scope paragraphs under the phase headings in
+   `tasks/ROADMAP.md`. Propose one or two that fit, and say why for
+   each.
+3. **Leave the decision with the user.** If nothing fits, the honest
+   answers are triage or a new phase — offer both.
 
-1. **Ask one or two clarifying questions** about the goal.
-2. **Show the candidate phases.** Read PHASES.md scope
-   paragraphs; suggest 1–2 that fit and explain why.
-3. **Defer the decision** to the user. If they're stuck, hand
-   off to `/plan` for a deeper think.
+## Declare a phase (`/task phase`)
 
-### Operation 6 — File a task to the triage holding area
+A project with no phases cannot graduate anything out of triage, so
+this has to be possible. It is the one write this skill makes to
+`tasks/ROADMAP.md` that is not a task line.
 
-For a task the user wants tracked but has no phase for yet. See
-`task-rules.md` "The triage holding area."
+1. **Confirm it is really a new phase** and not an existing one under
+   another name. Two tasks that share a theme are not a phase; a
+   coherent block of work with a boundary is.
+2. **Get an id and a name.** The id is short and stable
+   (`^[A-Za-z0-9][A-Za-z0-9._-]{0,23}$`) — it goes in every task's
+   frontmatter, so renaming it later is expensive. The name is a short
+   noun phrase.
+3. **Get a scope paragraph** from the user: two to four sentences on
+   what is in, what is out, and what finishing it looks like. This is
+   the phase's contract. **Do not write it for them** — a placeholder
+   scope is a validator warning precisely so it does not become
+   permanent.
+4. **Write the heading** into `tasks/ROADMAP.md` at the position the
+   user chooses, in the form the grammar accepts:
 
-1. **Confirm intent.** "Filing to triage — tracked, no phase yet:
-   <reflect-back>. Right?"
-2. **Assign ID.** Next available `TASK-NNN`.
-3. **Draft a stub** at `tasks/triage/TASK-NNN-slug.md` — title +
-   1-line user story + 1-line "why" + `STATUS: STUB`.
-4. **Do NOT touch `ROADMAP.md`.** Triage tasks are not in the
-   roadmap — that is the whole point.
-5. **Don't commit yet.** Show what was drafted.
+   ```markdown
+   ## Phase 4: Handover
 
-### Operation 7 — Graduate a task out of triage
+   Scope paragraph, two to four sentences.
+   ```
 
-1. **Confirm the destination.** "Graduate TASK-NNN into which
-   phase?" (Or: pulled straight into `active/` to work now?)
-2. **Assign a category.** Per `task-rules.md` "Categories":
-   stub / spec / bug / hotfix. Hotfix promotion from triage is
-   unusual but possible — if so, change the ID prefix from
-   `TASK-NNN` to `HOTFIX-NNN`, drop the phase, and route to
-   `active/`.
-3. **`git mv`** the spec file from `tasks/triage/` to
-   `tasks/backlog/` (or `tasks/active/` if it's being worked now).
-4. **Update frontmatter** in the spec file: set `category:` and
-   `phase:` to the assigned values. If the category changes the
-   template shape (e.g. triage stub → bug), restructure the file
-   to match the new template before committing.
-5. **Add the task line to `ROADMAP.md`** under the chosen phase's
-   list, in ID order. Skip for hotfix (no phase).
-6. **Don't commit yet.**
+   Both `## Phase 4: Handover` and `## Phase 4 — Handover` are legal
+   and mean the same thing. Match whichever form the file already uses;
+   do not mix them within one file.
+5. **Phase order is working order.** Ask where it goes; do not append
+   by reflex.
 
-### Operation 8 — File a hotfix
+## Intake
 
-Direct path for urgent production fixes. Hotfix is a procedural
-distinction, not a technical one — confirm urgency before filing.
+`tasks/intake.md` is pre-task prose: no ids, no phases, no ceremony. It
+exists so a thought does not have to become a task to be kept.
 
-1. **Confirm urgency.** "Filing as a hotfix. Production is broken
-   or imminently failing — yes? If not, file as a bug instead."
-2. **Capture the urgency justification.** Per
-   `task-template-hotfix.md`: "Prod is down for all users",
-   "Data is being corrupted on every write", "Regulatory deadline
-   in <N hours>", "<Customer X>'s release ships tomorrow",
-   "Security vulnerability at <severity>". *Not* justifications:
-   "It would be nice to fix soon." Those are bugs.
-3. **Assign ID.** Next available `HOTFIX-NNN` (separate space
-   from `TASK-NNN`).
-4. **Draft the file** using `task-template-hotfix.md` at
-   `tasks/active/HOTFIX-NNN-slug.md` — direct to `active/`, no
-   backlog stop.
-5. **Do NOT touch `ROADMAP.md`.** Hotfixes are not in the
-   roadmap; they're emergency work.
-6. **Surface the branch convention.** Per `git-flow-rules.md`
-   Rule 1: branch name is `hotfix/HOTFIX-NNN-slug`. Implementation
-   starts on that branch.
-7. **Don't commit yet.** Show what was drafted.
+- **Capture** — append under today's `## YYYY-MM-DD` heading (add the
+  heading if it is not there): `- **<short title>** — <a sentence or
+  two of context>`. No id is assigned. This is the cheapest thing in
+  the whole module; keep it cheap.
+- **Promote** — file it as a task to `triage/` (the **File a task**
+  operation), carry the note's context into the body's `## Notes`, then
+  **remove the line from `intake.md`**. A promoted note that stays in
+  intake gets promoted twice.
+- **Drop** — remove the line. If the user wants the reasoning kept,
+  that is not an intake concern: file it and close it with
+  `--resolution wont-do` and the reasoning in `## Notes`, so the
+  decision is in the ledger where someone will find it.
 
-### Operation 9 — File a note to intake
+## Check, then repair (`/task check`, `/task repair`)
 
-For raw thoughts that aren't yet tasks. Lowest-friction capture.
-See `task-rules.md` "The intake layer."
+- **Check** — `.claude/bin/check-tasks`. Show the user its output
+  **verbatim**. Do not summarize a validator; the exact message is the
+  whole value. Exit `0` is clean, `1` is errors, `2` means it could not
+  run at all.
+- **Repair** — `.claude/bin/check-tasks --fix` only ever repairs what
+  can be repaired mechanically: it deletes a `status:` key, reconciles
+  a hand-moved file by appending a log line dated today with actor
+  `unknown`, sets a stale `updated` to today, accepts as current the
+  content of a file that was edited in place (the I-34 digest error —
+  the step **Declare a dependency** ends here), and inserts a missing
+  ROADMAP line. **Say which of those apply before running it**, and get
+  a yes. It never invents a past date and never resolves a dangling
+  ROADMAP line — a line naming a file that does not exist is either a
+  lost task or a stale promise, and only the user knows which.
 
-1. **Confirm intent.** "Adding to `tasks/intake.md`:
-   '<reflect-back>'. Right?"
-2. **Append to `tasks/intake.md`** under today's date header. If
-   no header for today, add one. Format:
-   `- **<short title>** — <one or two sentences of context>`.
-3. **No ID assigned.** Intake entries don't have `TASK-NNN`.
-4. **Don't commit yet.** Show what was added.
+Everything `--fix` cannot touch is yours to walk through with the user
+one at a time. Do not batch them into a single confident sweep.
 
-### Operation 10 — Promote an intake entry to triage
+## What you must not do
 
-1. **Identify the entry.** By short title, date, or by the user
-   selecting a line from `intake.md`.
-2. **Confirm.** "Promoting to triage: '<entry>'. Right?"
-3. **Assign ID.** Next available `TASK-NNN`.
-4. **Draft a stub** at `tasks/triage/TASK-NNN-slug.md` —
-   `task-template-stub.md` shape. The intake entry's context
-   carries into the "Notes" section.
-5. **Remove the entry from `intake.md`.** The intake layer is
-   for *future* tasks; once promoted, the entry has graduated.
-6. **Do NOT touch `ROADMAP.md`.** Triage tasks are not in the
-   roadmap.
-7. **Don't commit yet.**
-
-### Operation 11 — Drop an intake entry
-
-For ideas that have been considered and discarded.
-
-1. **Confirm.** "Dropping intake entry: '<entry>'. Move to
-   `.claude/wont-do.md` for the rationale, or just delete?"
-2. **Remove the entry from `intake.md`.**
-3. **If the user wanted the rationale kept,** append a line to
-   `.claude/wont-do.md` with the entry and the reason it was
-   dropped.
-4. **Don't commit yet.**
-
-## What you must NOT do
-
-- **Don't draft a full spec when the user didn't ask for one.**
-  The user must say "emergency", "urgent", "do it now", "needs
-  to ship before X", "this is next up", or "top priority". If
-  they said something else, file a stub and ask for clarification.
-  Stubs are the default. The priority rule is explicit on this
-  — re-read `task-rules.md` if uncertain.
-- **Don't subdivide a task into siblings unless explicitly
-  asked.** Filing one task means filing one task, not five.
-- **Don't promote a task ahead of others without a priority
-  signal.** Default placement is at the END of the phase's
-  list.
-- **Don't re-shape phase scopes from inside this skill.** That's
-  `/plan`'s job. Ask the user to switch skills.
-- **Don't write code.** Tasks are specs; implementation happens
-  outside skills.
-- **Don't invent new conventions or patterns.** In 3.2b, find
-  existing code doing similar work and match its style. If the
-  codebase uses camelCase for functions, use camelCase. If it
-  has a standard error-handling pattern, follow it. Don't be
-  the first person to do something differently in this codebase.
+- **Do not write a full task when the user asked to file one.** The
+  default is an outline. **Expand** is a separate, later, explicit act.
+- **Do not split one task into several unasked.** Filing one task means
+  filing one task. Propose a split in **Expand**; do not perform one.
+- **Do not hardcode what "done" means.** Every verification routes
+  through `.claude/done-gate.md`. Never write a check or a command into
+  a task's body.
+- **Do not do the work.** A task is a description of work. Executing it
+  is a different session with a different purpose.
+- **Do not invent a convention.** If this project already shapes this
+  kind of work a certain way, match it. Being the first to do it
+  differently is how a ledger stops being readable.
+- **Do not repair around the tooling.** If a verb fails, report the
+  failure. A hand-edit that makes the validator quiet has hidden a real
+  problem, not solved one. The one sanctioned hand-write is `needs:`,
+  which has no verb to fail around — and it ends by running the
+  validator, not by silencing it.
 
 ## When NOT to use this skill
 
-- **Strategic / phase-level thinking** → use `/plan`.
-- **Just viewing tasks** → use `/backlog` or `/roadmap`.
-- **Implementing a task** → just start; this skill doesn't
-  implement.
-- **Reading a specific task** → use the `Read` tool directly on
-  the spec file.
-
-## What "done" looks like for a /task session
-
-The user leaves with one or more of:
-- A new task filed (typically a stub) in `tasks/backlog/`
-  and listed in `ROADMAP.md` under the right phase
-- A task filed to `tasks/triage/` (tracked, no phase yet), or a
-  triage task graduated into a phase
-- An existing task moved to a different phase
-- A stub expanded to a full spec
-- A clear answer to a placement question
-
-The skill's deliverable is the file system state + the
-ROADMAP.md update — not the closing report. Closing reports
-are for shipping, not for filing.
+- Rendering what is in flight → `/backlog`.
+- Rendering progress by phase, or history → `/roadmap`.
+- Reading one task → read the file.
+- Doing the work a task describes → just do it.

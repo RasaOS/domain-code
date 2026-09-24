@@ -1,0 +1,2163 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""task — the atomic lifecycle driver for the portable task ledger.
+
+One command performs every state transition, so that the directory move,
+the frontmatter write, the transition-log line and the digest-ledger
+update happen as a single act. A separate, second edit by hand is what
+made 301 of 536 real files disagree with their own directory; there is no
+second edit here.
+
+Neutral by contract. This driver knows nothing about any trade, craft or
+stack. It needs nothing but Python 3 and a filesystem, and it runs
+unchanged in a project that keeps no history store of any kind. What
+"done" means is read from the project-owned `.claude/done-gate.md` and
+is never interpreted.
+
+Stages (seven directories under `tasks/`):
+
+    intake.md -> triage/ -> backlog/ -> active/ -> review/ -> completed/
+                               |          |          |
+                               +------ blocked/ -----+
+                  (any stage) ---------------------------> closed/
+
+Verbs:
+
+    new        file a task; allocate its id under a lock
+    graduate   triage/   -> backlog/     (assigns a phase)
+    demote     backlog/  -> triage/      (drops the phase)
+    start      backlog/  -> active/
+    park       active/   -> backlog/
+    block      active|backlog|review -> blocked/   (needs a blocker)
+    unblock    blocked/  -> wherever it came from
+    submit     active/   -> review/
+    reject     review/   -> active/      (names the failing gate)
+    pass       review/   -> completed/   (the done-gate moment)
+    close      any       -> closed/      (needs a resolution)
+    reopen     completed|closed -> active|backlog|triage
+
+Read-only verbs: list, show, history, stages, where.
+
+Exit codes: 0 success, 1 refusal (a precondition failed; nothing was
+written), 2 the environment is unusable (no ledger, unparseable config).
+"""
+
+import argparse
+import hashlib
+import os
+import re
+import shutil
+import signal
+import sys
+import tempfile
+import time
+from datetime import date, datetime
+
+# --------------------------------------------------------------------------
+# Constants — the schema, expressed once.
+# --------------------------------------------------------------------------
+
+SCHEMA = "rasa.module.tasks/1.0.0"
+
+STAGES = ("triage", "backlog", "active", "review", "blocked", "completed", "closed")
+TERMINAL_STAGES = ("completed", "closed")
+TYPES = ("change", "defect", "upkeep", "inquiry", "record")
+PRIORITIES = ("now", "high", "normal", "low")
+RESOLUTIONS = ("superseded", "duplicate", "obsolete", "wont-do")
+REF_RESOLUTIONS = ("superseded", "duplicate")
+
+# Canonical frontmatter key order. Any key not listed here must start with
+# `x-`; it is preserved verbatim and never interpreted.
+KEY_ORDER = (
+    "id",
+    "type",
+    "created",
+    "created_by",
+    "updated",
+    "phase",
+    "target",
+    "completed_by",
+    "resolution",
+    "resolution_ref",
+    "priority",
+    "needs",
+)
+KNOWN_KEYS = frozenset(KEY_ORDER)
+
+ID_PATTERN = r"^TASK-(?:([A-Z][A-Z0-9.]{1,5})-)?([0-9]{1,6})([a-z])?$"
+SERIES_PATTERN = r"^[A-Z][A-Z0-9.]{1,5}$"
+ACTOR_PATTERN = r"^[a-z0-9][a-z0-9._-]{0,31}$"
+SLUG_PATTERN = r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
+PHASE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,23}$"
+TARGET_PATTERN = r"^[a-z0-9][a-z0-9._:-]{0,31}$"
+DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
+
+# The frontmatter line grammar. The same grammar parses tasks.config.yml,
+# so this module ships exactly one parser.
+KEY_LINE_PATTERN = r"^(x-[a-z0-9][a-z0-9_-]*|[a-z][a-z0-9_]*):(?: (.*))?$"
+
+# `<id>-<slug>.md`. SERIES is upper-case and NUMBER is digits, so the id
+# never swallows any of the lower-case slug.
+FILENAME_PATTERN = (
+    r"^(TASK-(?:[A-Z][A-Z0-9.]{1,5}-)?[0-9]{1,6}[a-z]?)"
+    r"-([a-z0-9]+(?:-[a-z0-9]+)*)\.md$"
+)
+
+# `## Phase <id> — <name>`
+PHASE_HEADING_PATTERN = r"^##[ \t]+Phase[ \t]+(\S+?):?(?:[ \t]+(.*))?$"
+ANY_HEADING_PATTERN = r"^#{1,6}[ \t]"
+
+HISTORY_HEADER = ("date", "id", "from", "to", "actor", "note")
+HISTORY_NAME = "history.tsv"
+STATE_DIR_NAME = ".state"
+DIGEST_NAME = "digests.tsv"
+LOCK_NAME = "alloc.lock"
+WHO_NAME = ".who"
+CONFIG_NAME = "tasks.config.yml"
+ROADMAP_NAME = "ROADMAP.md"
+GATE_RELPATH = os.path.join(".claude", "done-gate.md")
+
+LOCK_STALE_SECONDS = 300
+LOCK_ATTEMPTS = 300
+LOCK_SLEEP = 0.1
+
+SLUG_MAX = 60
+
+# The legal (from-stage -> to-stage) pairs, keyed by verb.
+TRANSITIONS = {
+    "graduate": ({"triage"}, "backlog"),
+    "demote": ({"backlog"}, "triage"),
+    "start": ({"backlog"}, "active"),
+    "park": ({"active"}, "backlog"),
+    "block": ({"active", "backlog", "review"}, "blocked"),
+    "unblock": ({"blocked"}, None),             # destination read from the log
+    "submit": ({"active"}, "review"),
+    "reject": ({"review"}, "active"),
+    "pass": ({"review"}, "completed"),
+    "close": (set(STAGES), "closed"),
+    "reopen": ({"completed", "closed"}, None),  # destination given by --to
+}
+
+
+class Abort(Exception):
+    """A refusal. Nothing has been written when this is raised."""
+
+    def __init__(self, message, code=1, hint=None):
+        super().__init__(message)
+        self.code = code
+        self.hint = hint
+
+
+# --------------------------------------------------------------------------
+# Small helpers
+# --------------------------------------------------------------------------
+
+
+def today_iso():
+    return date.today().isoformat()
+
+
+def is_real_date(value):
+    if not re.match(DATE_PATTERN, value or ""):
+        return False
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return False
+    return True
+
+
+def sha256_of(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def fsync_dir(path):
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def write_atomic(path, text):
+    """Replace `path` with `text` atomically, durably."""
+    folder = os.path.dirname(os.path.abspath(path)) or "."
+    fd, tmp = tempfile.mkstemp(dir=folder, prefix=".tmp-task-", suffix=".part")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    fsync_dir(folder)
+
+
+def read_text(path):
+    with open(path, "rb") as handle:
+        raw = handle.read()
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise Abort("%s is not valid UTF-8 (%s)" % (path, exc))
+
+
+def slugify(title):
+    lowered = title.strip().lower()
+    lowered = re.sub(r"[^a-z0-9]+", "-", lowered).strip("-")
+    if len(lowered) > SLUG_MAX:
+        lowered = lowered[:SLUG_MAX].rstrip("-")
+    return lowered
+
+
+def tsv_clean(value):
+    """A tab-separated field may hold no tab and no line ending."""
+    text = "" if value is None else str(value)
+    text = text.replace("\t", " ").replace("\r", " ").replace("\n", " ")
+    return " ".join(text.split())
+
+
+def say(message):
+    sys.stdout.write(message + "\n")
+
+
+def warn(message):
+    sys.stderr.write("! " + message + "\n")
+
+
+# --------------------------------------------------------------------------
+# The frontmatter / config grammar — one parser, no third-party library.
+# --------------------------------------------------------------------------
+
+
+def _unquote(raw):
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ("'", '"'):
+        return raw[1:-1]
+    return raw
+
+
+def parse_scalar_or_list(raw, where, lineno, key):
+    value = raw.strip()
+    if value in ("null", "~"):
+        raise Abort(
+            "%s:%d: key `%s` uses the literal `%s`; omit the key instead"
+            % (where, lineno, key, value)
+        )
+    if value[:1] in ("|", ">"):
+        raise Abort(
+            "%s:%d: key `%s` uses a folded or literal block scalar, which the "
+            "grammar forbids" % (where, lineno, key)
+        )
+    if value[:1] in ("&", "*"):
+        raise Abort(
+            "%s:%d: key `%s` uses an anchor or an alias, which the grammar "
+            "forbids" % (where, lineno, key)
+        )
+    if value.startswith("[") and value.endswith("]"):
+        inner = value[1:-1].strip()
+        if inner == "":
+            return []
+        return [_unquote(item.strip()) for item in inner.split(",")]
+    return _unquote(value)
+
+
+def parse_key_lines(lines, where, first_lineno):
+    """Parse a run of grammar lines into an ordered mapping.
+
+    Returns (values, offset_of_key). `lines` is a list of strings with no
+    trailing newline; `first_lineno` is the 1-based file line number of
+    lines[0], used only for messages.
+    """
+    values = {}
+    where_key = {}
+    for offset, line in enumerate(lines):
+        lineno = first_lineno + offset
+        if line.strip() == "":
+            continue
+        if re.match(r"^[ \t]", line):
+            raise Abort(
+                "%s:%d: a line may not begin with whitespace; the grammar has "
+                "no nesting and no multi-line values" % (where, lineno)
+            )
+        if re.match(r"^#", line):
+            continue
+        if line.strip() == "---":
+            raise Abort("%s:%d: an inner `---` is not allowed" % (where, lineno))
+        matched = re.match(KEY_LINE_PATTERN, line)
+        if not matched:
+            raise Abort(
+                "%s:%d: not a legal line. Expected `key: value`, a `#` comment "
+                "or a blank line; got %r" % (where, lineno, line)
+            )
+        key = matched.group(1)
+        raw = matched.group(2)
+        if key in values:
+            raise Abort(
+                "%s:%d: key `%s` appears twice; duplicate keys are an error, "
+                "never last-wins" % (where, lineno, key)
+            )
+        values[key] = parse_scalar_or_list(raw or "", where, lineno, key)
+        where_key[key] = offset
+    return values, where_key
+
+
+def format_value(value):
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(str(item) for item in value) + "]"
+    text = str(value)
+    if text == "" or text in ("null", "~") or text[:1] in ("|", ">", "&", "*", "["):
+        return "'" + text + "'"
+    return text
+
+
+# --------------------------------------------------------------------------
+# A task file, loaded for surgical edit.
+# --------------------------------------------------------------------------
+
+
+class TaskFile(object):
+    def __init__(self, path, stage, front_lines, body_lines):
+        self.path = path
+        self.stage = stage
+        self.front_lines = front_lines
+        self.body_lines = body_lines
+        self._reparse()
+
+    # -- loading -----------------------------------------------------------
+
+    @classmethod
+    def load(cls, path, stage):
+        text = read_text(path)
+        lines = text.split("\n")
+        if not lines or lines[0] != "---":
+            raise Abort("%s: line 1 must be exactly `---`" % path)
+        end = None
+        for index in range(1, len(lines)):
+            if lines[index] == "---":
+                end = index
+                break
+        if end is None:
+            raise Abort("%s: the frontmatter block is never closed by a `---`" % path)
+        front = lines[1:end]
+        body = lines[end + 1:]
+        return cls(path, stage, front, body)
+
+    def _reparse(self):
+        self.values, self.line_of = parse_key_lines(self.front_lines, self.path, 2)
+
+    # -- frontmatter -------------------------------------------------------
+
+    def get(self, key, default=None):
+        return self.values.get(key, default)
+
+    def has(self, key):
+        return key in self.values
+
+    def set(self, key, value):
+        rendered = "%s: %s" % (key, format_value(value))
+        if key in self.line_of:
+            self.front_lines[self.line_of[key]] = rendered
+        else:
+            self.front_lines.insert(self._insert_index(key), rendered)
+        self._reparse()
+
+    def delete(self, key):
+        if key not in self.line_of:
+            return
+        del self.front_lines[self.line_of[key]]
+        self._reparse()
+
+    def _insert_index(self, key):
+        """Where a brand-new key belongs, in canonical order."""
+        if key not in KNOWN_KEYS:
+            return len(self.front_lines)
+        rank = KEY_ORDER.index(key)
+        after = None
+        before = None
+        for offset, line in enumerate(self.front_lines):
+            matched = re.match(KEY_LINE_PATTERN, line)
+            if not matched:
+                continue
+            other = matched.group(1)
+            if other not in KNOWN_KEYS:
+                continue
+            other_rank = KEY_ORDER.index(other)
+            if other_rank < rank:
+                after = offset
+            elif other_rank > rank and before is None:
+                before = offset
+        if after is not None:
+            return after + 1
+        if before is not None:
+            return before
+        return len(self.front_lines)
+
+    # -- body --------------------------------------------------------------
+
+    def title(self):
+        heads = [line for line in self.body_lines if line.startswith("# ")]
+        if len(heads) != 1:
+            raise Abort(
+                "%s: the body must hold exactly one `# ` line; found %d"
+                % (self.path, len(heads))
+            )
+        expected = "# %s: " % self.get("id", "")
+        if not heads[0].startswith(expected) or len(heads[0]) <= len(expected):
+            raise Abort(
+                "%s: the title line must read `# <id>: <title>`; found %r"
+                % (self.path, heads[0])
+            )
+        return heads[0][len(expected):].strip()
+
+    def section_bounds(self, name):
+        """(heading offset, end offset) of `## <name>`, or None."""
+        start = None
+        for index, line in enumerate(self.body_lines):
+            matched = re.match(r"^##[ \t]+(.*\S)[ \t]*$", line)
+            if matched and matched.group(1).strip() == name:
+                start = index
+                break
+        if start is None:
+            return None
+        end = len(self.body_lines)
+        for index in range(start + 1, len(self.body_lines)):
+            if re.match(ANY_HEADING_PATTERN, self.body_lines[index]):
+                end = index
+                break
+        return (start, end)
+
+    def section_has_text(self, name):
+        bounds = self.section_bounds(name)
+        if bounds is None:
+            return False
+        start, end = bounds
+        for line in self.body_lines[start + 1:end]:
+            if line.strip() and not re.match(ANY_HEADING_PATTERN, line):
+                return True
+        return False
+
+    def set_section(self, name, text_lines):
+        bounds = self.section_bounds(name)
+        block = ["## " + name, ""] + list(text_lines) + [""]
+        if bounds is None:
+            while self.body_lines and self.body_lines[-1].strip() == "":
+                self.body_lines.pop()
+            if self.body_lines:
+                self.body_lines.append("")
+            self.body_lines.extend(block)
+        else:
+            start, end = bounds
+            self.body_lines[start:end] = block
+
+    def append_to_section(self, name, text_lines):
+        bounds = self.section_bounds(name)
+        if bounds is None:
+            self.set_section(name, text_lines)
+            return
+        start, end = bounds
+        chunk = self.body_lines[start + 1:end]
+        while chunk and chunk[-1].strip() == "":
+            chunk.pop()
+        chunk.append("")
+        chunk.extend(text_lines)
+        chunk.append("")
+        self.body_lines[start + 1:end] = chunk
+
+    # -- rendering ---------------------------------------------------------
+
+    def render(self):
+        body = list(self.body_lines)
+        while body and body[-1].strip() == "":
+            body.pop()
+        parts = ["---"] + self.front_lines + ["---"] + body
+        return "\n".join(parts) + "\n"
+
+    def save(self):
+        write_atomic(self.path, self.render())
+
+
+# --------------------------------------------------------------------------
+# The ledger context: where everything lives.
+# --------------------------------------------------------------------------
+
+
+class Ledger(object):
+    def __init__(self, root):
+        self.root = root
+        self.tasks_dir = os.path.join(root, "tasks")
+        self.state_dir = os.path.join(self.tasks_dir, STATE_DIR_NAME)
+        self.history_path = os.path.join(self.tasks_dir, HISTORY_NAME)
+        self.digest_path = os.path.join(self.state_dir, DIGEST_NAME)
+        self.lock_path = os.path.join(self.state_dir, LOCK_NAME)
+        self.config_path = os.path.join(self.tasks_dir, CONFIG_NAME)
+        self.roadmap_path = os.path.join(self.tasks_dir, ROADMAP_NAME)
+        self.gate_path = os.path.join(root, GATE_RELPATH)
+        self.config = self._load_config()
+
+    # -- discovery ---------------------------------------------------------
+
+    @staticmethod
+    def looks_like_ledger(candidate):
+        tasks_dir = os.path.join(candidate, "tasks")
+        if not os.path.isdir(tasks_dir):
+            return False
+        if os.path.isfile(os.path.join(tasks_dir, ROADMAP_NAME)):
+            return True
+        if os.path.isfile(os.path.join(tasks_dir, HISTORY_NAME)):
+            return True
+        return any(os.path.isdir(os.path.join(tasks_dir, s)) for s in STAGES)
+
+    @classmethod
+    def discover(cls, explicit=None):
+        if explicit:
+            root = os.path.abspath(explicit)
+            if not cls.looks_like_ledger(root):
+                raise Abort(
+                    "no task ledger under %s (expected a `tasks/` folder)" % root,
+                    code=2,
+                )
+            return cls(root)
+        env_root = os.environ.get("RASA_TASKS_ROOT")
+        if env_root:
+            root = os.path.abspath(env_root)
+            if not cls.looks_like_ledger(root):
+                raise Abort("RASA_TASKS_ROOT=%s holds no task ledger" % root, code=2)
+            return cls(root)
+        here = os.getcwd()
+        while True:
+            if cls.looks_like_ledger(here):
+                return cls(here)
+            parent = os.path.dirname(here)
+            if parent == here:
+                break
+            here = parent
+        # Last resort: this script normally lives at <root>/.claude/bin/task.
+        guess = os.path.abspath(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+        )
+        if cls.looks_like_ledger(guess):
+            return cls(guess)
+        raise Abort(
+            "no task ledger found. Run this from inside a project that has a "
+            "`tasks/` folder, or pass --root <project>.",
+            code=2,
+        )
+
+    # -- config ------------------------------------------------------------
+
+    def _load_config(self):
+        empty = {
+            "schema": None,
+            "migrated_on": None,
+            "actors": [],
+            "targets": [],
+            "series": [],
+            "present": False,
+        }
+        if not os.path.isfile(self.config_path):
+            return empty
+        text = read_text(self.config_path)
+        lines = text.split("\n")
+        try:
+            values, _ = parse_key_lines(lines, self.config_path, 1)
+        except Abort as exc:
+            raise Abort(str(exc), code=2)
+        result = dict(empty)
+        result["present"] = True
+        result["schema"] = values.get("schema")
+        result["migrated_on"] = values.get("migrated_on")
+        for key in ("actors", "targets", "series"):
+            value = values.get(key, [])
+            if value == "" or value is None:
+                value = []
+            if not isinstance(value, list):
+                value = [value]
+            result[key] = [str(item) for item in value if str(item) != ""]
+        migrated = result["migrated_on"]
+        if migrated not in (None, "") and not is_real_date(str(migrated)):
+            raise Abort(
+                "%s: migrated_on must be YYYY-MM-DD; got %r"
+                % (self.config_path, migrated),
+                code=2,
+            )
+        return result
+
+    def targets_declared(self):
+        return list(self.config["targets"])
+
+    # -- the stage tree ----------------------------------------------------
+
+    def stage_dir(self, stage):
+        return os.path.join(self.tasks_dir, stage)
+
+    def ensure_stage(self, stage):
+        folder = self.stage_dir(stage)
+        if not os.path.isdir(folder):
+            os.makedirs(folder)
+            fsync_dir(self.tasks_dir)
+        return folder
+
+    def scan(self, strict=True):
+        """Every task on disk: id -> (path, stage, slug).
+
+        `strict` is for the mutating verbs: a ledger that already holds
+        two files under one id is not safe to transition, so they refuse.
+        The read-only verbs pass strict=False — being unable to LOOK at a
+        ledger is exactly the wrong response to finding it damaged.
+        """
+        found = {}
+        collisions = {}
+        for stage in STAGES:
+            folder = self.stage_dir(stage)
+            if not os.path.isdir(folder):
+                continue
+            for name in sorted(os.listdir(folder)):
+                if not name.endswith(".md"):
+                    continue
+                matched = re.match(FILENAME_PATTERN, name)
+                if not matched:
+                    continue
+                task_id = matched.group(1)
+                entry = (os.path.join(folder, name), stage, matched.group(2))
+                if task_id in found:
+                    collisions.setdefault(task_id, [found[task_id][0]])
+                    collisions[task_id].append(entry[0])
+                found[task_id] = entry
+        if collisions:
+            lines = []
+            for task_id, paths in sorted(collisions.items()):
+                lines.append("  %s: %s" % (task_id, ", ".join(sorted(paths))))
+            detail = "\n".join(lines)
+            if strict:
+                raise Abort(
+                    "the ledger already holds duplicate ids; resolve these "
+                    "before any further transition:\n" + detail
+                )
+            warn(
+                "%d duplicate id(s) on disk; only the last of each is shown "
+                "below:\n%s" % (len(collisions), detail)
+            )
+        return found
+
+    def numbers_on_disk(self, series):
+        """Every NUMBER already used by a filename, for one series pool."""
+        used = set()
+        if not os.path.isdir(self.tasks_dir):
+            return used
+        for name in os.listdir(self.tasks_dir):
+            folder = os.path.join(self.tasks_dir, name)
+            if not os.path.isdir(folder) or name == STATE_DIR_NAME:
+                continue
+            for entry in os.listdir(folder):
+                matched = re.match(FILENAME_PATTERN, entry)
+                if not matched:
+                    continue
+                number = id_number(matched.group(1), series)
+                if number is not None:
+                    used.add(number)
+        return used
+
+    # -- the transition log ------------------------------------------------
+
+    def history_rows(self):
+        if not os.path.isfile(self.history_path):
+            return []
+        rows = []
+        text = read_text(self.history_path)
+        for lineno, line in enumerate(text.split("\n"), start=1):
+            if line == "":
+                continue
+            fields = line.split("\t")
+            if lineno == 1 and tuple(fields) == HISTORY_HEADER:
+                continue
+            if len(fields) != 6:
+                raise Abort(
+                    "%s:%d: expected 6 tab-separated fields, found %d"
+                    % (self.history_path, lineno, len(fields))
+                )
+            rows.append(dict(zip(HISTORY_HEADER, fields)))
+        return rows
+
+    def numbers_in_history(self, series):
+        used = set()
+        for row in self.history_rows():
+            number = id_number(row["id"], series)
+            if number is not None:
+                used.add(number)
+        return used
+
+    def last_history_date(self):
+        rows = self.history_rows()
+        return rows[-1]["date"] if rows else None
+
+    def precheck_history_date(self, when):
+        """Refuse an append that would break date order — BEFORE anything moves.
+
+        This lived inside append_history, which every verb calls *last*, after
+        the rename and the frontmatter write. So the abort fired with the file
+        already moved and no log line written: a stage change with no record,
+        which is precisely the violation this Element exists to make
+        impossible — announced with the words "nothing was written". The check
+        has to run before the first mutation; append_history keeps it too, as
+        a belt-and-braces assert on a path that should now be unreachable.
+        """
+        last = self.last_history_date()
+        if last and last > when:
+            raise Abort(
+                "%s ends with a line dated %s, which is after today (%s). "
+                "Appending would break the non-decreasing date order. Fix the "
+                "log (or the clock) first; nothing was written."
+                % (self.history_path, last, when)
+            )
+
+    def append_history(self, when, task_id, from_stage, to_stage, actor, note):
+        self.precheck_history_date(when)
+        fresh = not os.path.isfile(self.history_path)
+        row = "\t".join(
+            [
+                when,
+                tsv_clean(task_id),
+                tsv_clean(from_stage or "-"),
+                tsv_clean(to_stage),
+                tsv_clean(actor),
+                tsv_clean(note),
+            ]
+        )
+        with open(self.history_path, "a", encoding="utf-8", newline="\n") as handle:
+            if fresh:
+                handle.write("\t".join(HISTORY_HEADER) + "\n")
+            handle.write(row + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        if fresh:
+            fsync_dir(self.tasks_dir)
+
+    # -- the digest ledger -------------------------------------------------
+
+    def digest_rows(self):
+        rows = {}
+        if not os.path.isfile(self.digest_path):
+            return rows
+        try:
+            text = read_text(self.digest_path)
+        except Abort:
+            return rows
+        for line in text.split("\n"):
+            if line == "":
+                continue
+            fields = line.split("\t")
+            if len(fields) != 4:
+                # An unparseable ledger is regenerable; the validator
+                # re-seeds it and says so.
+                return {}
+            rows[fields[0]] = fields
+        return rows
+
+    def record_digest(self, task_id, path, updated, stage):
+        rows = self.digest_rows()
+        rows[task_id] = [task_id, sha256_of(path), updated, stage]
+        os.makedirs(self.state_dir, exist_ok=True)
+        text = "".join("\t".join(row) + "\n" for _, row in sorted(rows.items()))
+        write_atomic(self.digest_path, text)
+
+    def forget_digest(self, task_id):
+        rows = self.digest_rows()
+        if task_id in rows:
+            del rows[task_id]
+            text = "".join("\t".join(row) + "\n" for _, row in sorted(rows.items()))
+            write_atomic(self.digest_path, text)
+
+    # -- the phase registry ------------------------------------------------
+
+    def roadmap_lines(self):
+        if not os.path.isfile(self.roadmap_path):
+            return None
+        return read_text(self.roadmap_path).split("\n")
+
+    def roadmap_phases(self):
+        """phase id -> (heading offset, name), in declaration order."""
+        lines = self.roadmap_lines()
+        if lines is None:
+            return None
+        phases = {}
+        for index, line in enumerate(lines):
+            matched = re.match(PHASE_HEADING_PATTERN, line)
+            if not matched:
+                continue
+            phase_id = matched.group(1).rstrip(":")
+            name = (matched.group(2) or "").lstrip("—–-: \t").strip()
+            if phase_id in phases:
+                raise Abort(
+                    "%s declares the phase id `%s` twice (lines %d and %d)"
+                    % (
+                        self.roadmap_path,
+                        phase_id,
+                        phases[phase_id][0] + 1,
+                        index + 1,
+                    )
+                )
+            phases[phase_id] = (index, name)
+        return phases
+
+    def roadmap_place(self, task_id, phase, title):
+        """Ensure exactly one `- <id> — <title>` line, under `phase`."""
+        lines = self.roadmap_lines()
+        if lines is None:
+            return False
+        phases = self.roadmap_phases()
+        if phase not in phases:
+            raise Abort(
+                "%s declares no `## Phase %s` heading" % (self.roadmap_path, phase)
+            )
+        lines, _removed = _strip_entry(lines, task_id)
+        offsets = _phase_offsets(lines)
+        start = offsets[phase]
+        end = len(lines)
+        for index in range(start + 1, len(lines)):
+            if re.match(r"^##[ \t]", lines[index]):
+                end = index
+                break
+        entry = "- %s — %s" % (task_id, title)
+        insert_at = None
+        for index in range(end - 1, start, -1):
+            if re.match(r"^[-*][ \t]+TASK-", lines[index]):
+                insert_at = index + 1
+                break
+        if insert_at is None:
+            # No list yet in this section. Put one directly after the
+            # scope prose, with exactly one blank line on either side —
+            # normalizing the blank run keeps repeated placement from
+            # accumulating empty lines.
+            insert_at = end
+            while insert_at - 1 > start and lines[insert_at - 1].strip() == "":
+                insert_at -= 1
+            del lines[insert_at:end]
+            if lines[insert_at - 1].strip() != "":
+                lines.insert(insert_at, "")
+                insert_at += 1
+            lines.insert(insert_at, entry)
+            lines.insert(insert_at + 1, "")
+            write_atomic(self.roadmap_path, "\n".join(lines).rstrip("\n") + "\n")
+            return True
+        lines.insert(insert_at, entry)
+        write_atomic(self.roadmap_path, "\n".join(lines).rstrip("\n") + "\n")
+        return True
+
+    def roadmap_remove(self, task_id):
+        lines = self.roadmap_lines()
+        if lines is None:
+            return False
+        kept, removed = _strip_entry(lines, task_id)
+        if not removed:
+            return False
+        write_atomic(self.roadmap_path, "\n".join(kept).rstrip("\n") + "\n")
+        return True
+
+
+def _strip_entry(lines, task_id):
+    """Drop every registry line naming `task_id`; keep the blanks tidy."""
+    pattern = r"^[-*][ \t]+%s[ \t]+(?:—|–|-)[ \t]+" % re.escape(task_id)
+    kept = []
+    removed = False
+    for index, line in enumerate(lines):
+        if re.match(pattern, line):
+            removed = True
+            # Taking the only item out of a list would leave the blank
+            # line above it lying against the blank line below it.
+            if (
+                kept
+                and kept[-1].strip() == ""
+                and index + 1 < len(lines)
+                and lines[index + 1].strip() == ""
+            ):
+                kept.pop()
+            continue
+        kept.append(line)
+    return kept, removed
+
+
+def _phase_offsets(lines):
+    found = {}
+    for index, line in enumerate(lines):
+        matched = re.match(PHASE_HEADING_PATTERN, line)
+        if matched:
+            found[matched.group(1).rstrip(":")] = index
+    return found
+
+
+def id_number(task_id, series):
+    """The NUMBER of `task_id` if it belongs to `series`, else None."""
+    matched = re.match(ID_PATTERN, task_id or "")
+    if not matched:
+        return None
+    if (matched.group(1) or None) != (series or None):
+        return None
+    return int(matched.group(2))
+
+
+# --------------------------------------------------------------------------
+# The allocation lock. mkdir(2) is atomic on POSIX, on NFSv3+ and on NTFS.
+# Every mutating verb takes it, so the log append and the digest rewrite
+# are serialized too, not only the id draw.
+# --------------------------------------------------------------------------
+
+
+class Lock(object):
+    def __init__(self, ledger, quiet=False):
+        self.ledger = ledger
+        self.quiet = quiet
+        self.held = False
+
+    def __enter__(self):
+        os.makedirs(self.ledger.state_dir, exist_ok=True)
+        path = self.ledger.lock_path
+        reaped = False
+        for _ in range(LOCK_ATTEMPTS):
+            try:
+                os.mkdir(path)
+                self.held = True
+                return self
+            except FileExistsError:
+                pass
+            # Reap on AGE, never on try count: counting tries deletes a
+            # lock that a slow but living process still rightfully holds.
+            try:
+                age = time.time() - os.stat(path).st_mtime
+            except OSError:
+                continue
+            if age > LOCK_STALE_SECONDS and not reaped:
+                reaped = True
+                if not self.quiet:
+                    warn(
+                        "reaping an id lock left behind %d seconds ago (%s)"
+                        % (int(age), path)
+                    )
+                shutil.rmtree(path, ignore_errors=True)
+                continue
+            time.sleep(LOCK_SLEEP)
+        raise Abort(
+            "could not acquire the id lock at %s after %d seconds; NOTHING "
+            "was written" % (path, int(LOCK_ATTEMPTS * LOCK_SLEEP))
+        )
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if self.held:
+            try:
+                os.rmdir(self.ledger.lock_path)
+            except OSError:
+                shutil.rmtree(self.ledger.lock_path, ignore_errors=True)
+            self.held = False
+        return False
+
+
+def _on_signal(signum, frame):
+    raise Abort("interrupted by signal %d; nothing further was written" % signum)
+
+
+# --------------------------------------------------------------------------
+# Actor resolution. No identity is read from any history store — that
+# would carry a stack assumption into shipped tooling.
+# --------------------------------------------------------------------------
+
+
+def resolve_actor(ledger, explicit, interactive=True):
+    candidate = explicit
+    if not candidate:
+        candidate = os.environ.get("RASA_TASK_WHO") or None
+    if not candidate:
+        who_path = os.path.join(ledger.tasks_dir, WHO_NAME)
+        if os.path.isfile(who_path):
+            first = read_text(who_path).split("\n")[0].strip()
+            candidate = first or None
+    if not candidate and interactive and sys.stdin.isatty():
+        try:
+            typed = input("who is doing this? (handle, or blank for unknown) ")
+        except (EOFError, KeyboardInterrupt):
+            typed = ""
+        candidate = typed.strip() or None
+    return candidate or "unknown"
+
+
+def check_actor(ledger, value, field):
+    if value == "unknown":
+        return
+    if "@" in value or len(value) > 64 or not re.match(ACTOR_PATTERN, value):
+        raise Abort(
+            "%s=%r is not a legal handle. Use %s (no `@`, at most 32 "
+            "characters)." % (field, value, ACTOR_PATTERN)
+        )
+    declared = ledger.config["actors"]
+    if declared and value not in declared:
+        raise Abort(
+            "%s=%r is not declared in %s#actors (%s)"
+            % (field, value, ledger.config_path, ", ".join(declared))
+        )
+
+
+def check_ratchet(ledger, created, actor, field):
+    """`unknown` is legal only for work filed before the ratchet date."""
+    migrated = ledger.config["migrated_on"]
+    if actor != "unknown" or not migrated:
+        return
+    if created and created >= str(migrated):
+        raise Abort(
+            "%s may not be `unknown`: this task was filed on %s, on or after "
+            "the ratchet date %s in %s. Pass --by <handle>, set "
+            "$RASA_TASK_WHO, or put a handle in tasks/%s."
+            % (field, created, migrated, ledger.config_path, WHO_NAME)
+        )
+
+
+# --------------------------------------------------------------------------
+# Shared precondition checks
+# --------------------------------------------------------------------------
+
+
+def check_phase_value(ledger, phase):
+    if not re.match(PHASE_PATTERN, phase):
+        raise Abort("phase %r does not match %s" % (phase, PHASE_PATTERN))
+    phases = ledger.roadmap_phases()
+    if phases is None:
+        warn(
+            "no %s — the phase cannot be mirrored against a registry"
+            % ledger.roadmap_path
+        )
+        return
+    if not phases:
+        raise Abort(
+            "%s declares no phases yet. Declare one first, for example:\n"
+            "\n    ## Phase %s — %s\n\n    Scope. What is in, what is out, "
+            "what success looks like.\n" % (ledger.roadmap_path, phase, phase)
+        )
+    if phase not in phases:
+        raise Abort(
+            "phase %r is not declared in %s. Declared: %s.\nAdd a heading "
+            "first:\n\n    ## Phase %s — %s\n"
+            % (
+                phase,
+                ledger.roadmap_path,
+                ", ".join(sorted(phases)) or "(none)",
+                phase,
+                phase,
+            )
+        )
+
+
+def check_targets(ledger, values):
+    declared = ledger.targets_declared()
+    if not declared:
+        if values:
+            raise Abort(
+                "--target was given, but %s declares no `targets:` list, so "
+                "the field is forbidden. Declare the project's axis first."
+                % ledger.config_path
+            )
+        return
+    if not values:
+        raise Abort(
+            "this project declares targets (%s), so `target:` is required "
+            "outside triage/ and closed/. Pass --target." % ", ".join(declared)
+        )
+    for item in values:
+        if not re.match(TARGET_PATTERN, item):
+            raise Abort("target %r does not match %s" % (item, TARGET_PATTERN))
+        if item not in declared:
+            raise Abort(
+                "target %r is not declared in %s#targets (%s)"
+                % (item, ledger.config_path, ", ".join(declared))
+            )
+
+
+def require_terminal_fields_absent(task):
+    for key in ("completed_by", "resolution", "resolution_ref"):
+        task.delete(key)
+
+
+def split_list_option(raw_values):
+    out = []
+    for raw in raw_values or []:
+        for piece in raw.split(","):
+            piece = piece.strip()
+            if piece:
+                out.append(piece)
+    seen = set()
+    unique = []
+    for item in out:
+        if item not in seen:
+            seen.add(item)
+            unique.append(item)
+    return unique
+
+
+def resolve_id(ledger, index, raw):
+    if raw in index:
+        return raw
+    upper = raw.strip().upper()
+    if upper in index:
+        return upper
+    prefixed = upper if upper.startswith("TASK-") else "TASK-" + upper
+    if prefixed in index:
+        return prefixed
+    if re.match(r"^[0-9]{1,6}$", raw):
+        padded = "TASK-%03d" % int(raw)
+        if padded in index:
+            return padded
+    matches = [key for key in index if key.upper() == upper]
+    if len(matches) == 1:
+        return matches[0]
+    raise Abort("no task with id %r on disk" % raw)
+
+
+# --------------------------------------------------------------------------
+# The one transition primitive.
+# --------------------------------------------------------------------------
+
+
+def apply_transition(
+    ledger,
+    task,
+    from_stage,
+    to_stage,
+    actor,
+    note,
+    mutate=None,
+    when=None,
+):
+    """Move the file, rewrite its frontmatter, log it, re-digest it.
+
+    The caller has already validated every precondition, so this either
+    runs to completion or rolls the move back.
+    """
+    when = when or today_iso()
+    # Every precondition must be settled before the first mutation. This one
+    # used to live in append_history, which runs last — so it aborted with the
+    # file already moved. See Ledger.precheck_history_date.
+    ledger.precheck_history_date(when)
+    old_path = task.path
+    new_path = old_path
+    moved = False
+
+    if to_stage != from_stage:
+        folder = ledger.ensure_stage(to_stage)
+        new_path = os.path.join(folder, os.path.basename(old_path))
+        if os.path.exists(new_path):
+            raise Abort(
+                "%s already exists; refusing to overwrite a task file" % new_path
+            )
+        os.rename(old_path, new_path)
+        moved = True
+        task.path = new_path
+        task.stage = to_stage
+
+    try:
+        task.set("updated", when)
+        if mutate is not None:
+            mutate(task)
+        task.save()
+    except BaseException:
+        if moved:
+            try:
+                os.rename(new_path, old_path)
+                task.path = old_path
+                task.stage = from_stage
+            except OSError:
+                pass
+        raise
+
+    if moved:
+        fsync_dir(os.path.dirname(old_path))
+        fsync_dir(os.path.dirname(new_path))
+
+    ledger.append_history(when, task.get("id"), from_stage, to_stage, actor, note)
+    ledger.record_digest(task.get("id"), task.path, when, to_stage)
+    return task
+
+
+def report(task, from_stage, to_stage, actor, note):
+    say(
+        "%s  %s → %s   by %s   updated %s"
+        % (task.get("id"), from_stage, to_stage, actor, task.get("updated"))
+    )
+    if note:
+        say("  note: %s" % note)
+    say("  %s" % task.path)
+
+
+# --------------------------------------------------------------------------
+# new — allocation
+# --------------------------------------------------------------------------
+
+
+NEW_BODY = """# {id}: {title}
+
+## Acceptance criteria
+
+## Notes
+"""
+
+
+def render_new_body(ledger, args, task_id, title, phase):
+    template_path = os.path.join(
+        ledger.root, ".claude", "task-templates", "%s.md" % args.type
+    )
+    if os.path.isfile(template_path):
+        text = read_text(template_path)
+        lines = text.split("\n")
+        if lines and lines[0] == "---":
+            for index in range(1, len(lines)):
+                if lines[index] == "---":
+                    lines = lines[index + 1:]
+                    break
+        text = "\n".join(lines)
+        text = (
+            text.replace("{{ID}}", task_id)
+            .replace("{{TITLE}}", title)
+            .replace("{{TYPE}}", args.type)
+            .replace("{{PHASE}}", phase or "")
+            .replace("{{CREATED}}", today_iso())
+        )
+        out = text.split("\n")
+        heading = "# %s: %s" % (task_id, title)
+        placed = False
+        for index, line in enumerate(out):
+            if line.startswith("# "):
+                out[index] = heading
+                placed = True
+                break
+        if not placed:
+            out = [heading, ""] + out
+        while out and out[-1].strip() == "":
+            out.pop()
+        return out
+    return NEW_BODY.format(id=task_id, title=title).rstrip("\n").split("\n")
+
+
+def verb_new(ledger, args):
+    # Before the id lock is taken and the file is created with O_CREAT|O_EXCL —
+    # `new` logs last too, so without this it would leave an unlogged task file
+    # on disk and report that nothing was written.
+    ledger.precheck_history_date(today_iso())
+    title = " ".join(args.title).strip()
+    if not title:
+        raise Abort("a task needs a title")
+    slug = slugify(title)
+    if not slug or not re.match(SLUG_PATTERN, slug):
+        raise Abort(
+            "the title %r produces no usable filename slug; give it some "
+            "letters or digits" % title
+        )
+
+    series = args.series
+    if series is not None and not re.match(SERIES_PATTERN, series):
+        raise Abort("series %r does not match %s" % (series, SERIES_PATTERN))
+    declared_series = ledger.config["series"]
+    if series and declared_series and series not in declared_series:
+        raise Abort(
+            "series %r is not declared in %s#series (%s)"
+            % (series, ledger.config_path, ", ".join(declared_series))
+        )
+
+    priority = args.priority
+    phase = args.phase
+    if priority == "now" and not phase:
+        raise Abort(
+            "`priority: now` files straight into active/, and every task "
+            "outside triage/ and closed/ needs a phase. Pass --phase too."
+        )
+
+    if priority == "now":
+        stage = "active"
+    elif phase:
+        stage = "backlog"
+    else:
+        stage = "triage"
+
+    if phase:
+        check_phase_value(ledger, phase)
+
+    targets = split_list_option(args.target)
+    if stage == "triage":
+        if targets:
+            check_targets(ledger, targets)
+    else:
+        check_targets(ledger, targets)
+
+    actor = resolve_actor(ledger, args.by)
+    check_actor(ledger, actor, "created_by")
+    when = today_iso()
+    check_ratchet(ledger, when, actor, "created_by")
+
+    note = args.note.strip() if args.note else "filed"
+
+    with Lock(ledger, quiet=args.quiet):
+        used = ledger.numbers_in_history(series) | ledger.numbers_on_disk(series)
+        number = max(used) + 1 if used else 1
+        folder = ledger.ensure_stage(stage)
+
+        task_id = None
+        path = None
+        handle = None
+        while number < 1000000:
+            candidate = "TASK-%s%03d" % ((series + "-") if series else "", number)
+            candidate_path = os.path.join(folder, "%s-%s.md" % (candidate, slug))
+            try:
+                fd = os.open(
+                    candidate_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644
+                )
+            except FileExistsError:
+                number += 1
+                continue
+            task_id = candidate
+            path = candidate_path
+            handle = fd
+            break
+        if handle is None:
+            raise Abort("the %s id pool is exhausted" % (series or "default"))
+
+        front = [
+            "id: %s" % task_id,
+            "type: %s" % args.type,
+            "created: %s" % when,
+            "created_by: %s" % actor,
+            "updated: %s" % when,
+        ]
+        if phase:
+            front.append("phase: %s" % phase)
+        if targets:
+            front.append("target: %s" % format_value(targets))
+        if priority and priority != "normal":
+            front.append("priority: %s" % priority)
+
+        body = render_new_body(ledger, args, task_id, title, phase)
+        text = "\n".join(["---"] + front + ["---"] + body).rstrip("\n") + "\n"
+
+        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        fsync_dir(folder)
+
+        ledger.append_history(when, task_id, "-", stage, actor, note)
+        ledger.record_digest(task_id, path, when, stage)
+        if stage != "triage":
+            ledger.roadmap_place(task_id, phase, title)
+
+    say("%s  → %s   by %s   created %s" % (task_id, stage, actor, when))
+    say("  %s" % path)
+    return 0
+
+
+# --------------------------------------------------------------------------
+# The moving verbs
+# --------------------------------------------------------------------------
+
+
+def load_target_task(ledger, raw_id, strict=True):
+    index = ledger.scan(strict=strict)
+    task_id = resolve_id(ledger, index, raw_id)
+    path, stage, _slug = index[task_id]
+    task = TaskFile.load(path, stage)
+    if task.get("id") != task_id:
+        raise Abort(
+            "%s: the filename says %s but the frontmatter says %r"
+            % (path, task_id, task.get("id"))
+        )
+    if task.has("status"):
+        raise Abort(
+            "%s still carries a `status:` key. State is the directory in "
+            "v1.0.0; delete that key first." % path
+        )
+    unknown = [
+        key for key in task.values if key not in KNOWN_KEYS and not key.startswith("x-")
+    ]
+    if unknown:
+        raise Abort(
+            "%s carries unrecognized frontmatter key(s): %s. Rename each to "
+            "`x-<key>` (the project-owned namespace) first."
+            % (path, ", ".join(sorted(unknown)))
+        )
+    if task.get("type") not in TYPES:
+        raise Abort(
+            "%s has type=%r; expected one of %s"
+            % (path, task.get("type"), ", ".join(TYPES))
+        )
+    created = task.get("created")
+    if not is_real_date(str(created or "")):
+        raise Abort("%s has created=%r, which is not a real date" % (path, created))
+    task.title()  # asserts the single, well-formed H1
+    return task
+
+
+def expected_stage_check(verb, task):
+    allowed, fixed = TRANSITIONS[verb]
+    if task.stage not in allowed:
+        raise Abort(
+            "`%s` moves a task out of %s; %s is in %s/"
+            % (verb, "/".join(sorted(allowed)), task.get("id"), task.stage)
+        )
+    return fixed
+
+
+def ensure_phase_for(ledger, task, supplied):
+    """A task outside triage/ and closed/ must carry a phase in the registry."""
+    phase = supplied or task.get("phase")
+    if not phase:
+        raise Abort(
+            "%s carries no phase, and every task outside triage/ and closed/ needs one. "
+            "Pass --phase." % task.get("id")
+        )
+    check_phase_value(ledger, str(phase))
+    return str(phase)
+
+
+def ensure_target_for(ledger, task, supplied):
+    declared = ledger.targets_declared()
+    values = supplied or task.get("target") or []
+    if isinstance(values, str):
+        values = [values] if values else []
+    if not declared:
+        if supplied:
+            check_targets(ledger, supplied)
+        return None
+    check_targets(ledger, values)
+    return list(values)
+
+
+def check_priority_route(priority, stage):
+    if priority == "now" and stage in ("triage", "backlog"):
+        raise Abort(
+            "`priority: now` is a route, not a mood: it may not sit in "
+            "triage/ or backlog/. Pass --priority to re-rank the task as "
+            "part of this move."
+        )
+
+
+def effective_priority(task, supplied):
+    if supplied:
+        return supplied
+    value = task.get("priority")
+    return str(value) if value else "normal"
+
+
+def _precheck_registry(ledger, task, to_stage):
+    """Fail on a phase the registry cannot accept — BEFORE anything moves.
+
+    _sync_registry runs after apply_transition and outside its rollback, so a
+    task whose phase heading had been renamed away produced the worst possible
+    outcome: the file moved, the frontmatter was rewritten, the history line
+    was appended, the digest was updated — and then the command aborted
+    nonzero having skipped only the ROADMAP edit, leaving the ledger red.
+    Verbs that never call ensure_phase_for (park, demote, reject) had no other
+    guard. This runs the same lookup first, so the refusal costs nothing.
+    """
+    if to_stage == "triage":
+        return
+    phase = task.get("phase")
+    if not phase or ledger.roadmap_lines() is None:
+        return
+    if str(phase) not in ledger.roadmap_phases():
+        raise Abort(
+            "%s declares no `## Phase %s` heading, which %s needs before it can "
+            "record the move. Add the heading (or re-phase the task) first; "
+            "nothing was written."
+            % (ledger.roadmap_path, phase, task.get("id"))
+        )
+
+
+def _sync_registry(ledger, task, from_stage, to_stage):
+    """Keep the phase registry's membership line in step with the move."""
+    task_id = task.get("id")
+    if to_stage == "triage":
+        ledger.roadmap_remove(task_id)
+        return
+    phase = task.get("phase")
+    if not phase:
+        return
+    if ledger.roadmap_lines() is None:
+        return
+    ledger.roadmap_place(task_id, str(phase), task.title())
+
+
+def common_move(ledger, args, verb, to_stage, note, mutate=None, task=None):
+    task = task or load_target_task(ledger, args.id)
+    from_stage = task.stage
+    actor = resolve_actor(ledger, args.by)
+    check_actor(ledger, actor, "actor")
+    with Lock(ledger, quiet=args.quiet):
+        _precheck_registry(ledger, task, to_stage)
+        apply_transition(ledger, task, from_stage, to_stage, actor, note, mutate)
+        _sync_registry(ledger, task, from_stage, to_stage)
+    report(task, from_stage, to_stage, actor, note)
+    return 0
+
+
+def verb_graduate(ledger, args):
+    task = load_target_task(ledger, args.id)
+    expected_stage_check("graduate", task)
+    phase = ensure_phase_for(ledger, task, args.phase)
+    targets = ensure_target_for(ledger, task, split_list_option(args.target))
+    priority = effective_priority(task, args.priority)
+    check_priority_route(priority, "backlog")
+
+    def mutate(doc):
+        doc.set("phase", phase)
+        if targets is not None:
+            doc.set("target", targets)
+        if args.priority:
+            doc.set("priority", args.priority)
+
+    return common_move(
+        ledger,
+        args,
+        "graduate",
+        "backlog",
+        args.note or ("phase %s" % phase),
+        mutate,
+        task,
+    )
+
+
+def verb_demote(ledger, args):
+    task = load_target_task(ledger, args.id)
+    expected_stage_check("demote", task)
+    priority = effective_priority(task, args.priority)
+    check_priority_route(priority, "triage")
+
+    def mutate(doc):
+        doc.delete("phase")
+        if args.priority:
+            doc.set("priority", args.priority)
+
+    return common_move(
+        ledger, args, "demote", "triage", args.note or "unphased", mutate, task
+    )
+
+
+def verb_start(ledger, args):
+    task = load_target_task(ledger, args.id)
+    expected_stage_check("start", task)
+    ensure_phase_for(ledger, task, None)
+    ensure_target_for(ledger, task, split_list_option(args.target))
+    targets = split_list_option(args.target)
+
+    def mutate(doc):
+        if targets:
+            doc.set("target", targets)
+        if args.priority:
+            doc.set("priority", args.priority)
+
+    return common_move(
+        ledger, args, "start", "active", args.note or "started", mutate, task
+    )
+
+
+def verb_park(ledger, args):
+    task = load_target_task(ledger, args.id)
+    expected_stage_check("park", task)
+    priority = effective_priority(task, args.priority)
+    check_priority_route(priority, "backlog")
+
+    def mutate(doc):
+        if args.priority:
+            doc.set("priority", args.priority)
+
+    return common_move(
+        ledger, args, "park", "backlog", args.note or "parked", mutate, task
+    )
+
+
+def verb_block(ledger, args):
+    task = load_target_task(ledger, args.id)
+    expected_stage_check("block", task)
+    ensure_phase_for(ledger, task, None)
+    reason = (args.reason or "").strip()
+    if not reason and not task.section_has_text("Blocker"):
+        raise Abort(
+            "%s has no non-empty `## Blocker` section. Pass --reason "
+            '"<what is in the way>" and this command will write it.' % task.get("id")
+        )
+
+    def mutate(doc):
+        if reason:
+            doc.set_section("Blocker", [reason])
+
+    return common_move(
+        ledger,
+        args,
+        "block",
+        "blocked",
+        args.note or (("blocked: " + reason) if reason else "blocked"),
+        mutate,
+        task,
+    )
+
+
+def _stage_before_block(ledger, task_id):
+    previous = None
+    for row in ledger.history_rows():
+        if row["id"] != task_id:
+            continue
+        if row["to"] == "blocked":
+            previous = row["from"]
+    if previous in ("backlog", "active", "review"):
+        return previous
+    return None
+
+
+def verb_unblock(ledger, args):
+    task = load_target_task(ledger, args.id)
+    expected_stage_check("unblock", task)
+    destination = args.to
+    if not destination:
+        destination = _stage_before_block(ledger, task.get("id"))
+    if not destination:
+        raise Abort(
+            "%s: the log does not say where this task came from. Pass --to "
+            "<backlog|active|review>." % task.get("id")
+        )
+    if destination not in ("backlog", "active", "review"):
+        raise Abort(
+            "unblock returns a task to backlog/, active/ or review/; got %r"
+            % destination
+        )
+    ensure_phase_for(ledger, task, None)
+    priority = effective_priority(task, args.priority)
+    check_priority_route(priority, destination)
+
+    def mutate(doc):
+        if args.priority:
+            doc.set("priority", args.priority)
+
+    return common_move(
+        ledger,
+        args,
+        "unblock",
+        destination,
+        args.note or ("returned to %s" % destination),
+        mutate,
+        task,
+    )
+
+
+def verb_submit(ledger, args):
+    task = load_target_task(ledger, args.id)
+    expected_stage_check("submit", task)
+    ensure_phase_for(ledger, task, None)
+    return common_move(
+        ledger, args, "submit", "review", args.note or "submitted for the gate",
+        None, task,
+    )
+
+
+def verb_reject(ledger, args):
+    task = load_target_task(ledger, args.id)
+    expected_stage_check("reject", task)
+    note = (args.note or "").strip()
+    if not note:
+        raise Abort(
+            "`reject` must name the gate that did not pass. Pass --note "
+            '"<which gate, and why>".'
+        )
+    when = today_iso()
+    actor_preview = resolve_actor(ledger, args.by)
+
+    def mutate(doc):
+        doc.append_to_section(
+            "Notes", ["Returned %s by %s — %s" % (when, actor_preview, note)]
+        )
+
+    return common_move(
+        ledger, args, "reject", "active", "gate not passed: " + note, mutate, task
+    )
+
+
+def verb_pass(ledger, args):
+    task = load_target_task(ledger, args.id)
+    expected_stage_check("pass", task)
+    ensure_phase_for(ledger, task, None)
+    ensure_target_for(ledger, task, split_list_option(args.target))
+
+    # The done-gate is the project's, always. This driver reads it, shows
+    # it, and requires the operator to say how it was satisfied. It never
+    # decides what it means.
+    if not os.path.isfile(ledger.gate_path):
+        raise Abort(
+            "no done-gate at %s. What `done` means is the project's to "
+            "declare; a task cannot pass a gate that does not exist."
+            % ledger.gate_path
+        )
+    gate_text = read_text(ledger.gate_path).strip()
+    if not gate_text:
+        raise Abort(
+            "%s is empty; fill it in before passing anything" % ledger.gate_path
+        )
+
+    evidence = (args.evidence or args.note or "").strip()
+    if not evidence:
+        raise Abort(
+            "`pass` needs evidence. Read %s, satisfy every gate in it, then "
+            'pass --evidence "<how each gate was satisfied>".' % ledger.gate_path
+        )
+
+    actor = resolve_actor(ledger, args.by)
+    check_actor(ledger, actor, "completed_by")
+    check_ratchet(ledger, str(task.get("created")), actor, "completed_by")
+
+    if not args.quiet:
+        say("— the project's done-gate (%s) —" % ledger.gate_path)
+        for line in gate_text.split("\n"):
+            say("  | " + line)
+        say("—")
+
+    when = today_iso()
+    targets = split_list_option(args.target)
+
+    def mutate(doc):
+        doc.set("completed_by", actor)
+        doc.delete("resolution")
+        doc.delete("resolution_ref")
+        if targets:
+            doc.set("target", targets)
+        doc.append_to_section(
+            "Notes", ["Gate satisfied %s by %s — %s" % (when, actor, evidence)]
+        )
+
+    from_stage = task.stage
+    with Lock(ledger, quiet=args.quiet):
+        _precheck_registry(ledger, task, "completed")
+        apply_transition(
+            ledger, task, from_stage, "completed", actor, "gate: " + evidence, mutate
+        )
+        _sync_registry(ledger, task, from_stage, "completed")
+    report(task, from_stage, "completed", actor, "gate: " + evidence)
+    return 0
+
+
+def verb_close(ledger, args):
+    task = load_target_task(ledger, args.id)
+    expected_stage_check("close", task)
+    if task.stage == "closed":
+        raise Abort("%s is already in closed/" % task.get("id"))
+    resolution = args.resolution
+    if resolution not in RESOLUTIONS:
+        raise Abort("--resolution must be one of %s" % ", ".join(RESOLUTIONS))
+    ref = (args.ref or "").strip() or None
+    if resolution in REF_RESOLUTIONS:
+        if not ref:
+            raise Abort(
+                "--resolution %s names another task; pass --ref <id>" % resolution
+            )
+    elif ref:
+        raise Abort(
+            "--ref is only meaningful with --resolution superseded or duplicate"
+        )
+    index = ledger.scan()
+    if ref:
+        ref = resolve_id(ledger, index, ref)
+        if ref == task.get("id"):
+            raise Abort("a task cannot supersede or duplicate itself")
+
+    # Closing straight out of triage/ must not demand a phase. `closed/` is the
+    # only terminal reachable from triage/, and the triage sweep — "graduate, or
+    # close" — is the one procedure that has to stay cheap or it never happens.
+    # Forcing a phase would also put the decline on the roadmap as though
+    # somebody intended the work. An explicit --phase is still honoured.
+    from_triage = task.stage == "triage"
+    if from_triage and not args.phase:
+        phase = None
+        targets = split_list_option(args.target) or None
+    else:
+        phase = ensure_phase_for(ledger, task, args.phase)
+        targets = ensure_target_for(ledger, task, split_list_option(args.target))
+
+    actor = resolve_actor(ledger, args.by)
+    check_actor(ledger, actor, "completed_by")
+    check_ratchet(ledger, str(task.get("created")), actor, "completed_by")
+
+    when = today_iso()
+    reason = (args.note or "").strip()
+
+    def mutate(doc):
+        if phase is not None:
+            doc.set("phase", phase)
+        if targets is not None:
+            doc.set("target", targets)
+        doc.set("completed_by", actor)
+        doc.set("resolution", resolution)
+        if ref:
+            doc.set("resolution_ref", ref)
+        else:
+            doc.delete("resolution_ref")
+        line = "Closed %s by %s — %s" % (when, actor, resolution)
+        if ref:
+            line += " (%s)" % ref
+        if reason:
+            line += ": " + reason
+        doc.append_to_section("Notes", [line])
+
+    from_stage = task.stage
+    note = resolution
+    if ref:
+        note += " " + ref
+    if reason:
+        note += ": " + reason
+    with Lock(ledger, quiet=args.quiet):
+        _precheck_registry(ledger, task, "closed")
+        apply_transition(ledger, task, from_stage, "closed", actor, note, mutate)
+        _sync_registry(ledger, task, from_stage, "closed")
+    report(task, from_stage, "closed", actor, note)
+    return 0
+
+
+def verb_reopen(ledger, args):
+    task = load_target_task(ledger, args.id)
+    expected_stage_check("reopen", task)
+    destination = args.to or "active"
+    if destination not in ("triage", "backlog", "active"):
+        raise Abort(
+            "reopen lands in triage/, backlog/ or active/; got %r" % destination
+        )
+    reason = (args.note or "").strip()
+    if not reason:
+        raise Abort('`reopen` must say why. Pass --note "<why>".')
+
+    priority = effective_priority(task, args.priority)
+    check_priority_route(priority, destination)
+
+    if destination != "triage":
+        ensure_phase_for(ledger, task, args.phase)
+        ensure_target_for(ledger, task, split_list_option(args.target))
+
+    when = today_iso()
+    actor = resolve_actor(ledger, args.by)
+    check_actor(ledger, actor, "actor")
+    targets = split_list_option(args.target)
+
+    def mutate(doc):
+        require_terminal_fields_absent(doc)
+        if destination == "triage":
+            doc.delete("phase")
+        elif args.phase:
+            doc.set("phase", args.phase)
+        if targets:
+            doc.set("target", targets)
+        if args.priority:
+            doc.set("priority", args.priority)
+        doc.append_to_section(
+            "Notes", ["Reopened %s by %s — %s" % (when, actor, reason)]
+        )
+
+    from_stage = task.stage
+    with Lock(ledger, quiet=args.quiet):
+        _precheck_registry(ledger, task, destination)
+        apply_transition(
+            ledger, task, from_stage, destination, actor, "reopened: " + reason, mutate
+        )
+        _sync_registry(ledger, task, from_stage, destination)
+    report(task, from_stage, destination, actor, "reopened: " + reason)
+    return 0
+
+
+# --------------------------------------------------------------------------
+# Read-only verbs
+# --------------------------------------------------------------------------
+
+
+def verb_list(ledger, args):
+    index = ledger.scan(strict=False)
+    rows = []
+    for task_id, (path, stage, _slug) in sorted(index.items()):
+        if args.stage and stage != args.stage:
+            continue
+        try:
+            task = TaskFile.load(path, stage)
+        except Abort as exc:
+            rows.append((stage, task_id, "?", "?", "?", "(%s)" % exc))
+            continue
+        if args.phase and str(task.get("phase") or "") != args.phase:
+            continue
+        if args.type and str(task.get("type") or "") != args.type:
+            continue
+        if args.priority and effective_priority(task, None) != args.priority:
+            continue
+        wanted = split_list_option(args.target)
+        if wanted:
+            have = task.get("target") or []
+            if isinstance(have, str):
+                have = [have]
+            if not set(wanted) & set(have):
+                continue
+        try:
+            title = task.title()
+        except Abort:
+            title = "(malformed title line)"
+        rows.append(
+            (
+                stage,
+                task_id,
+                str(task.get("type") or "-"),
+                str(task.get("phase") or "-"),
+                effective_priority(task, None),
+                title,
+            )
+        )
+    if not rows:
+        say("no tasks match")
+        return 0
+    order = {stage: rank for rank, stage in enumerate(STAGES)}
+    rows.sort(key=lambda row: (order.get(row[0], 99), row[1]))
+    width = max(len(row[1]) for row in rows)
+    for stage, task_id, kind, phase, priority, title in rows:
+        say(
+            "%-9s %-*s  %-7s %-10s %-6s %s"
+            % (stage, width, task_id, kind, phase, priority, title)
+        )
+    say("")
+    say("%d task(s)" % len(rows))
+    return 0
+
+
+def verb_show(ledger, args):
+    task = load_target_task(ledger, args.id, strict=False)
+    say("%s  [%s]" % (task.get("id"), task.stage))
+    say("  title: %s" % task.title())
+    say("  path:  %s" % task.path)
+    for key in KEY_ORDER:
+        if task.has(key):
+            say("  %-14s %s" % (key + ":", format_value(task.get(key))))
+    for key in sorted(task.values):
+        if key.startswith("x-"):
+            say("  %-14s %s" % (key + ":", format_value(task.get(key))))
+    rows = [row for row in ledger.history_rows() if row["id"] == task.get("id")]
+    if rows:
+        say("  log:")
+        for row in rows:
+            say(
+                "    %s  %-8s → %-9s %-10s %s"
+                % (row["date"], row["from"], row["to"], row["actor"], row["note"])
+            )
+    return 0
+
+
+def verb_history(ledger, args):
+    rows = ledger.history_rows()
+    if args.id:
+        index = ledger.scan(strict=False)
+        try:
+            wanted = resolve_id(ledger, index, args.id)
+        except Abort:
+            wanted = args.id
+        rows = [row for row in rows if row["id"] == wanted]
+    if not rows:
+        say("no log lines")
+        return 0
+    for row in rows:
+        say(
+            "%s  %-14s %-8s → %-9s %-10s %s"
+            % (row["date"], row["id"], row["from"], row["to"], row["actor"], row["note"])
+        )
+    say("")
+    say("%d line(s) — %s" % (len(rows), ledger.history_path))
+    return 0
+
+
+def verb_stages(ledger, args):
+    index = ledger.scan(strict=False)
+    counts = {stage: 0 for stage in STAGES}
+    for _task_id, (_path, stage, _slug) in index.items():
+        counts[stage] += 1
+    for stage in STAGES:
+        say("%-10s %4d" % (stage, counts[stage]))
+    say("")
+    say("%d task(s) total" % len(index))
+    return 0
+
+
+def verb_where(ledger, args):
+    say(ledger.root)
+    say("  tasks:     %s" % ledger.tasks_dir)
+    say("  log:       %s" % ledger.history_path)
+    say("  digests:   %s" % ledger.digest_path)
+    say("  registry:  %s" % ledger.roadmap_path)
+    say(
+        "  config:    %s%s"
+        % (ledger.config_path, "" if ledger.config["present"] else "  (absent)")
+    )
+    say(
+        "  done-gate: %s%s"
+        % (ledger.gate_path, "" if os.path.isfile(ledger.gate_path) else "  (absent)")
+    )
+    if ledger.config["present"]:
+        say("  targets:   %s" % (", ".join(ledger.config["targets"]) or "(none)"))
+        say("  actors:    %s" % (", ".join(ledger.config["actors"]) or "(any)"))
+        say("  series:    %s" % (", ".join(ledger.config["series"]) or "(any)"))
+        say("  ratchet:   %s" % (ledger.config["migrated_on"] or "(none)"))
+    return 0
+
+
+# --------------------------------------------------------------------------
+# Wiring
+# --------------------------------------------------------------------------
+
+
+def make_parser():
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--root", help="the project folder that holds tasks/")
+    common.add_argument("--quiet", action="store_true", help="less chatter")
+
+    actorish = argparse.ArgumentParser(add_help=False)
+    actorish.add_argument("--by", help="the handle performing this")
+    actorish.add_argument("--note", help="one line for the transition log")
+
+    parser = argparse.ArgumentParser(
+        prog="task",
+        description="the atomic lifecycle driver for the portable task ledger",
+    )
+    subs = parser.add_subparsers(dest="verb")
+
+    new = subs.add_parser(
+        "new", parents=[common, actorish], help="file a task and allocate its id"
+    )
+    new.add_argument("title", nargs="+", help="the task title")
+    new.add_argument("--type", required=True, choices=list(TYPES))
+    new.add_argument("--series", help="the allocation pool, e.g. LIT")
+    new.add_argument("--phase", help="file straight into backlog/ under this phase")
+    new.add_argument("--target", action="append", default=[])
+    new.add_argument("--priority", choices=list(PRIORITIES))
+    new.set_defaults(run=verb_new)
+
+    def moving(name, helptext, extras=()):
+        sub = subs.add_parser(name, parents=[common, actorish], help=helptext)
+        sub.add_argument("id")
+        sub.add_argument("--priority", choices=list(PRIORITIES))
+        sub.add_argument("--target", action="append", default=[])
+        for adder in extras:
+            adder(sub)
+        return sub
+
+    moving(
+        "graduate",
+        "triage/ → backlog/ (assign a phase)",
+        [lambda s: s.add_argument("--phase")],
+    ).set_defaults(run=verb_graduate)
+    moving("demote", "backlog/ → triage/ (drop the phase)").set_defaults(
+        run=verb_demote
+    )
+    moving("start", "backlog/ → active/").set_defaults(run=verb_start)
+    moving("park", "active/ → backlog/").set_defaults(run=verb_park)
+    moving(
+        "block",
+        "→ blocked/",
+        [lambda s: s.add_argument("--reason", help="what is in the way")],
+    ).set_defaults(run=verb_block)
+    moving(
+        "unblock",
+        "blocked/ → wherever it came from",
+        [lambda s: s.add_argument("--to", choices=["backlog", "active", "review"])],
+    ).set_defaults(run=verb_unblock)
+    moving("submit", "active/ → review/").set_defaults(run=verb_submit)
+    moving("reject", "review/ → active/ (--note names the gate)").set_defaults(
+        run=verb_reject
+    )
+    moving(
+        "pass",
+        "review/ → completed/ (the done-gate moment)",
+        [
+            lambda s: s.add_argument("--evidence", help="how the gate was satisfied"),
+            lambda s: s.add_argument("--phase"),
+        ],
+    ).set_defaults(run=verb_pass)
+    moving(
+        "close",
+        "→ closed/ (ended without being done)",
+        [
+            lambda s: s.add_argument(
+                "--resolution", required=True, choices=list(RESOLUTIONS)
+            ),
+            lambda s: s.add_argument("--ref", help="the task that supersedes it"),
+            lambda s: s.add_argument("--phase"),
+        ],
+    ).set_defaults(run=verb_close)
+    moving(
+        "reopen",
+        "completed|closed → active/, backlog/ or triage/",
+        [
+            lambda s: s.add_argument("--to", choices=["triage", "backlog", "active"]),
+            lambda s: s.add_argument("--phase"),
+        ],
+    ).set_defaults(run=verb_reopen)
+
+    listing = subs.add_parser("list", parents=[common], help="show the ledger")
+    listing.add_argument("--stage", choices=list(STAGES))
+    listing.add_argument("--phase")
+    listing.add_argument("--type", choices=list(TYPES))
+    listing.add_argument("--priority", choices=list(PRIORITIES))
+    listing.add_argument("--target", action="append", default=[])
+    listing.set_defaults(run=verb_list)
+
+    show = subs.add_parser("show", parents=[common], help="one task in full")
+    show.add_argument("id")
+    show.set_defaults(run=verb_show)
+
+    log = subs.add_parser("history", parents=[common], help="the transition log")
+    log.add_argument("id", nargs="?")
+    log.set_defaults(run=verb_history)
+
+    subs.add_parser("stages", parents=[common], help="count by stage").set_defaults(
+        run=verb_stages
+    )
+    subs.add_parser(
+        "where", parents=[common], help="what this driver resolved"
+    ).set_defaults(run=verb_where)
+
+    return parser
+
+
+def main(argv):
+    signal.signal(signal.SIGINT, _on_signal)
+    signal.signal(signal.SIGTERM, _on_signal)
+    parser = make_parser()
+    args = parser.parse_args(argv)
+    if not getattr(args, "verb", None):
+        parser.print_help()
+        return 2
+    try:
+        ledger = Ledger.discover(getattr(args, "root", None))
+        return args.run(ledger, args)
+    except Abort as exc:
+        sys.stderr.write("✗ %s\n" % exc)
+        if exc.hint:
+            sys.stderr.write("  %s\n" % exc.hint)
+        return exc.code
+    except BrokenPipeError:
+        # `task list | head` closed the far end. That is not an error.
+        return 0
+    finally:
+        # Python flushes stdout on the way out; if the reader has already
+        # gone away that raises, and the process exits 120 with a scary
+        # message. Point the descriptor at nowhere and exit cleanly.
+        try:
+            sys.stdout.flush()
+        except (BrokenPipeError, ValueError):
+            try:
+                os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+            except OSError:
+                pass
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

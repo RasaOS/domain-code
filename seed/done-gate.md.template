@@ -1,0 +1,86 @@
+# Done-gate
+
+**This file is yours.** `.claude/task-rules.md` is the portable task
+lifecycle and deliberately does not decide what *done* means here. This file
+does. `rasa.domain.code` seeds it with the engineering bar below; edit the
+commands to match your `CLAUDE.md`, and tighten it as the project earns it.
+`/sync` and `bin/init` never overwrite it.
+
+## Where the gate runs
+
+In this domain the stages line up with the pull request:
+
+| stage | means here |
+|---|---|
+| `active/` | the branch is being worked; no PR, or a draft PR |
+| `review/` | the PR is open and ready — **this gate has not passed yet** |
+| `completed/` | every gate below passed **and the PR merged** |
+
+A task moves `review/` → `completed/` with `.claude/bin/task pass <id> --by
+<who>` only when **both** hold:
+
+1. every acceptance criterion on the task is met and actually verified, and
+2. **every gate below passes.**
+
+If a gate fails, `.claude/bin/task reject <id> --note "gate: <which>"` sends
+it back to `active/`. It does not sit in `review/` waiting to be forgiven,
+and no gate is waived to finish faster: no disabled test, no `--no-verify`,
+no "it passes locally".
+
+## Where the evidence goes
+
+Into the task's `## Completion report` (task-rules.md §11), before `pass`
+moves it: the real test count and time, the build result, the PR number.
+The `--note` on `pass` names the gate in `tasks/history.tsv`, for example
+`gate: build clean, 214 tests green, PR #88 merged`.
+
+---
+
+## Gates
+
+> Each gate names a command. The command strings live in `CLAUDE.md` — this
+> file names *which* check must pass; `CLAUDE.md` says how to run it.
+
+- [ ] **Build** — the project's build command succeeds with no new warnings.
+- [ ] **Verification suite** — the project's test command passes **headless /
+      non-interactive**, unfiltered, from a clean start. This is the gate, not
+      the watched or focused variant. Record the count and the time.
+- [ ] **Paired test** — a `change` or `defect` task ships with a test that
+      fails without the change and passes with it, per the project's
+      test-pairing convention in `CLAUDE.md`. An `upkeep`, `inquiry` or
+      `record` task states why none applies.
+- [ ] **Run check** — the project's run command boots and the affected flow
+      works; no new console or log errors on the paths it touches.
+- [ ] **In scope** — nothing outside the task's expected files changed, or the
+      task was amended first and says why.
+- [ ] **Merged** — the PR is merged to the integration branch (`main` unless
+      `git-flow-rules.md` says otherwise). An open PR is `review/`, not done.
+
+A docs-only change still runs the verification command before its PR — it
+proves nothing else broke. If you skip it, say so in the report, with the
+reason.
+
+---
+
+## Optional gates
+
+Paste any of these above the line when the project is ready for them.
+
+```markdown
+- [ ] A second reviewer who did not write the change approved the PR.
+- [ ] Coverage did not drop below the floor in `CLAUDE.md`.
+- [ ] The migration ran forward and back on a copy of production data.
+- [ ] The release note / CHANGELOG entry is written.
+```
+
+---
+
+## Two things this file is not
+
+**It is not the lifecycle.** How tasks move and what the frontmatter holds is
+`.claude/task-rules.md`, the same in every RasaOS domain.
+
+**It is not the engineering house rules.** Branching, PR shape, the change
+ledger, hotfixes and postmortems are in `.claude/code-task-rules.md`. Keep
+this file to the gate itself; a done-gate that grows into a style guide stops
+being read at the moment it matters.
