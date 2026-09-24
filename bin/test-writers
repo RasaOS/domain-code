@@ -71,6 +71,7 @@ check() { local l="$1"; shift; if "$@"; then ok "$l"; else bad "$l"; fi; }
 sum()  { cksum < "$1"; }
 mode() { ls -l "$1" | cut -c1-10; }
 same() { [ "$1" = "$2" ]; }
+has_text() { printf '%s\n' "$1" | grep -qF -- "$2"; }
 # lines of <file> that do NOT end in CR
 lf_lines() { LC_ALL=C grep -c -v "$(printf '\r')\$" "$1" || true; }
 to_crlf()  { LC_ALL=C awk '{ printf "%s\r\n", $0 }' "$1" > "$1.x"; mv "$1.x" "$1"; }
@@ -124,6 +125,11 @@ golden_run() {
     f="$(ls deploys/records/ENV-*.md 2>/dev/null | head -1)"
     [ -n "$f" ] || exit 1
     mask < "$f" > "$O/env-transfer.md"
+    bash .claude/skills/import-env/import-env.sh add API_TOKEN --purpose secret --required true \
+      --group api --description "The API token" --environments "local, staging" >/dev/null 2>&1 || exit 1
+    mask < env/stamps/api-token.md > "$O/env-stamp.md"
+    bash .claude/skills/import-env/import-env.sh add-profile API_TOKEN prod >/dev/null 2>&1 || exit 1
+    mask < env/stamps/api-token.md > "$O/env-stamp-profiled.md"
     bash .claude/skills/task-enforce/task-enforce.sh on >/dev/null 2>&1 || exit 1
     # A fixed template, so this golden follows the writers and not the
     # wording of the template the Element ships.
@@ -140,7 +146,7 @@ golden_run() {
   )
 }
 
-GOLDEN_FILES="deploy-open.md deploy-closed.md run-open.md run-closed.md env-transfer.md task-filed.md task-stamped.md"
+GOLDEN_FILES="deploy-open.md deploy-closed.md run-open.md run-closed.md env-transfer.md env-stamp.md env-stamp-profiled.md task-filed.md task-stamped.md"
 
 if [ -n "$EMIT" ]; then
   mkdir -p "$EMIT"
@@ -357,6 +363,41 @@ check "an unwritable ledger stops the transfer before anything is sent (rc $rc)"
 rm -f "$P/deploys"
 rc=0; es push staging "tester@localhost:$P/remote/d" >/dev/null 2>&1 || rc=$?
 check "a clean push is sent and recorded (rc $rc)" same "$rc:$(sent d):$(nenv)" "0:sent:1"
+
+# ── import-env ───────────────────────────────────────────────────────────────
+echo "import-env"
+P="$T/ie"; install "$P"
+ie()    { ( cd "$P" && bash .claude/skills/import-env/import-env.sh "$@" ); }
+stamp() { printf '%s' "$P/env/stamps/$1.md"; }
+exists() { [ -e "$1" ] && echo stamp || echo no-stamp; }
+rc=0; ie add STRIPE_SECRET_KEY --required false --default sk_test_x >/dev/null 2>&1 || rc=$?
+check "a secret's value is refused as a committed default (rc $rc)" same "$rc:$(exists "$(stamp stripe-secret-key)")" "3:no-stamp"
+rc=0; err="$(ie add STRIPE_SECRET_KEY --purpose config --required false --default abc 2>&1 >/dev/null)" || rc=$?
+check "an explicit --purpose wins (rc $rc, purpose: $(key "$(stamp stripe-secret-key)" purpose))" same "$rc:$(key "$(stamp stripe-secret-key)" purpose)" "0:config"
+check "…and the disagreement is said out loud" has_text "$err" "warning:"
+ie add DB_PASSWORD --required true >/dev/null 2>&1
+check "an omitted --purpose is the classifier's ($(key "$(stamp db-password)" purpose))" same "$(key "$(stamp db-password)" purpose)" secret
+rc=0; ie add DATABASE_URL --required false --default 'postgres://app:hunter2@db/app' >/dev/null 2>&1 || rc=$?
+check "a URL default carrying a password is refused (rc $rc)" same "$rc:$(exists "$(stamp database-url)")" "3:no-stamp"
+rc=0; ie add SERVICE_URL --required false --default 'https://svc:8080/a@b' >/dev/null 2>&1 || rc=$?
+check "…but a port and an @ in the path are not a password (rc $rc)" same "$rc" 0
+rc=0; ie add FOO_NAME --group "$(printf 'a\nstatus: forged')" >/dev/null 2>&1 || rc=$?
+check "a newline in --group is refused, no stamp written (rc $rc)" same "$rc:$(exists "$(stamp foo-name)")" "2:no-stamp"
+rc=0; ie add '../x' >/dev/null 2>&1 || rc=$?
+check "a key that is not a variable name is refused (rc $rc)" same "$rc:$(exists "$P/env/x.md")" "2:no-stamp"
+rc=0; ie add BAR_NAME --environments 'local, pr]od' >/dev/null 2>&1 || rc=$?
+check "an array item outside the safe set is refused (rc $rc)" same "$rc:$(exists "$(stamp bar-name)")" "2:no-stamp"
+
+ie add PROFILED_KEY --environments prod-eu >/dev/null 2>&1
+f="$(stamp profiled-key)"; printf 'environments: [example]\n' >> "$f"; chmod 644 "$f"
+ie add-profile PROFILED_KEY prod >/dev/null 2>&1
+check "add-profile adds prod beside prod-eu ($(key "$f" environments))" same "$(key "$f" environments)" "[prod-eu, prod]"
+check "…leaves the body's environments line alone" same "$(grep -c '^environments: \[example\]$' "$f")" 1
+check "…and keeps the mode ($(mode "$f"))" same "$(mode "$f")" "-rw-r--r--"
+h="$(sum "$f")"; rc=0; ie add-profile PROFILED_KEY 'st&ge' >/dev/null 2>&1 || rc=$?
+check "a profile that is not a plain name is refused (rc $rc), stamp untouched" same "$rc:$(sum "$f")" "2:$h"
+to_crlf "$f"; ie add-profile PROFILED_KEY staging >/dev/null 2>&1
+check "add-profile on a CRLF stamp keeps CRLF ($(key "$f" environments))" same "$(key "$f" environments):$(lf_lines "$f")" "[prod-eu, prod, staging]:0"
 
 # ── git-guard ────────────────────────────────────────────────────────────────
 echo "git-guard"
