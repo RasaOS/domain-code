@@ -92,9 +92,11 @@ jobs:
           PATH="$shim:$PATH" bash bin/test-contract
 
       # The shared frontmatter library (content/lib/domain-code/) under mawk:
-      # the corpus through both twins, the writer contract, the YAML check
-      # and the exact-fence mutation. Part 4, the grep gate, is advisory
-      # until the reader/writer sweep lands.
+      # the corpus through both twins, the writer contract, the YAML check,
+      # the exact-fence mutation, and part 4 — the grep gate, hard since the
+      # 0.54.0 sweep: an exact-fence reader, a $TMPDIR temp renamed over a
+      # record, an unmarked `awk -v`, `sed -i` or a `grep '^key:'` reader in
+      # shipped content fails the build.
       - name: Frontmatter contract (mawk)
         run: |
           set -euo pipefail

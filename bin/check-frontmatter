@@ -17,24 +17,26 @@
 #              YAML would misread is kept byte-for-byte rather than quoted.
 #              Skipped, and said so, when PyYAML is absent.
 # 4. grep      no exact-fence reader, no `> "$tmp" && mv` writer, no
-#              unmarked `awk -v NAME="$var"`, no `sed -i`, no `\A---`, outside
-#              the library and the vendored files. A reviewed exception
-#              carries a trailing `# rfm-ok: <reason>`. Reported, not failed,
-#              until the sweep lands; --strict makes it fail.
+#              unmarked `awk -v NAME="$var"`, no `sed -i`, no `\A---`, and in
+#              shipped content no `grep '^key:'` reader — outside the library
+#              and the vendored files. A reviewed exception carries a trailing
+#              `# rfm-ok: <reason>`; a comment line is not a hit. A hard gate
+#              since the 0.54.0 sweep; --advisory lists without failing.
 # 5. mutation  the corpus is re-run against a copy of the library whose
 #              fence test is exact-match (`/^---$/`); it must FAIL, or the
 #              corpus is not testing what it claims to.
 #
-# Usage: bin/check-frontmatter [--strict]
+# Usage: bin/check-frontmatter [--advisory]
+#   (--strict, the old spelling of the default, is still accepted)
 # Exit: 0 clean, 1 findings, 2 usage.
 
 set -euo pipefail
-STRICT=0
+STRICT=1
 case "${1:-}" in
-  "") ;;
-  --strict) STRICT=1 ;;
-  -h|--help) sed -n '3,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-  *) echo "usage: bin/check-frontmatter [--strict]" >&2; exit 2 ;;
+  ""|--strict) ;;
+  --advisory) STRICT=0 ;;
+  -h|--help) sed -n '3,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  *) echo "usage: bin/check-frontmatter [--advisory]" >&2; exit 2 ;;
 esac
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -219,7 +221,7 @@ else
 fi
 
 # ── 4. grep gate ────────────────────────────────────────────────────────────
-echo "4. grep gate$([ "$STRICT" = 1 ] && echo ' (strict)' || echo ' (advisory until the sweep)')"
+echo "4. grep gate$([ "$STRICT" = 1 ] || echo ' (advisory — hits are listed, not failed)')"
 vendored="$(python3 -B -c 'import json; d=json.load(open("vendored.json")); print("\n".join(e["path"] for k,v in d.items() if isinstance(v,dict) for e in v.get("files",[])))' 2>/dev/null || true)"
 excl=()
 while IFS= read -r p; do [ -n "$p" ] && excl+=(":!$p"); done <<EOF
@@ -246,7 +248,7 @@ if [ -n "$hits" ]; then
     printf '%s\n' "$hits" | sed 's/^/  ✗ /'; fail=$((fail + n))
   else
     printf '%s\n' "$hits" | sed 's/^/  · /'
-    echo "   $n site(s) still to convert — advisory; --strict fails on them"
+    echo "   $n site(s) — without --advisory these fail the gate"
   fi
 else
   echo "   clean"

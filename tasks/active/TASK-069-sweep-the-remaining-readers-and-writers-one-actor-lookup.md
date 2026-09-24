@@ -13,11 +13,11 @@ phase: P2
 ## Acceptance criteria
 
 - [x] env-sync keeps its commit-less-repo idiom and no longer returns 0 silently when its ledger cannot be written.
-- [ ] Every remaining reader uses the library; `environment.sh` and `runtime.sh` use `frontmatter.py` and warn on a stamp they cannot read instead of skipping it.
+- [x] Every remaining reader uses the library; `environment.sh` and `runtime.sh` use `frontmatter.py` and warn on a stamp they cannot read instead of skipping it.
 - [x] One `rasa_actor`, in the library: it refuses control characters and identities over 128 characters, and is resolved once, before the first write.
 - [x] `phase: Phase 3: Foo # x` reads back verbatim.
 - [x] `test-rules.md` no longer teaches the broken reader.
-- [ ] `bin/check-frontmatter` part 4 — a grep gate banning exact-fence readers, `> "$tmp" && mv`, unmarked `awk -v NAME="$var"`, `grep '^key:'` readers, `sed -i` and `\\A---` — is clean and runs as a hard CI step; exempt sites carry a `# rfm-ok:` marker.
+- [x] `bin/check-frontmatter` part 4 — a grep gate banning exact-fence readers, `> "$tmp" && mv`, unmarked `awk -v NAME="$var"`, `grep '^key:'` readers, `sed -i` and `\\A---` — is clean and runs as a hard CI step; exempt sites carry a `# rfm-ok:` marker.
 
 ## Notes
 
@@ -44,4 +44,7 @@ phase: P2
   - CI: the ubuntu job gets `actions/setup-python`, because the runner's system Python refuses `pip install` (PEP 668), which would have failed the PyYAML step added in TASK-065.
 - Gates: check-frontmatter clean, check-manifest, check-bash32 (54 files), check-invocations, schema OK, test-contract 40/40, test-root 21/21, test-release 16/16, test-writers 72/72, test-readers 14/14, reader parity 0 unexplained, every script parses, and the approval gate's three CI checks behave as before.
 - Bookkeeping note (following the TASK-056 precedent): TASK-018's first criterion, "All three title parsers ignore frontmatter; verified against a fixture", was ticked while `dashboard.py`'s parser could not match. Its regex was double-escaped in a raw string and never matched until 0.53.0 fixed the escaping, and after that it matched exact LF fences only. It moves onto `frontmatter.title` here, with a fixture in `bin/test-readers` (a BOM, CRLF and a `#` comment in the frontmatter) that 0.53.1 fails.
+- Part two, the gate made hard. TASK-070 (99aeefe) rebuilt import-env's `add-profile` on the library, which removed the last reader and the gate's last three sites. `bin/check-frontmatter` now fails on any hit by default; `--advisory` lists hits without failing, and `--strict` is still accepted. CI runs the default on ubuntu (mawk) and macOS (bash 3.2).
+- Probe: with a planted `awk -v k="$1"` in shipped content the gate exits 1 and names the line; with `--advisory` it exits 0; with the line removed it exits 0 again.
+- The hits are reviewed exceptions, and each one carries a `# rfm-ok:` marker with its reason. In `bin/test-contract` and `bin/test-writers` they are the fixtures that build damaged or hostile files. The comment lines that quote the old code are not hits.
 
