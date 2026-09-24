@@ -80,6 +80,19 @@ jobs:
           ln -s "$(command -v mawk)" "$shim/awk"
           PATH="$shim:$PATH" bash bin/test-contract
 
+      # The shared frontmatter library (content/lib/domain-code/) under mawk:
+      # the corpus through both twins, the writer contract, the YAML check
+      # and the exact-fence mutation. Part 4, the grep gate, is advisory
+      # until the reader/writer sweep lands.
+      - name: Frontmatter contract (mawk)
+        run: |
+          set -euo pipefail
+          command -v mawk >/dev/null || sudo apt-get install -y mawk
+          python3 -m pip install --quiet pyyaml
+          shim="$(mktemp -d)"
+          ln -s "$(command -v mawk)" "$shim/awk"
+          PATH="$shim:$PATH" bash bin/check-frontmatter
+
   macos:
     name: runs on stock macOS bash
     runs-on: macos-latest
@@ -102,6 +115,10 @@ jobs:
       # runs contract.sh with its own interpreter, so this IS bash 3.2.
       - name: Contract lock tests (bash 3.2)
         run: /bin/bash bin/test-contract
+
+      # The frontmatter contract under stock bash 3.2 and BWK awk.
+      - name: Frontmatter contract (bash 3.2)
+        run: /bin/bash bin/check-frontmatter
 
       # The approval gate must (a) auto-approve under FORCE_APPROVAL=1 and
       # (b) fail CLOSED with no controlling terminal. A CI runner has no

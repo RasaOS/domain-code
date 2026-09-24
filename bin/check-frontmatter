@@ -1,0 +1,216 @@
+#!/usr/bin/env bash
+#
+# bin/check-frontmatter — the frontmatter contract is a program, not prose.
+#
+# Repo tooling: lives in bin/, is not registered in rasa.json, and is never
+# installed into a consumer.
+#
+# 1. corpus    every row of test/frontmatter/expect.tsv, through BOTH
+#              content/lib/domain-code/frontmatter.sh and frontmatter.py. A
+#              wrong value, a wrong rc, or the twins disagreeing fails.
+# 2. writer    rfm_set on every fixture: read-back; untouched bytes (BOM,
+#              CRLF, body) and the file mode preserved; a duplicate key, a
+#              malformed block, a control character or a blank-edged value
+#              refused with the file left byte-identical; no temp files left.
+# 3. yaml      writes are verbatim (no quoting until a later release): the
+#              plain values records hold round-trip under PyYAML, and a value
+#              YAML would misread is kept byte-for-byte rather than quoted.
+#              Skipped, and said so, when PyYAML is absent.
+# 4. grep      no exact-fence reader, no `> "$tmp" && mv` writer, no
+#              unmarked `awk -v NAME="$var"`, no `sed -i`, no `\A---`, outside
+#              the library and the vendored files. A reviewed exception
+#              carries a trailing `# rfm-ok: <reason>`. Reported, not failed,
+#              until the sweep lands; --strict makes it fail.
+# 5. mutation  the corpus is re-run against a copy of the library whose
+#              fence test is exact-match (`/^---$/`); it must FAIL, or the
+#              corpus is not testing what it claims to.
+#
+# Usage: bin/check-frontmatter [--strict]
+# Exit: 0 clean, 1 findings, 2 usage.
+
+set -euo pipefail
+STRICT=0
+case "${1:-}" in
+  "") ;;
+  --strict) STRICT=1 ;;
+  -h|--help) sed -n '3,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  *) echo "usage: bin/check-frontmatter [--strict]" >&2; exit 2 ;;
+esac
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT"
+LIBDIR="content/lib/domain-code"
+FX="test/frontmatter/fixtures"
+fail=0
+bad() { printf '  ✗ %s\n' "$*"; fail=$((fail + 1)); }
+
+T="$(mktemp -d)"
+trap 'rm -rf "$T"' EXIT
+
+# corpus <libdir> — run expect.tsv through the bash lib in <libdir> and the
+# python twin; print one line per failure, nothing when clean.
+corpus() {
+  bash -c '
+    set -u
+    . "$1/frontmatter.sh"
+    FX="$2"
+    while IFS="|" read -r file fn key want_rc want_val; do
+      [ -n "$file" ] || continue
+      got="" rc=0
+      case "$fn" in
+        get)    got="$(rfm_get "$FX/$file" "$key" 2>/dev/null)" || rc=$? ;;
+        scalar) got="$(rfm_get_scalar "$FX/$file" "$key" 2>/dev/null)" || rc=$? ;;
+        child)  got="$(rfm_get_child "$FX/$file" "${key%%.*}" "${key#*.}" 2>/dev/null)" || rc=$? ;;
+        title)  got="$(rfm_title "$FX/$file")" || rc=$? ;;
+      esac
+      [ "$rc" = "$want_rc" ] || echo "sh  $file $fn $key: rc $rc, want $want_rc"
+      [ "$rc" != 0 ] || [ "$got" = "$want_val" ] || echo "sh  $file $fn $key: [$got], want [$want_val]"
+    done < test/frontmatter/expect.tsv
+  ' _ "$1" "$FX"
+  python3 -B - "$1" "$FX" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+import frontmatter as f
+fx = sys.argv[2]
+for row in open("test/frontmatter/expect.tsv", encoding="utf-8"):
+    row = row.rstrip("\n")
+    if not row:
+        continue
+    file, fn, key, want_rc, want_val = row.split("|", 4)
+    text = open(fx + "/" + file, encoding="utf-8", newline="").read()
+    try:
+        if fn == "title":
+            rc, v = "0", f.title(text)
+        else:
+            if fn == "child":
+                p, c = key.split(".", 1)
+                v = f.child(text, p, c)
+            else:
+                v = f.get(text, key)
+                if fn == "scalar":
+                    v = f.scalar(v)
+            rc = "1" if v is None else "0"
+    except (ValueError, LookupError):
+        rc, v = "3", None
+    if rc != want_rc:
+        print("py  %s %s %s: rc %s, want %s" % (file, fn, key, rc, want_rc))
+    elif rc == "0" and v != want_val:
+        print("py  %s %s %s: [%s], want [%s]" % (file, fn, key, v, want_val))
+PY
+}
+
+# shellcheck source=../content/lib/domain-code/frontmatter.sh
+. "$LIBDIR/frontmatter.sh"
+
+# ── 1. corpus ───────────────────────────────────────────────────────────────
+echo "1. corpus (bash lib vs python twin)"
+rows="$(grep -c . test/frontmatter/expect.tsv)"
+out="$(corpus "$LIBDIR")"
+if [ -n "$out" ]; then printf '%s\n' "$out" | while IFS= read -r l; do printf '  ✗ %s\n' "$l"; done
+  fail=$((fail + $(printf '%s\n' "$out" | grep -c .))); fi
+echo "   $rows rows, both twins"
+
+# ── 2. writer ───────────────────────────────────────────────────────────────
+echo "2. writer (rfm_set)"
+sum() { cksum < "$1"; }
+mode() { ls -l "$1" | cut -c1-10; }
+for f in lf crlf bom bom-crlf trail-open trail-close; do
+  cp "$FX/$f.md" "$T/$f.md"; chmod 644 "$T/$f.md"
+  crs_before="$(LC_ALL=C tr -cd '\r' < "$T/$f.md" | wc -c | tr -d ' ')"
+  rfm_set "$T/$f.md" status success x-new "v: 1 # two" 2>/dev/null || bad "$f: rfm_set failed"
+  [ "$(rfm_get "$T/$f.md" status)" = success ] || bad "$f: status not rewritten"
+  [ "$(rfm_get "$T/$f.md" x-new)" = "v: 1 # two" ] || bad "$f: inserted key did not round-trip verbatim"
+  [ "$(rfm_body "$T/$f.md" | cksum)" = "$(rfm_body "$FX/$f.md" | cksum)" ] || bad "$f: body bytes changed"
+  crs_after="$(LC_ALL=C tr -cd '\r' < "$T/$f.md" | wc -c | tr -d ' ')"
+  case "$f" in
+    *crlf*) [ "$crs_after" = $((crs_before + 1)) ] || bad "$f: CRLF not preserved ($crs_before -> $crs_after)" ;;
+    *)      [ "$crs_after" = 0 ] || bad "$f: CR introduced" ;;
+  esac
+  case "$f" in bom*) [ "$(head -c 3 "$T/$f.md" | od -An -tx1 | tr -d ' \n')" = efbbbf ] || bad "$f: BOM dropped" ;; esac
+  [ "$(mode "$T/$f.md")" = "-rw-r--r--" ] || bad "$f: file mode changed to $(mode "$T/$f.md")"
+done
+for f in dup unterminated no-fm empty; do
+  cp "$FX/$f.md" "$T/$f.md"; before="$(sum "$T/$f.md")"
+  if rfm_set "$T/$f.md" status success 2>/dev/null; then bad "$f: write accepted"; fi
+  [ "$(sum "$T/$f.md")" = "$before" ] || bad "$f: refused write still changed the file"
+done
+cp "$FX/dup.md" "$T/d.md"; rc=0; rfm_set "$T/d.md" status success 2>/dev/null || rc=$?
+[ "$rc" = 4 ] || bad "duplicate key: rc $rc, want 4"
+cp "$FX/lf.md" "$T/v.md"; before="$(sum "$T/v.md")"
+for v in "$(printf 'a\nstatus: forged')" "$(printf 'a\rb')" "$(printf 'a\tb')" ' lead' 'trail '; do
+  rc=0; rfm_set "$T/v.md" owner "$v" 2>/dev/null || rc=$?
+  [ "$rc" = 2 ] || bad "value [$v] accepted or wrong rc ($rc)"
+  rc=0; rfm_line owner "$v" >/dev/null 2>&1 || rc=$?
+  [ "$rc" = 2 ] || bad "rfm_line accepted [$v] ($rc)"
+done
+[ "$(sum "$T/v.md")" = "$before" ] || bad "a refused value still changed the file"
+rfm_set "$T/v.md" owner 'a\nstatus: forged' 2>/dev/null || bad "literal backslash-n refused"
+[ "$(rfm_get "$T/v.md" owner)" = 'a\nstatus: forged' ] || bad "literal backslash-n was expanded"
+[ "$(rfm_get "$T/v.md" status)" = in-flight ] || bad "literal backslash-n forged a key"
+[ -z "$(ls -A "$T" | grep '^\.rfm' || true)" ] || bad "temp files left behind"
+( RASA_ACTOR="$(printf 'bot\nstatus: success')"; if rasa_actor >/dev/null 2>&1; then exit 1; fi ) \
+  || bad "rasa_actor accepted a control character"
+( RASA_ACTOR="$(printf '%0129d' 0)"; if rasa_actor >/dev/null 2>&1; then exit 1; fi ) \
+  || bad "rasa_actor accepted an identity over 128 characters"
+[ "$(RASA_ACTOR='  ci-bot  ' rasa_actor)" = ci-bot ] || bad "rasa_actor did not trim"
+
+# ── 3. yaml ─────────────────────────────────────────────────────────────────
+echo "3. yaml (verbatim writes)"
+if python3 -B -c 'import yaml' 2>/dev/null; then
+  for v in 'DEP-20260924-101500-staging' 'v1.4.2-9f3a1c7-staging' '2026-09-24 10:15:00 UTC' \
+           'in-flight' 'success' 'ci-bot' 'staging' 'task/TASK-065-shared-frontmatter' '42' \
+           'invocation' 'a1b2c3d' 'deploys/records/DEP-1.md'; do
+    line="$(rfm_line description "$v")"
+    got="$(python3 -B -c 'import sys,yaml; print(yaml.safe_load(sys.argv[1])["description"])' "$line" 2>&1)" \
+      || { bad "yaml: plain value [$v] does not parse"; continue; }
+    [ "$got" = "$v" ] || bad "yaml: [$v] reads back as [$got]"
+  done
+  for v in 'foo: bar' 'see #42' '[draft] x'; do
+    [ "$(rfm_line description "$v")" = "description: $v" ] || bad "yaml: [$v] was not written verbatim"
+  done
+else
+  echo "   SKIP — PyYAML not installed (the corpus and writer checks still ran)"
+fi
+
+# ── 4. grep gate ────────────────────────────────────────────────────────────
+echo "4. grep gate$([ "$STRICT" = 1 ] && echo ' (strict)' || echo ' (advisory until the sweep)')"
+vendored="$(python3 -B -c 'import json; d=json.load(open("vendored.json")); print("\n".join(e["path"] for k,v in d.items() if isinstance(v,dict) for e in v.get("files",[])))' 2>/dev/null || true)"
+excl=()
+while IFS= read -r p; do [ -n "$p" ] && excl+=(":!$p"); done <<EOF
+$vendored
+EOF
+hits="$(git grep -n -E \
+  -e '\$0 *== *"---"' -e "/\^---\\$/" -e "'\^---\\$'" -e '\^---\\n' -e "strip\(\) *[!=]= *'---'" \
+  -e '> *"\$tmp" *&& *mv ' \
+  -e 'awk [^|]*-v +[A-Za-z_]+="\$' \
+  -e 'sed -i' -e '\\\\A---' \
+  -- content bin ':!content/lib/*' ':!bin/check-frontmatter' ':!*.md' "${excl[@]}" | grep -v '# rfm-ok:' || true)"
+if [ -n "$hits" ]; then
+  n="$(printf '%s\n' "$hits" | grep -c .)"
+  if [ "$STRICT" = 1 ]; then
+    printf '%s\n' "$hits" | sed 's/^/  ✗ /'; fail=$((fail + n))
+  else
+    printf '%s\n' "$hits" | sed 's/^/  · /'
+    echo "   $n site(s) still to convert — advisory; --strict fails on them"
+  fi
+else
+  echo "   clean"
+fi
+
+# ── 5. mutation ─────────────────────────────────────────────────────────────
+echo "5. mutation (exact-match fences must fail the corpus)"
+mkdir -p "$T/mut"
+cp "$LIBDIR/frontmatter.py" "$T/mut/"
+sed 's#function is_fence(l) { return l ~ /^---\[ \\t\]\*\$/ }#function is_fence(l) { return l ~ /^---$/ }#' \
+  "$LIBDIR/frontmatter.sh" > "$T/mut/frontmatter.sh"
+if cmp -s "$LIBDIR/frontmatter.sh" "$T/mut/frontmatter.sh"; then
+  bad "mutation: could not mutate is_fence — the gate would not notice a regression"
+else
+  mut="$(corpus "$T/mut" | grep -c '^sh ' || true)"
+  if [ "${mut:-0}" -gt 0 ]; then echo "   the mutated library fails $mut corpus row(s) — the corpus catches it"
+  else bad "mutation: an exact-match fence passed the whole corpus"; fi
+fi
+
+echo
+if [ "$fail" -eq 0 ]; then echo "bin/check-frontmatter: clean"; exit 0; fi
+echo "bin/check-frontmatter: $fail finding(s)"; exit 1
