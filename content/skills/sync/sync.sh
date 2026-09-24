@@ -309,7 +309,7 @@ archive() {
 
 list_group() {
   # list_group <plan-output> <header-prefix> — the paths under one plan group
-  printf '%s\n' "$1" | awk -v h="$2" 'index($0, h) == 1 {on=1; next} /^$/ {on=0} on && /^  / {sub(/^  /, ""); print}'
+  printf '%s\n' "$1" | SYNC_H="$2" awk 'index($0, ENVIRON["SYNC_H"]) == 1 {on=1; next} /^$/ {on=0} on && /^  / {sub(/^  /, ""); print}'
 }
 
 cmd_apply() {

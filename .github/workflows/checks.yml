@@ -45,6 +45,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # A Python whose site-packages pip may write to: the runner's system
+      # Python refuses `pip install` (PEP 668). PyYAML lets check-frontmatter
+      # part 3 and bin/test-readers' environment and runtime cases run here
+      # instead of skipping.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: PyYAML for the YAML checks
+        run: python -m pip install --quiet pyyaml
+
       # Hard gate. This is NOT redundant with `bash -n` below: this runner
       # has bash 5, where every bash-4-ism parses clean. Before v0.43.1 all
       # 40 shipped scripts passed `bash -n` while the production approval
@@ -88,7 +99,6 @@ jobs:
         run: |
           set -euo pipefail
           command -v mawk >/dev/null || sudo apt-get install -y mawk
-          python3 -m pip install --quiet pyyaml
           shim="$(mktemp -d)"
           ln -s "$(command -v mawk)" "$shim/awk"
           PATH="$shim:$PATH" bash bin/check-frontmatter
@@ -102,17 +112,18 @@ jobs:
           ln -s "$(command -v mawk)" "$shim/awk"
           PATH="$shim:$PATH" bash bin/test-root
 
-      # The record writers: the release tracker's golden history and hostile
-      # values, the writers driven inside a real bin/init install (with
-      # 0.53.1's output as the golden), and the library's readers against the
-      # readers they replaced, on this repo's own ledger.
-      - name: Record writers (mawk)
+      # The records: the release tracker's golden history and hostile values;
+      # the writers and the readers driven inside a real bin/init install
+      # (with 0.53.1's output as the writers' golden); and the library's
+      # readers against the readers they replaced, on this repo's own ledger.
+      - name: Record writers and readers (mawk)
         run: |
           set -euo pipefail
           shim="$(mktemp -d)"
           ln -s "$(command -v mawk)" "$shim/awk"
           PATH="$shim:$PATH" bash bin/test-release
           PATH="$shim:$PATH" bash bin/test-writers
+          PATH="$shim:$PATH" bash bin/test-readers
           PATH="$shim:$PATH" bash bin/check-reader-parity
 
   macos:
@@ -145,10 +156,11 @@ jobs:
       - name: Install-root resolution (bash 3.2)
         run: /bin/bash bin/test-root
 
-      - name: Record writers (bash 3.2)
+      - name: Record writers and readers (bash 3.2)
         run: |
           /bin/bash bin/test-release
           /bin/bash bin/test-writers
+          /bin/bash bin/test-readers
           /bin/bash bin/check-reader-parity
 
       # The approval gate must (a) auto-approve under FORCE_APPROVAL=1 and

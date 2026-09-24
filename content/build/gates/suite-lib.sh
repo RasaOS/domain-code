@@ -12,6 +12,24 @@
 #
 # bash 3.2 compatible (no associative arrays, no mapfile, no ${x^^}).
 
+# The shared record library: frontmatter.sh for the stamp reader, and its
+# Python twin frontmatter.py for suite_tests. build/ installs at the project
+# root, beside .claude/; the Element's own tree keeps the library at
+# content/lib. Missing, it stops the caller (rc 70) — a test gate that cannot
+# read its suite must not pass.
+_sl_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SL_LIB_DIR=""
+for _sl_d in "$_sl_here/../../.claude/lib/domain-code" "$_sl_here/../../lib/domain-code"; do
+  if [ -f "$_sl_d/frontmatter.sh" ]; then SL_LIB_DIR="$(cd "$_sl_d" && pwd)"; break; fi
+done
+if [ -z "$SL_LIB_DIR" ]; then
+  echo "✗ suite-lib: .claude/lib/domain-code/frontmatter.sh is missing — re-run the Element's bin/init" >&2
+  return 70 2>/dev/null || exit 70
+fi
+# shellcheck source=/dev/null
+. "$SL_LIB_DIR/frontmatter.sh"
+rfm_require 1 || { return 70 2>/dev/null || exit 70; }
+
 # ── suite_file_for_class <suites-dir> <env-class> ─────────────────────────────
 # Echoes the suite file that applies. rc=1 when none exists.
 #
@@ -45,21 +63,25 @@ suite_file_for_class() {
 suite_tests() {
   _sl_file="$1"
   command -v python3 >/dev/null 2>&1 || return 4
-  python3 - "$_sl_file" <<'PY'
+  python3 -B - "$_sl_file" "$SL_LIB_DIR" <<'PY'
 import sys, re
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[2])
+import frontmatter                   # the Element's one reader (frontmatter.py)
 try:
     raw = open(sys.argv[1], encoding='utf-8', errors='replace').read()
 except OSError:
     sys.exit(1)
-lines = raw.splitlines()
-# first frontmatter block only
-if not lines or lines[0].strip() != '---':
-    sys.exit(0)
+# The first frontmatter block, by the same rules as every other reader: a BOM
+# and CRLF are fine, the opening fence is line 1. (The old test missed a BOM,
+# so such a suite read as having no tests.) A block that opens and never
+# closes is malformed — rc 3, not a silent zero.
 try:
-    end = next(i for i in range(1, len(lines)) if lines[i].strip() == '---')
-except StopIteration:
+    fm, _ = frontmatter.split(raw)
+except ValueError:
+    sys.exit(3)
+if fm is None:
     sys.exit(0)
-fm = lines[1:end]
 
 key = None
 for i, ln in enumerate(fm):
@@ -105,23 +127,14 @@ PY
 }
 
 # ── stamp_field <stamp-file> <key> ────────────────────────────────────────────
-# Echoes a frontmatter scalar from the FIRST block, with surrounding quotes and
-# trailing ` # comment` stripped. Unquoting matters: `run_command: "exit 0"`
-# previously ran `bash -c '"exit 0"'` and died with 127.
+# Echoes a frontmatter scalar, unquoted, with a trailing ` # comment` dropped:
+# the library's rfm_get_scalar. Unquoting matters: `run_command: "exit 0"`
+# previously ran `bash -c '"exit 0"'` and died with 127. Before 0.54.0 this
+# was its own awk, which opened the block at the first `---` ANYWHERE — so a
+# BOM on line 1 made it read the body as frontmatter — and cut a quoted
+# `"npm test # all"` at the `#`.
 stamp_field() {
-  _sl_sf="$1"; _sl_key="$2"
-  awk -v key="$_sl_key" '
-    /^---[[:space:]]*$/ { f++; if (f==2) exit; next }
-    f==1 {
-      if ($0 ~ "^"key"[[:space:]]*:") {
-        sub("^"key"[[:space:]]*:[[:space:]]*", "")
-        sub(/[[:space:]]+#.*$/, "")
-        sub(/[[:space:]]+$/, "")
-        gsub(/^"|"$/, ""); gsub(/^'"'"'|'"'"'$/, "")
-        print; exit
-      }
-    }
-  ' "$_sl_sf"
+  rfm_get_scalar "$1" "$2" 2>/dev/null || true
 }
 
 # ── stamp_for <stamps-dir> <name> ─────────────────────────────────────────────

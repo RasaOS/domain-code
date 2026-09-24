@@ -10,6 +10,15 @@
 
 set -euo pipefail
 
+# The shared record library — the frontmatter reader. Found relative to this
+# script (content/lib/domain-code/ in the Element, .claude/lib/domain-code/ in
+# an install).
+_rfm="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../lib/domain-code" 2>/dev/null && pwd)/frontmatter.sh"
+[ -f "$_rfm" ] || { echo "error: $(basename "$0"): .claude/lib/domain-code/frontmatter.sh is missing — re-run the Element's bin/init" >&2; exit 70; }
+# shellcheck source=../../lib/domain-code/frontmatter.sh
+. "$_rfm"
+rfm_require 1 || exit 70
+
 # ─── Paths ─────────────────────────────────────────────────────────────────
 project_root() {
   local d
@@ -24,16 +33,11 @@ project_root() {
 }
 
 # ─── Stamp field readers (frontmatter only) ────────────────────────────────
-stamp_field() {
-  local file="$1" field="$2"
-  awk -v field="$field" '
-    /^---$/ { f++; next }
-    f == 1 && $0 ~ "^"field":" {
-      sub("^"field":[[:space:]]*", "");
-      print; exit
-    }
-  ' "$file"
-}
+# The library's reader, verbatim as this one always was. Before 0.54.0 it
+# matched exact `---` fences anywhere in the file, so a CRLF stamp exported
+# with every field empty.
+stamp_field() { rfm_get "$1" "$2" 2>/dev/null || true; }
+stamp_child() { rfm_get_child "$1" "$2" "$3" 2>/dev/null || true; }
 
 usage() {
   cat <<'EOF'
@@ -131,9 +135,9 @@ stamp_passes() {
   environments="$(stamp_field "$f" environments)"
   group="$(stamp_field "$f" group)"
   required="$(stamp_field "$f" required)"
-  # used_by.runtimes / clouds are nested — extract from indented lines
-  runtimes="$(awk '/^---$/{f++; next} f==1 && /^used_by:/{u=1; next} f==1 && u && /^  runtimes:/{sub(/^  runtimes:[[:space:]]*/, ""); print; exit} f==1 && u && /^[a-zA-Z]/{exit}' "$f")"
-  clouds="$(awk   '/^---$/{f++; next} f==1 && /^used_by:/{u=1; next} f==1 && u && /^  clouds:/{sub(/^  clouds:[[:space:]]*/, ""); print; exit}   f==1 && u && /^[a-zA-Z]/{exit}' "$f")"
+  # used_by.runtimes / clouds are nested one level
+  runtimes="$(stamp_child "$f" used_by runtimes)"
+  clouds="$(stamp_child "$f" used_by clouds)"
 
   # Status filter
   case "$status" in

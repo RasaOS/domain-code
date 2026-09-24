@@ -339,9 +339,10 @@ cmd_version() {
 }
 
 # Cross-check environment names used across the project against the
-# registry. Uses python3 + PyYAML (stamp frontmatter) and tomllib.
+# registry. Uses python3, frontmatter.py (finding each stamp's block), PyYAML
+# (what the block holds) and tomllib.
 _validate_py() {
-  python3 - "$@" <<'PY'
+  python3 -B - "$@" <<'PY'
 import json, os, re, sys
 
 try:
@@ -363,21 +364,50 @@ except (OSError, ValueError) as exc:
     sys.exit(1)
 valid = set((reg.get("environments") or {}).keys())
 
-FRONT = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[3])
+import frontmatter as rfm            # the Element's one reader (frontmatter.py)
+
+
+def skipped(path, why):
+    # A stamp that cannot be read is named, not silently left out: drift
+    # inside it would otherwise pass as OK. (Before 0.54.0 an exact-fence
+    # regex returned nothing for a BOM or CRLF stamp, and a value holding
+    # ': ' failed the YAML parse — both skipped without a word.)
+    print("warning: %s: %s — not checked" % (os.path.relpath(path, root), why), file=sys.stderr)
 
 
 def frontmatter(path):
+    """The stamp's frontmatter as a mapping, or None after a warning.
+
+    frontmatter.py finds the block (a BOM, CRLF and a blank after a fence
+    are fine); what it holds is nested YAML, so PyYAML parses that.
+    """
     try:
-        with open(path) as fh:
-            m = FRONT.match(fh.read())
-    except OSError:
-        return None
-    if not m:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        skipped(path, "cannot be read (%s)" % exc.__class__.__name__)
         return None
     try:
-        return yaml.safe_load(m.group(1)) or {}
+        lines, _ = rfm.split(text)
+    except ValueError:
+        skipped(path, "its frontmatter block is never closed")
+        return None
+    if lines is None:
+        skipped(path, "it has no frontmatter block")
+        return None
+    try:
+        data = yaml.safe_load("\n".join(lines))
     except yaml.YAMLError:
+        skipped(path, "its frontmatter is not valid YAML (a value holding ': ' needs quotes)")
         return None
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        skipped(path, "its frontmatter is not a mapping")
+        return None
+    return data
 
 
 def md_files(subdir):
@@ -469,7 +499,7 @@ cmd_validate() {
     echo "error: validate requires PyYAML — install with: pip install pyyaml" >&2
     return 1
   }
-  _validate_py "$root" "$reg"
+  _validate_py "$root" "$reg" "$(dirname "$_rfm")"
 }
 
 main() {

@@ -1,6 +1,6 @@
 ---
 name: export-project
-description: Produce a single beautifully-formatted markdown export that summarizes the entire project — identity, tech stack, architecture, data model, current phase, recent work, in-flight tasks, skills available, and how to run it. Pulls from README.md, CLAUDE.md, PHASES.md, ROADMAP.md, AUDIT.md, foundation.json, recent commits, and `.claude/skills/`. Output lands at `docs/exports/<YYYY-MM-DD>-<repo>.md` with visual rhythm (hero block, badges, section dividers, callouts) so it reads well as a standalone document. Triggered when the user wants a portable project summary — e.g. "/export-project", "export the project", "give me a single doc that explains everything", "I need a one-pager for someone external".
+description: Produce a single beautifully-formatted markdown export that summarizes the entire project — identity, tech stack, architecture, data model, current phase, recent work, in-flight tasks, skills available, and how to run it. Pulls from README.md, CLAUDE.md, PHASES.md, ROADMAP.md, AUDIT.md, rasa.lock.json, recent commits, and `.claude/skills/`. Output lands at `docs/exports/<YYYY-MM-DD>-<repo>.md` with visual rhythm (hero block, badges, section dividers, callouts) so it reads well as a standalone document. Triggered when the user wants a portable project summary — e.g. "/export-project", "export the project", "give me a single doc that explains everything", "I need a one-pager for someone external".
 ---
 
 # /export-project — Single-doc project export
@@ -26,7 +26,7 @@ plain one that does.
   3. `tasks/PHASES.md` — phase scope.
   4. `tasks/ROADMAP.md` — phase + task registry.
   5. `tasks/AUDIT.md` — recent shipped work.
-  6. `.claude/foundation.json` — kit pin + overrides.
+  6. `.claude/rasa.lock.json` — the Element pin + overrides.
   7. `.claude/skills/*/SKILL.md` frontmatter — available
      skills.
   8. `git log --oneline -20` — recent commit signal.
@@ -53,8 +53,11 @@ plain one that does.
 
 ### Step 1 — Resolve the repo identity
 
-- Repo name → from `git rev-parse --show-toplevel | basename`
-  or `package.json` name.
+- Project name → the folder name of the install root: the nearest
+  directory, walking up from here, that holds `.claude/rasa.lock.json`
+  (in a monorepo that is the package, not the repository), or the
+  `package.json` name. Not `git rev-parse --show-toplevel`, which names
+  the whole repository.
 - Short SHA → `git rev-parse --short HEAD`.
 - Today's date → `YYYY-MM-DD`.
 - Detect tech stack from manifests (one or more of: Node, Python,

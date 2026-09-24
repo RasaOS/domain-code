@@ -119,7 +119,8 @@ inject_branch_if_missing() {
   branch="$(current_branch)"
 
   if grep -q '^> \*\*' "$f" 2>/dev/null; then
-    awk -v branch="$branch" '
+    # Values through ENVIRON: `awk -v` expands backslash escapes.
+    SAVE_BRANCH="$branch" awk '
       BEGIN { last_meta = 0 }
       /^> \*\*/ { last_meta = NR }
       { lines[NR] = $0 }
@@ -127,7 +128,7 @@ inject_branch_if_missing() {
         for (i = 1; i <= NR; i++) {
           print lines[i]
           if (i == last_meta) {
-            print "> **Branch.** " branch
+            print "> **Branch.** " ENVIRON["SAVE_BRANCH"]
           }
         }
       }
@@ -164,9 +165,11 @@ EOF
   fi
 
   if grep -q '^- ' "$timeline_md"; then
-    awk -v entry="$entry" '
+    # The entry is free text from the saved session: through ENVIRON, where
+    # `awk -v` would turn a literal \n in it into a second line.
+    SAVE_ENTRY="$entry" awk '
       BEGIN { inserted = 0 }
-      /^- / && !inserted { print entry; inserted = 1 }
+      /^- / && !inserted { print ENVIRON["SAVE_ENTRY"]; inserted = 1 }
       { print }
     ' "$timeline_md" >"${timeline_md}.tmp"
     mv "${timeline_md}.tmp" "$timeline_md"

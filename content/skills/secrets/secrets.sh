@@ -120,15 +120,22 @@ keys_from_template() {
     | sed 's/=$//'
 }
 
+# stamp_var <stamp> — the stamp's var_name, from its frontmatter only
+# (unquoted), or nothing if it is not a variable name. The grep this replaced
+# read the first `var_name:` line anywhere in the file, body included.
+stamp_var() {
+  local v
+  v="$(rfm_get_scalar "$1" var_name 2>/dev/null || true)"
+  case "$v" in ''|[!A-Za-z_]*|*[!A-Za-z0-9_]*) return 0 ;; esac
+  printf '%s\n' "$v"
+}
+
 keys_from_stamps() {
-  local dir="$1" f v
+  local dir="$1" f
   [ -d "$dir" ] || return 0
   for f in "$dir"/*.md; do
     [ -e "$f" ] || continue
-    v="$(grep -m1 -E '^var_name:' "$f" 2>/dev/null \
-          | sed -E 's/^var_name:[[:space:]]*//' \
-          | tr -d '"'\''[:space:]' || true)"
-    [ -n "$v" ] && printf '%s\n' "$v"
+    stamp_var "$f"
   done
 }
 
@@ -159,16 +166,22 @@ resolve_keys() {
 # value. A stamp body line beginning "Get it:" or "Source:" is
 # surfaced verbatim so the user knows where to obtain the value.
 render_comment() {
-  local key="$1" root stamp desc req purpose typ hint
+  local key="$1" root stamp="" f desc req purpose typ hint
   root="$(repo_root)"
-  stamp="$(grep -rls -E "^var_name:[[:space:]]*[\"']?${key}[\"']?[[:space:]]*$" \
-            "$root/env/stamps" 2>/dev/null | head -1 || true)"
+  # The stamp whose var_name IS this key, compared as a string. The old
+  # lookup built a regex from the key and matched `var_name:` lines anywhere
+  # in any file under env/stamps/.
+  if [ -d "$root/env/stamps" ]; then
+    while IFS= read -r f; do
+      if [ "$(stamp_var "$f")" = "$key" ]; then stamp="$f"; break; fi
+    done < <(find "$root/env/stamps" -type f -name '*.md' 2>/dev/null | LC_ALL=C sort)
+  fi
   echo   "# ─────────────────────────────────────────────"
   if [ -n "$stamp" ]; then
-    desc="$(grep -m1 -E '^description:' "$stamp" | sed -E 's/^description:[[:space:]]*//')"
-    req="$(grep -m1 -E '^required:' "$stamp"     | sed -E 's/^required:[[:space:]]*//')"
-    purpose="$(grep -m1 -E '^purpose:' "$stamp"  | sed -E 's/^purpose:[[:space:]]*//')"
-    typ="$(grep -m1 -E '^type:' "$stamp"         | sed -E 's/^type:[[:space:]]*//')"
+    desc="$(rfm_get "$stamp" description 2>/dev/null || true)"
+    req="$(rfm_get "$stamp" required 2>/dev/null || true)"
+    purpose="$(rfm_get "$stamp" purpose 2>/dev/null || true)"
+    typ="$(rfm_get "$stamp" type 2>/dev/null || true)"
     hint="$(grep -m1 -E '^[[:space:]]*\**(Get it|Source):' "$stamp" \
              | sed -E 's/^[[:space:]]*\**//; s/\**[[:space:]]*$//' || true)"
     printf '# %-22s %s\n' "$key" "$([ "$req" = "true" ] && echo 'required' || echo 'optional') · ${purpose:-secret}"

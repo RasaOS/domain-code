@@ -6,13 +6,29 @@
 # returns them to stdout, stderr, or any log. The orchestrating Claude
 # skill (SKILL.md) calls this script and never sees a single value.
 #
-# Language: pure bash. No YAML parser needed — stamp frontmatter is
-# scanned with grep/awk for the simple fields this script uses.
+# Language: pure bash. No YAML parser needed — stamp frontmatter is read
+# with the Element's shared reader (frontmatter.sh) for the simple fields
+# this script uses.
 
 set -euo pipefail
 
 # ─── Paths ─────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The shared record library. Found relative to this script
+# (content/lib/domain-code/ in the Element, .claude/lib/domain-code/ in an
+# install).
+_rfm="$(cd "$SCRIPT_DIR/../../lib/domain-code" 2>/dev/null && pwd)/frontmatter.sh"
+[ -f "$_rfm" ] || { echo "error: $(basename "$0"): .claude/lib/domain-code/frontmatter.sh is missing — re-run the Element's bin/init" >&2; exit 70; }
+# shellcheck source=../../lib/domain-code/frontmatter.sh
+. "$_rfm"
+rfm_require 1 || exit 70
+
+# stamp_field <stamp> <key> — one frontmatter value, verbatim; empty when
+# absent. The library's reader: before 0.54.0 each read here was an awk that
+# matched exact `---` fences, so a CRLF stamp read as having no var_name and
+# vanished from list, diff and validate.
+stamp_field() { rfm_get "$1" "$2" 2>/dev/null || true; }
 
 project_root() {
   # Walk up from cwd until we find env/stamps/ or hit /
@@ -132,7 +148,7 @@ cmd_diff() {
     stamp_keys=$(
       for f in "$stamps_dir"/*.md; do
         [[ -f "$f" ]] || continue
-        awk '/^---$/{f++; next} f==1 && /^var_name:/{sub(/^var_name:[[:space:]]*/, ""); print; exit}' "$f"
+        stamp_field "$f" var_name
       done | sort -u
     )
   fi
@@ -459,10 +475,10 @@ cmd_list() {
   local f var_name required group purpose
   for f in "$stamps_dir"/*.md; do
     [[ -f "$f" ]] || continue
-    var_name="$(awk '/^---$/{f++; next} f==1 && /^var_name:/{sub(/^var_name:[[:space:]]*/, ""); print; exit}' "$f")"
-    required="$(awk '/^---$/{f++; next} f==1 && /^required:/{sub(/^required:[[:space:]]*/, ""); print; exit}' "$f")"
-    group="$(awk '/^---$/{f++; next} f==1 && /^group:/{sub(/^group:[[:space:]]*/, ""); print; exit}' "$f")"
-    purpose="$(awk '/^---$/{f++; next} f==1 && /^purpose:/{sub(/^purpose:[[:space:]]*/, ""); print; exit}' "$f")"
+    var_name="$(stamp_field "$f" var_name)"
+    required="$(stamp_field "$f" required)"
+    group="$(stamp_field "$f" group)"
+    purpose="$(stamp_field "$f" purpose)"
 
     [[ -z "$var_name" ]] && continue
     [[ "$required_only" == true && "$required" != "true" ]] && continue
@@ -490,7 +506,7 @@ cmd_validate() {
     stamp_keys="$(
       for f in "$root"/env/stamps/*.md; do
         [[ -f "$f" ]] || continue
-        awk '/^---$/{f++; next} f==1 && /^var_name:/{sub(/^var_name:[[:space:]]*/, ""); print; exit}' "$f"
+        stamp_field "$f" var_name
       done | sort -u
     )"
 
@@ -506,9 +522,9 @@ cmd_validate() {
       for f in "$root"/env/stamps/*.md; do
         [[ -f "$f" ]] || continue
         local req var
-        req="$(awk '/^---$/{f++; next} f==1 && /^required:/{sub(/^required:[[:space:]]*/, ""); print; exit}' "$f")"
+        req="$(stamp_field "$f" required)"
         [[ "$req" != "true" ]] && continue
-        var="$(awk '/^---$/{f++; next} f==1 && /^var_name:/{sub(/^var_name:[[:space:]]*/, ""); print; exit}' "$f")"
+        var="$(stamp_field "$f" var_name)"
         if ! echo "$tmpl_keys" | grep -qx "$var"; then
           echo "$var"
         fi

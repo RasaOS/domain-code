@@ -190,14 +190,24 @@ file_too_big() {
 GG_OPEN="# >>> git-guard >>>"
 GG_CLOSE="# <<< git-guard <<<"
 
+# The temp starts as a copy of the hook, so the rewrite keeps its mode. The
+# old `> file.gg.tmp && mv` left a shared hook non-executable (a new file
+# takes the umask's mode), which silently disabled every OTHER hook in it —
+# the defect TASK-067 fixed in task-guard.
 _strip_block() {
-  local file="$1"
+  local file="$1" tmp
   [ -f "$file" ] || return 0
-  awk -v o="$GG_OPEN" -v c="$GG_CLOSE" '
-    index($0,o){skip=1}
-    !skip{print}
-    index($0,c){skip=0}
-  ' "$file" > "$file.gg.tmp" && mv "$file.gg.tmp" "$file"
+  tmp="$(mktemp "$(dirname "$file")/.git-guard.XXXXXX")" || return 1
+  cp -p "$file" "$tmp"
+  if GG_O="$GG_OPEN" GG_C="$GG_CLOSE" awk '
+       index($0, ENVIRON["GG_O"]) { skip = 1 }
+       !skip { print }
+       index($0, ENVIRON["GG_C"]) { skip = 0 }
+     ' "$file" > "$tmp"; then
+    mv -f "$tmp" "$file"
+  else
+    rm -f "$tmp"; echo "error: could not rewrite $file" >&2; return 1
+  fi
 }
 
 install_git_hook() {

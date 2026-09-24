@@ -122,11 +122,12 @@ branch_in_use_elsewhere() {
   # Git's own question — which worktree is this? — so the git toplevel, not
   # the project root (rasa_root): `git worktree list` names worktree roots.
   self="$(git rev-parse --show-toplevel 2>/dev/null)" || return 1
+  # Values through ENVIRON: `awk -v` would expand a backslash in the path.
   git worktree list --porcelain 2>/dev/null \
-    | awk -v branch="refs/heads/$branch" -v self="$self" '
+    | LOAD_BRANCH="refs/heads/$branch" LOAD_SELF="$self" awk '
         /^worktree / { wt = substr($0, 10); next }
         /^branch / {
-          if ($2 == branch && wt != self) {
+          if ($2 == ENVIRON["LOAD_BRANCH"] && wt != ENVIRON["LOAD_SELF"]) {
             print wt
             exit
           }

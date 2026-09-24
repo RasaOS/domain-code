@@ -36,6 +36,15 @@ EXIT CODES:
 EOF
 }
 
+# The shared record library — the frontmatter reader. Found relative to this
+# script (content/lib/domain-code/ in the Element, .claude/lib/domain-code/ in
+# an install).
+_rfm="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../lib/domain-code" 2>/dev/null && pwd)/frontmatter.sh"
+[ -f "$_rfm" ] || { echo "error: $(basename "$0"): .claude/lib/domain-code/frontmatter.sh is missing — re-run the Element's bin/init" >&2; exit 70; }
+# shellcheck source=../../lib/domain-code/frontmatter.sh
+. "$_rfm"
+rfm_require 1 || exit 70
+
 # Resolve the *main* repo root, even from a linked worktree. Mirrors
 # save.sh's project_root for cross-script consistency.
 project_root() {
@@ -342,10 +351,12 @@ render_active_tasks() {
     for f in "$root/tasks/$stage"/*.md; do
       [ -e "$f" ] || continue
       found=1
-      # Skip a leading frontmatter block before looking for the H1. A `#` line
-      # INSIDE frontmatter is a comment, not the title — without this, a
-      # commented field reads back as the task's name on the status board.
-      title="$(awk 'NR==1 && $0=="---" {infm=1; next} infm && $0=="---" {infm=0; next} !infm && /^# / {sub(/^# */,""); print; exit}' "$f" 2>/dev/null | tr -d '\r' | cut -c1-80)"
+      # The first H1 below the frontmatter (the library's rfm_title). A `#`
+      # line INSIDE frontmatter is a comment, not the title — without this, a
+      # commented field reads back as the task's name on the status board. The
+      # exact-fence awk this replaced did exactly that for a task with a BOM,
+      # CRLF or a trailing blank on a fence.
+      title="$(rfm_title "$f" 2>/dev/null | cut -c1-80)"
       [ -z "$title" ] && title="$(basename "$f" .md)"
       if [ "$stage" = "review" ]; then
         echo "- **${title}** — in review · \`tasks/review/$(basename "$f")\`"

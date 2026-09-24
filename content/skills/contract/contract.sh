@@ -95,13 +95,12 @@ repo_root() { rasa_root; }
 now_date()  { date '+%Y-%m-%d'; }
 now_stamp() { date '+%Y-%m-%d %H:%M'; }
 
-# Who is making the change — for the ledger.
-actor() {
-  local a
-  a="$(git config user.name 2>/dev/null || true)"
-  [ -n "$a" ] || a="${USER:-unknown}"
-  printf '%s' "$a"
-}
+# Who is making the change — for the ledger. The library's rasa_actor
+# (RASA_ACTOR, then git user.name, then the OS user), resolved once in main()
+# before a mutating verb writes anything. Before 0.54.0 this ignored
+# RASA_ACTOR, so an agent's changes were ledgered as the human's.
+CONTRACT_ACTOR=""
+actor() { printf '%s' "$CONTRACT_ACTOR"; }
 
 # Resolve this script's absolute path (synced project or kit repo).
 self_path() {
@@ -813,7 +812,11 @@ main() {
   esac
 
   case "$action" in
-    new|update|bump|lock|unlock) contract_mutex || return 1 ;;
+    new|update|bump|lock|unlock)
+      # An identity carrying a control character is refused here, before
+      # anything is written, rather than flattened into the ledger.
+      CONTRACT_ACTOR="$(rasa_actor)" || return 2
+      contract_mutex || return 1 ;;
   esac
 
   case "$action" in

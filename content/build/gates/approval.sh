@@ -30,6 +30,21 @@
 
 set -euo pipefail
 
+# The shared record library, for rasa_actor — the ONE actor-resolution order
+# across the Element (RASA_ACTOR, then git user.name, then the OS user;
+# stamps.md, "Stamp: run"). build/ installs at the project root, beside
+# .claude/; the Element's own tree keeps the library at content/lib. A missing
+# library fails closed, like every other doubt in this gate.
+_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_rfm=""
+for _d in "$_here/../../.claude/lib/domain-code" "$_here/../../lib/domain-code"; do
+  if [ -f "$_d/frontmatter.sh" ]; then _rfm="$_d/frontmatter.sh"; break; fi
+done
+[ -n "$_rfm" ] || { echo "✗ Approval gate: .claude/lib/domain-code/frontmatter.sh is missing — re-run the Element's bin/init. Aborting." >&2; exit 1; }
+# shellcheck source=/dev/null
+. "$_rfm"
+rfm_require 1 || exit 1
+
 PROMPT="${1:-Proceed?}"
 
 if [ "${FORCE_APPROVAL:-0}" = "1" ]; then
@@ -56,6 +71,14 @@ if ! { : < /dev/tty; } 2>/dev/null; then
   exit 1
 fi
 
+# Who is approving — resolved before the question is asked. An identity that
+# carries a control character cannot be recorded as an approver, so the gate
+# does not approve under it.
+APPROVER="$(rasa_actor)" || {
+  echo "✗ Approval gate: the approver's identity (RASA_ACTOR or git user.name) carries a control character. Aborting." >&2
+  exit 1
+}
+
 # Prompt on the terminal too — stdout may be captured by the caller.
 {
   printf '\n'
@@ -77,28 +100,11 @@ fi
 # bash 3.2 has no ${REPLY,,}. Strip whitespace as well as lowercasing: some
 # terminals deliver a trailing \r, and `IFS= read` (used so the value is not
 # word-split) preserves the leading space of a fat-fingered " yes".
-# rasa_actor — the ONE actor-resolution order across the Element.
-#
-#   RASA_ACTOR  -> set by a runner, CI job or agent harness. The knob.
-#   git identity -> the human configured in this clone.
-#   OS user      -> last resort.
-#
-# Canonical definition: stamps.md, "Stamp: run" -> actor. Before this existed,
-# five sites called $(whoami) directly, so a service account running an agent
-# was recorded in the ledger exactly as a human would be.
-rasa_actor() {
-  local a="${RASA_ACTOR:-}"
-  [ -n "$a" ] || a="$(git config user.name 2>/dev/null || true)"
-  [ -n "$a" ] || a="$(whoami 2>/dev/null || true)"
-  [ -n "$a" ] || a="${USER:-unknown}"
-  printf '%s' "$a"
-}
-
 reply_lc=$(printf '%s' "$REPLY" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
 
 case "$reply_lc" in
   yes)
-    printf ' ✓ Approved by %s at %s\n' "$(rasa_actor)" "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+    printf ' ✓ Approved by %s at %s\n' "$APPROVER" "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
     exit 0
     ;;
   *)

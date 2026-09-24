@@ -129,7 +129,7 @@ _run_check() {
   local root
   root="$(project_root)" || return 1
 
-  python3 - "$file" "$profile" "$root" "$mode" <<'PY'
+  python3 -B - "$file" "$profile" "$root" "$mode" "$(dirname "$_rfm")" <<'PY'
 import sys, os, subprocess, re
 
 try:
@@ -139,20 +139,37 @@ except ImportError:
     sys.exit(1)
 
 file_path, profile, repo_root, mode = sys.argv[1:5]
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[5])
+import frontmatter as rfm            # the Element's one reader (frontmatter.py)
 
-# Parse frontmatter from the .md file.
-with open(file_path) as f:
-    content = f.read()
+# The stamp's frontmatter block, found by the Element's one reader (a BOM,
+# CRLF and a blank after a fence are fine — the exact-fence regex this
+# replaced reported such a stamp as having no frontmatter). What the block
+# holds is nested YAML, so PyYAML parses that.
+try:
+    with open(file_path, encoding="utf-8") as f:
+        content = f.read()
+except (OSError, UnicodeDecodeError) as e:
+    print(f"error: cannot read {file_path}: {e}", file=sys.stderr)
+    sys.exit(1)
 
-m = re.match(r'^---\n(.*?)\n---\n', content, re.DOTALL)
-if not m:
+try:
+    lines, _ = rfm.split(content)
+except ValueError:
+    print(f"error: the frontmatter block in {file_path} is never closed", file=sys.stderr)
+    sys.exit(1)
+if lines is None:
     print(f"error: no YAML frontmatter found in {file_path}", file=sys.stderr)
     sys.exit(1)
 
 try:
-    stamp = yaml.safe_load(m.group(1)) or {}
+    stamp = yaml.safe_load("\n".join(lines)) or {}
 except yaml.YAMLError as e:
-    print(f"error: invalid YAML in {file_path}: {e}", file=sys.stderr)
+    print(f"error: invalid YAML in {file_path} (a value holding ': ' needs quotes): {e}", file=sys.stderr)
+    sys.exit(1)
+if not isinstance(stamp, dict):
+    print(f"error: the frontmatter in {file_path} is not a mapping", file=sys.stderr)
     sys.exit(1)
 
 # Resolve env file from profile.

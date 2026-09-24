@@ -179,6 +179,12 @@ for v in "$(printf 'a\302\205b')" "$(printf 'a\302\233b')" "$(printf 'a\342\200\
   rfm_value_ok "$(rfm_clean "$v")" || bad "rfm_clean left an unwritable value"
 done
 rfm_value_ok "café — 東京" || bad "ordinary non-ASCII text was refused"
+# A value holding ': ' and ' # ' reads back verbatim through both twins — the
+# line PyYAML rejects outright, and a comment-stripping reader cuts short.
+printf -- '---\nid: T-1\nphase: Phase 3: Foo # x\n---\n' > "$T/phase.md"
+[ "$(rfm_get "$T/phase.md" phase)" = 'Phase 3: Foo # x' ] || bad "rfm_get: 'phase: Phase 3: Foo # x' was not read verbatim"
+got="$(python3 -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import frontmatter; print(frontmatter.get(open(sys.argv[2], encoding="utf-8").read(), "phase"))' "$LIBDIR" "$T/phase.md" 2>&1)"
+[ "$got" = 'Phase 3: Foo # x' ] || bad "frontmatter.py: 'phase: Phase 3: Foo # x' read as [$got]"
 cp "$FX/dup.md" "$T/s.md"; rc=0; RFM_STRICT=1 rfm_get "$T/s.md" status >/dev/null 2>&1 || rc=$?
 [ "$rc" = 4 ] || bad "RFM_STRICT=1: a duplicated key read as rc $rc, want 4"
 [ "$(rfm_get "$T/s.md" status)" = in-flight ] || bad "first-wins read of a duplicated key"
@@ -219,12 +225,21 @@ excl=()
 while IFS= read -r p; do [ -n "$p" ] && excl+=(":!$p"); done <<EOF
 $vendored
 EOF
-hits="$(git grep -n -E \
+# Banned: exact-fence readers (awk, shell and Python spellings, including a
+# Python `\A---` regex), `> "$tmp" && mv` (a temp in $TMPDIR loses the mode),
+# an unmarked `awk -v NAME="$var"` (it expands backslash escapes), `sed -i`,
+# and — in shipped content only — a `grep '^key:'` reader, which reads the
+# body as well as the frontmatter. A comment line is not code, so it is not
+# a hit; a deliberate exception carries `# rfm-ok: <why>` on the line.
+GREP_KEY_RE="grep [^|]*[\"']\\^[A-Za-z_][A-Za-z0-9_-]*[[:space:]]*:"
+hits="$( { git grep -n -E \
   -e '\$0 *== *"---"' -e "/\^---\\$/" -e "'\^---\\$'" -e '\^---\\n' -e "strip\(\) *[!=]= *'---'" \
   -e '> *"\$tmp" *&& *mv ' \
   -e 'awk [^|]*-v +[A-Za-z_]+="\$' \
-  -e 'sed -i' -e '\\\\A---' \
-  -- content bin ':!content/lib/*' ':!bin/check-frontmatter' ':!bin/check-reader-parity' ':!*.md' "${excl[@]}" | grep -v '# rfm-ok:' || true)"
+  -e 'sed -i' -e '\\A---' \
+  -- content bin ':!content/lib/*' ':!bin/check-frontmatter' ':!bin/check-reader-parity' ':!*.md' "${excl[@]}"
+  git grep -n -E -e "$GREP_KEY_RE" -- content ':!content/lib/*' ':!*.md' "${excl[@]}"
+} | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' | grep -v '# rfm-ok:' | LC_ALL=C sort -u || true)"
 if [ -n "$hits" ]; then
   n="$(printf '%s\n' "$hits" | grep -c .)"
   if [ "$STRICT" = 1 ]; then

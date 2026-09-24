@@ -61,22 +61,9 @@ rfm_require 1 || exit 70
 umask 077   # anything this script creates is 0600 from birth
 
 # --------------------------------------------------------------- paths
-# rasa_actor — the ONE actor-resolution order across the Element.
-#
-#   RASA_ACTOR  -> set by a runner, CI job or agent harness. The knob.
-#   git identity -> the human configured in this clone.
-#   OS user      -> last resort.
-#
-# Canonical definition: stamps.md, "Stamp: run" -> actor. Before this existed,
-# five sites called $(whoami) directly, so a service account running an agent
-# was recorded in the ledger exactly as a human would be.
-rasa_actor() {
-  local a="${RASA_ACTOR:-}"
-  [ -n "$a" ] || a="$(git config user.name 2>/dev/null || true)"
-  [ -n "$a" ] || a="$(whoami 2>/dev/null || true)"
-  [ -n "$a" ] || a="${USER:-unknown}"
-  printf '%s' "$a"
-}
+# The actor is the library's rasa_actor — the ONE resolution order across the
+# Element (RASA_ACTOR, then git user.name, then the OS user; stamps.md,
+# "Stamp: run"). It refuses an identity carrying a control character.
 
 # The project this install serves — its ledgers and .claude/ live here.
 # rasa_root (the shared library) walks up to the install's lockfile and
@@ -172,11 +159,42 @@ is_ignored() {
 # Record THAT a transfer happened, to which NAMED host, when, and the
 # non-reversible digest. Never the contents, never the remote path (a path
 # leaks deployment structure and buys nothing for parity).
+
+# transfer_context <env> <peer> — everything the record needs that is known
+# before a byte moves, checked now: the actor, the names, this host, the
+# commit, a writable ledger. A refusal AFTER the scp would leave a transfer
+# that happened with no record of it. Sets ES_WHO ES_HOST ES_SHA ES_BRANCH.
+transfer_context() {
+  local name="$1" peer="$2"
+  case "$name" in ''|*/*|.*) echo "✗ bad environment name '$name'" >&2; return 2 ;; esac
+  rfm_check environment "$name" || return 2
+  rfm_check peer_host "$peer"   || return 2
+  ES_WHO="$(rasa_actor)" || return 2
+  ES_HOST="$(hostname -s 2>/dev/null || true)"; [ -n "$ES_HOST" ] || ES_HOST=unknown
+  rfm_check host "$ES_HOST" || return 2
+  # `rev-parse` prints to stdout AND exits non-zero in a commit-less repo, so
+  # `$(cmd || echo unknown)` appends a second line and corrupts the record.
+  # `--verify --quiet` prints nothing and exits 1 cleanly — the same idiom
+  # bin/init uses for ELEMENT_SHA (773d89b), kept identical on purpose so there
+  # is one lesson in this repo and not two.
+  ES_SHA="$(git -C "$ROOT" rev-parse --verify --quiet --short HEAD 2>/dev/null || true)"
+  ES_BRANCH="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  [ -n "$ES_SHA" ] || ES_SHA="unknown"
+  { [ -n "$ES_BRANCH" ] && [ "$ES_BRANCH" != "HEAD" ]; } || ES_BRANCH="unknown"
+  rfm_check sha "$ES_SHA" && rfm_check branch "$ES_BRANCH" || return 2
+  if ! mkdir -p "$ROOT/deploys/records" 2>/dev/null || [ ! -w "$ROOT/deploys/records" ]; then
+    echo "✗ the transfer ledger (deploys/records/) is not writable — nothing was sent" >&2
+    return 1
+  fi
+}
+
+# record_transfer <direction> <env> <peer> <digest> <status> — after
+# transfer_context. Returns non-zero, and says so, when the record cannot be
+# written: before 0.54.0 it returned 0 and the transfer went unrecorded.
 record_transfer() {
   local direction="$1" name="$2" host="$3" dig="$4" status="$5"
-  local records="$ROOT/deploys/records"
-  mkdir -p "$records" 2>/dev/null || return 0
-  local stamp id n
+  local records="$ROOT/deploys/records" stamp id n
+  rfm_check tag "$dig" || return 1
   stamp="$(date -u '+%Y%m%d-%H%M%S')"
   # The record file itself is the reservation — see the note in
   # deploys.sh. A separate lock that gets removed lets a later write in
@@ -184,39 +202,31 @@ record_transfer() {
   id="ENV-${stamp}-${name}"; n=1
   while ! ( set -C; : > "$records/$id.md" ) 2>/dev/null; do
     n=$(( n + 1 )); id="ENV-${stamp}-${name}-${n}"
-    [ "$n" -lt 1000 ] || return 0
+    [ "$n" -lt 1000 ] || { echo "✗ no record id could be reserved in deploys/records/" >&2; return 1; }
   done
-  # `rev-parse` prints to stdout AND exits non-zero in a commit-less repo, so
-  # `$(cmd || echo unknown)` appends a second line and corrupts the record.
-  # `--verify --quiet` prints nothing and exits 1 cleanly — the same idiom
-  # bin/init uses for ELEMENT_SHA (773d89b), kept identical on purpose so there
-  # is one lesson in this repo and not two.
-  local _es_sha _es_branch
-  _es_sha="$(git -C "$ROOT" rev-parse --verify --quiet --short HEAD 2>/dev/null || true)"
-  _es_branch="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-  [ -n "$_es_sha" ] || _es_sha="unknown"
-  { [ -n "$_es_branch" ] && [ "$_es_branch" != "HEAD" ]; } || _es_branch="unknown"
 
+  # Same keys, same order, same bytes as before 0.54.0; every value was
+  # checked before the reservation.
   {
     echo "---"
-    echo "id: $id"
-    echo "kind: env-transfer"
-    echo "environment: $name"
-    echo "class: config"
-    echo "tag: $dig"
-    echo "direction: $direction"
-    echo "peer_host: $host"
-    echo "sha: $_es_sha"
-    echo "branch: $_es_branch"
-    echo "user: $(rasa_actor)"
-    echo "host: $(hostname -s 2>/dev/null || echo unknown)"
-    echo "started: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-    echo "finished: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-    echo "status: $status"
-    echo "duration_s: "
-    echo "error_stage: "
-    echo "approval: invocation"
-    echo "task_refs: "
+    rfm_line id "$id"
+    rfm_line kind env-transfer
+    rfm_line environment "$name"
+    rfm_line class config
+    rfm_line tag "$dig"
+    rfm_line direction "$direction"
+    rfm_line peer_host "$host"
+    rfm_line sha "$ES_SHA"
+    rfm_line branch "$ES_BRANCH"
+    rfm_line user "$ES_WHO"
+    rfm_line host "$ES_HOST"
+    rfm_line started "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+    rfm_line finished "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+    rfm_line status "$status"
+    rfm_line duration_s ""
+    rfm_line error_stage ""
+    rfm_line approval invocation
+    rfm_line task_refs ""
     echo "---"
     echo ""
     echo "# $id"
@@ -224,7 +234,7 @@ record_transfer() {
     echo "Config for **$name** ${direction}ed with \`$host\`. Digest \`$dig\`."
     echo ""
     echo "No contents, no remote path, and no per-key digest are recorded."
-  } > "$records/$id.md"
+  } > "$records/$id.md" || { echo "✗ the record $id could not be written" >&2; return 1; }
   local ds="$ROOT/.claude/skills/deploys/deploys.sh"
   [ -f "$ds" ] && bash "$ds" index >/dev/null 2>&1 || true
   echo "  recorded: $id"
@@ -332,13 +342,16 @@ cmd_push() {
   [ -e "$ROOT/$rel" ] || { echo "✗ no such env file: $rel" >&2; return 1; }
   require_ignored "$rel" || return 3
   case "$dest" in *:*) ;; *) echo "✗ destination must be user@host:/path" >&2; return 2 ;; esac
+  transfer_context "$name" "${dest%%:*}" || return $?
   echo "→ $rel  ⇒  $dest"
   echo "  digest before: $(digest "$ROOT/$rel")"
   if scp -p -- "$ROOT/$rel" "$dest"; then
-    record_transfer push "$name" "${dest%%:*}" "$(digest "$ROOT/$rel")" success
+    if ! record_transfer push "$name" "${dest%%:*}" "$(digest "$ROOT/$rel")" success; then
+      echo "✗ the file WAS sent, but the transfer is not recorded." >&2; return 1
+    fi
     echo "✓ sent. Verify with: env-sync.sh parity $name ${dest%%:*}"
   else
-    record_transfer push "$name" "${dest%%:*}" "$(digest "$ROOT/$rel")" failed
+    record_transfer push "$name" "${dest%%:*}" "$(digest "$ROOT/$rel")" failed || true
     echo "✗ transfer failed." >&2; return 1
   fi
 }
@@ -349,6 +362,7 @@ cmd_pull() {
   cmd_protect >/dev/null
   require_ignored "$rel" || return 3
   case "$src" in *:*) ;; *) echo "✗ source must be user@host:/path" >&2; return 2 ;; esac
+  transfer_context "$name" "${src%%:*}" || return $?
   if [ -L "$ROOT/$rel" ]; then
     echo "✗ $rel is a symlink (managed by /secrets)." >&2
     echo "  Pulling would replace the link with a real file and orphan the store." >&2
@@ -362,10 +376,12 @@ cmd_pull() {
   fi
   if scp -p -- "$src" "$ROOT/$rel"; then
     chmod 600 "$ROOT/$rel" 2>/dev/null || true
-    record_transfer pull "$name" "${src%%:*}" "$(digest "$ROOT/$rel")" success
+    if ! record_transfer pull "$name" "${src%%:*}" "$(digest "$ROOT/$rel")" success; then
+      echo "✗ the file WAS received, but the transfer is not recorded." >&2; return 1
+    fi
     echo "✓ received. digest now: $(digest "$ROOT/$rel")"
   else
-    record_transfer pull "$name" "${src%%:*}" absent failed
+    record_transfer pull "$name" "${src%%:*}" absent failed || true
     echo "✗ transfer failed." >&2; return 1
   fi
 }

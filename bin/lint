@@ -203,13 +203,17 @@ scan_file_via_awk() {
   local base
   base="$(basename "$file")"
 
-  awk -v REL="$rel" -v BASE="$base" \
+  # The path and basename go through ENVIRON, as raw text. The regexes stay on
+  # -v on purpose: awk processes their escapes there, which they are written
+  # for.
+  LINT_REL="$rel" LINT_BASE="$base" awk \
       -v RE_IOS="$RE_IOS" -v RE_ANDROID="$RE_ANDROID" -v RE_WEB="$RE_WEB" \
       -v RE_PYTHON="$RE_PYTHON" -v RE_GO="$RE_GO" -v RE_RUBY="$RE_RUBY" \
       -v RE_RUST="$RE_RUST" \
       -v CROSS_CUTTING="$CROSS_CUTTING_BASENAMES" \
       -v REVIEWED_OK="$REVIEWED_OK" '
     BEGIN {
+      REL = ENVIRON["LINT_REL"]; BASE = ENVIRON["LINT_BASE"]
       # Build cross-cutting set.
       n = split(CROSS_CUTTING, parts, ":")
       for (i = 1; i <= n; i++) {

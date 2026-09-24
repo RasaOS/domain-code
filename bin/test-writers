@@ -47,6 +47,21 @@ export GIT_CONFIG_GLOBAL=/dev/null HOME="$T/home"
 mkdir -p "$HOME"
 unset RASA_ROOT RASA_ACTOR
 
+# A stand-in for scp, for env-sync: `user@host:/path` means /path here.
+# (No `case` inside `$( )`: bash 3.2 reads the pattern's `)` as its end.)
+SHIM="$T/shim"; mkdir -p "$SHIM"
+cat > "$SHIM/scp" <<'EOF'
+#!/usr/bin/env bash
+args=()
+for a in "$@"; do
+  [ "$a" = -p ] && continue
+  [ "$a" = -- ] && continue
+  args+=("${a#*:}")
+done
+cp "${args[0]}" "${args[1]}"
+EOF
+chmod +x "$SHIM/scp"
+
 pass=0; fail=0
 ok()  { pass=$((pass + 1)); printf '  ✓ %s\n' "$1"; }
 bad() { fail=$((fail + 1)); printf '  ✗ %s\n' "$1"; }
@@ -103,6 +118,12 @@ golden_run() {
     mask < "tasks/runs/$rid.md" > "$O/run-open.md"
     bash .claude/skills/runs/runs.sh close "$rid" completed >/dev/null || exit 1
     mask < "tasks/runs/$rid.md" > "$O/run-closed.md"
+    printf 'SAMPLE_TOKEN=x\n' > .env.staging; mkdir -p remote
+    bash .claude/skills/env-sync/env-sync.sh protect >/dev/null 2>&1 || exit 1
+    PATH="$SHIM:$PATH" bash .claude/skills/env-sync/env-sync.sh push staging "tester@localhost:$1/remote/.env.staging" >/dev/null 2>&1 || exit 1
+    f="$(ls deploys/records/ENV-*.md 2>/dev/null | head -1)"
+    [ -n "$f" ] || exit 1
+    mask < "$f" > "$O/env-transfer.md"
     bash .claude/skills/task-enforce/task-enforce.sh on >/dev/null 2>&1 || exit 1
     # A fixed template, so this golden follows the writers and not the
     # wording of the template the Element ships.
@@ -119,7 +140,7 @@ golden_run() {
   )
 }
 
-GOLDEN_FILES="deploy-open.md deploy-closed.md run-open.md run-closed.md task-filed.md task-stamped.md"
+GOLDEN_FILES="deploy-open.md deploy-closed.md run-open.md run-closed.md env-transfer.md task-filed.md task-stamped.md"
 
 if [ -n "$EMIT" ]; then
   mkdir -p "$EMIT"
@@ -317,6 +338,50 @@ printf '{"tool_input":{"file_path":"src/x\\n| 00:00:00 | docs | `forged` |"}}' |
 check "a newline in a path adds exactly one change row" same "$(grep -c '^| [0-9]' "$CH")" "$((rows0 + 1))"
 check "…and forges none" same "$(grep -c '^| 00:00:00 |' "$CH" || true)" 0
 check "CHANGES.md keeps its mode ($(mode "$P/tasks/CHANGES.md"))" same "$(mode "$P/tasks/CHANGES.md")" "-rw-r--r--"
+
+# ── env-sync ─────────────────────────────────────────────────────────────────
+echo "env-sync"
+P="$T/es"; install "$P"
+es()   { ( cd "$P" && PATH="$SHIM:$PATH" bash .claude/skills/env-sync/env-sync.sh "$@" ); }
+nenv() { ls -1 "$P/deploys/records" 2>/dev/null | grep -c '^ENV-' || true; }
+sent() { [ -e "$P/remote/$1" ] && echo sent || echo not-sent; }
+printf 'SAMPLE_TOKEN=x\n' > "$P/.env.staging"; mkdir -p "$P/remote"
+es protect >/dev/null 2>&1
+rc=0; RASA_ACTOR="$(printf 'bot\nstatus: success')" es push staging "tester@localhost:$P/remote/a" >/dev/null 2>&1 || rc=$?
+check "an actor carrying a newline is refused before anything is sent (rc $rc)" same "$rc:$(sent a):$(nenv)" "2:not-sent:0"
+rc=0; es push staging "$(printf 'tester@local\nstatus: success'):$P/remote/b" >/dev/null 2>&1 || rc=$?
+check "a peer name carrying a newline is refused before anything is sent (rc $rc)" same "$rc:$(sent b):$(nenv)" "2:not-sent:0"
+rm -rf "$P/deploys"; : > "$P/deploys"      # the ledger directory cannot exist
+rc=0; es push staging "tester@localhost:$P/remote/c" >/dev/null 2>&1 || rc=$?
+check "an unwritable ledger stops the transfer before anything is sent (rc $rc)" same "$rc:$(sent c)" "1:not-sent"
+rm -f "$P/deploys"
+rc=0; es push staging "tester@localhost:$P/remote/d" >/dev/null 2>&1 || rc=$?
+check "a clean push is sent and recorded (rc $rc)" same "$rc:$(sent d):$(nenv)" "0:sent:1"
+
+# ── git-guard ────────────────────────────────────────────────────────────────
+echo "git-guard"
+P="$T/gg"; install "$P"
+( cd "$P" && bash .claude/skills/git-guard/git-guard.sh on >/dev/null 2>&1 )
+H="$(git -C "$P" rev-parse --git-common-dir)/hooks/pre-commit"
+case "$H" in /*) ;; *) H="$P/$H" ;; esac
+{ echo '#!/usr/bin/env bash'; echo 'echo other-hook'; tail -n +2 "$H"; } > "$H.new" && mv "$H.new" "$H"
+chmod 755 "$H"
+( cd "$P" && bash .claude/skills/git-guard/git-guard.sh off >/dev/null 2>&1 )
+nogrep() { ! grep -q "$@"; }
+check "removing git-guard keeps the shared hook executable ($(ls -l "$H" | cut -c1-10))" test -x "$H"
+check "…and the other hook's line" grep -q 'echo other-hook' "$H"
+check "…and git-guard's block is gone" nogrep '>>> git-guard >>>' "$H"
+check "…and no temp file is left in hooks/" nogrep -E '^\.git-guard\.|\.gg\.tmp$' <(ls -A "$(dirname "$H")")
+
+# ── build/deploy ─────────────────────────────────────────────────────────────
+echo "build/deploy"
+P="$T/bd"; install "$P"
+cp -R "$P/build/environments/example" "$P/build/environments/staging"
+log0="$(sum "$P/build/deploy-log.md" 2>/dev/null || echo none)"
+rc=0; ( cd "$P" && RASA_ACTOR="$(printf 'bot\nstatus: success')" bash build/deploy --env=staging --intent=deploy --dry-run >/dev/null 2>&1 ) || rc=$?
+nrec="$(ls -1 "$P/deploys/records" 2>/dev/null | grep -c '\.md$' || true)"
+check "an actor carrying a newline stops the deploy before anything is written (rc $rc, records $nrec)" \
+  same "$rc:$nrec:$([ "$log0" = "$(sum "$P/build/deploy-log.md" 2>/dev/null || echo none)" ] && echo log-unchanged || echo log-changed)" "2:0:log-unchanged"
 
 # ── task-guard ───────────────────────────────────────────────────────────────
 echo "task-guard"

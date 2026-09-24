@@ -15,11 +15,19 @@ knob; nothing else needs setting.
 RASA_ACTOR="agent:mission-runner" ./build/deploy --env=staging --intent=deploy
 ```
 
-Resolution order, identical in every script that records provenance:
+Resolution order — one function, `rasa_actor` in
+`.claude/lib/domain-code/frontmatter.sh`, used by every script that records
+provenance:
 
 1. `RASA_ACTOR`
 2. the clone's git identity (`git config user.name`)
 3. the OS user
+
+Blanks at either end are trimmed. An identity carrying a newline or any other
+control character, or longer than 128 characters, is **refused** — the command
+stops before it writes anything — rather than recorded: before 0.54.0,
+`RASA_ACTOR=$'bot\nstatus: success'` made an in-flight deploy read as a
+success.
 
 Set it in any unattended context — CI, a scheduled job, an agent harness.
 Without it, an agent running under a service account is recorded in the deploy
