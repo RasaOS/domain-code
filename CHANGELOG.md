@@ -24,9 +24,50 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.53.1 — 2026-09-23
+
+### 0.53.x is not for existing installations yet (TASK-063)
+
+v0.53.0's notes gave an upgrade command for installed projects. **It is
+withdrawn.** 0.53.0 changes the shape of the task ledger, and tools outside
+this Element that read or write task frontmatter directly — a board, a
+dispatcher — have not been updated for it. Upgrading an installation whose
+ledger such a tool touches would leave that tool writing `status:` and the
+old bare keys into files the new validator rejects.
+
+- **Existing installations stay on the version they have** until a later
+  release says otherwise. Nothing upgrades on its own: installs are pinned,
+  and the `/sync` they carry cannot run.
+- **New installations are unaffected** — a fresh `bin/init` gets the
+  v1.0.0 lifecycle with nothing else writing to it.
+- The v0.53.0 upgrade section and README now say this. The migration
+  tooling stays: it is exercised by this repository's own ledger and is
+  what the later release will use.
+- The migration was also only tried against local copies of installed
+  ledgers, some behind their remotes, and not against every install layout.
+
+### `pass` and `reject` notes are not prefixed by hand (TASK-064)
+
+`.claude/bin/task pass` records its note as `gate: <note>` and `reject` as
+`gate not passed: <note>`; five places this Element ships told agents to
+pass `--note "gate: …"` as well, so every history line read `gate: gate: …`.
+`/auto-hotfix`, `/mission`, `/release-add` and the seeded done-gate now pass
+the evidence alone and say the tool adds the prefix.
+
+### TASK-062 closed
+
+`bin/task pass` refused at first, correctly: this repository had never
+declared what *done* means for its own tasks, and the module will not pass a
+task against a gate that does not exist. `.claude/done-gate.md` now declares
+it — the gates `CLAUDE.md` ("Verify before you finish") and CI already hold
+every change to. It is not the gate the Element ships
+(`seed/done-gate.md.template`).
+
+---
+
 ## v0.53.0 — 2026-09-23
 
-### The task system is `rasa.module.tasks` v1.0.0 — BREAKING: every installed ledger migrates
+### The task system is `rasa.module.tasks` v1.0.0 — BREAKING ledger shape; not yet for existing installations
 
 `rasa.module.tasks` was distilled from this Element in June, then rebuilt
 for v1.0.0 against 558 real task files. That survey is the case for this
@@ -43,18 +84,12 @@ This is a minor bump by this repository's own precedent (v0.36.0, the last
 task-status overhaul, and v0.49.0 were both breaking minors), though the
 rule at the top of this file would call it major.
 
-#### Upgrading an installed project
+#### Upgrading an installed project — not yet
 
-The `/sync` a 0.52 project has cannot run (it reads `.claude/foundation.json`,
-which has not existed since the canon lock). From the project root, with
-`tasks/` committed:
-
-```sh
-git clone https://github.com/RasaOS/domain-code /tmp/domain-code
-/tmp/domain-code/bin/migrate-ledger .     # optional: preview
-/tmp/domain-code/bin/init .
-.claude/bin/check-tasks
-```
+**Do not upgrade an existing installation to 0.53.x.** See v0.53.1: the
+upgrade instructions first published here are withdrawn. New installations
+are unaffected. What follows describes the migration for when a later
+release opens it.
 
 `bin/init` migrates the ledger **before** it seeds anything under `tasks/`
 — `tasks/tasks.config.yml` carries the schema marker the converter reads as
@@ -64,13 +99,11 @@ If `tasks/` has uncommitted changes the migration is refused and every
 is left uncommitted: read `tasks/MIGRATION-REVIEW.md`, fix what
 `check-tasks` reports, commit the ledger on its own.
 
-Tried against clones of five real consumers — vsi-web (123 tasks), vsi-ios
-(140), kernel (256), rasa-console (350), rasa-website: all converted, with
-real dates and authors read from git. kernel and rasa-website validate with
-zero errors; the rest are left with dangling ROADMAP lines (1, 1 and 5) —
-a line naming a task file that does not exist, which the module never
-auto-fixes because only a person knows whether the task was lost or the
-line is stale. Each is listed in that project's review file.
+Tried against copies of five installed ledgers of up to 350 tasks: all
+converted, with dates and authors read from git; the only errors left were
+dangling ROADMAP lines — a line naming a task file that does not exist,
+which the module never auto-fixes because only a person knows whether the
+task was lost or the line is stale. Each is listed in the review file.
 
 #### What ships
 
@@ -98,8 +131,8 @@ line is stale. Each is listed in that project's review file.
 - **`/task-enforce`** files into `triage/` through `bin/task new` with
   `x-origin: auto-fallback`. It used to mint the file itself with seven
   keys the new validator rejects, and its allocator released the id lock
-  before the file existed — the window kernel's duplicate TASK-170..175
-  came through. `stamp` writes only this domain's `x-` keys plus
+  before the file existed — the window duplicate ids in real ledgers came
+  through. `stamp` writes only this domain's `x-` keys plus
   `priority`, bumps `updated` and re-records the task's digest (so its own
   write never reads as an unrecorded edit, I-34), and refuses the keys the
   lifecycle owns with the command to use instead.

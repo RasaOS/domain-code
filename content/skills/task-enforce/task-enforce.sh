@@ -151,7 +151,7 @@ classify_path() {
 # Filing goes through .claude/bin/task. It allocates the id under an atomic
 # lock AND creates the file inside that lock, so two sessions can never be
 # handed one number — the window the mkdir-then-write allocator that used to
-# live here left open (kernel's duplicate TASK-170..175 are exactly that).
+# live here left open, and the duplicate ids real ledgers carry came through.
 # It also writes the tasks/history.tsv line and records the digest.
 
 task_driver() { printf '%s\n' "$1/.claude/bin/task"; }

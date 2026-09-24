@@ -61,7 +61,7 @@ does not bump versions, it does not ship.
 
   ```bash
   .claude/bin/task submit TASK-NNN      # only if it is still in active/
-  .claude/bin/task pass TASK-NNN --by <who> --note "gate: merged in <sha>, <evidence>"
+  .claude/bin/task pass TASK-NNN --by <who> --note "merged in <sha>, <evidence>"   # logged as "gate: …"
   .claude/skills/task-enforce/task-enforce.sh stamp TASK-NNN x-outcome shipped
   ```
 

@@ -110,8 +110,9 @@ tasks *after* the hotfix ships, not during it.
    `hotfix/TASK-NNN-slug` per `code-task-rules.md` §10 —
    implementation starts on that branch;
    `.claude/bin/task submit <id>` when the fix's PR opens;
-   `.claude/bin/task pass <id> --by <actor> --note "gate: …"`
-   once the done-gate passes and the PR merges; then the 🔥
+   `.claude/bin/task pass <id> --by <actor> --note "<evidence>"`
+   (the tool records it as `gate: <evidence>`) once the
+   done-gate passes and the PR merges; then the 🔥
    `tasks/AUDIT.md` entry and the postmortem
    (`code-task-rules.md` §4, §13).
 9. **Spec-file fast-path** per `autonomy-rules.md` Exception 2.
