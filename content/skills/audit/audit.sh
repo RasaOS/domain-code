@@ -12,6 +12,16 @@
 
 set -euo pipefail
 
+# The shared record library — rasa_root, the frontmatter reader and writer,
+# rasa_actor. Found relative to this script (content/lib/domain-code/ in the
+# Element, .claude/lib/domain-code/ in an install), never through the project
+# root it exists to resolve.
+_rfm="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../lib/domain-code" 2>/dev/null && pwd)/frontmatter.sh"
+[ -f "$_rfm" ] || { echo "error: $(basename "$0"): .claude/lib/domain-code/frontmatter.sh is missing — re-run the Element's bin/init" >&2; exit 70; }
+# shellcheck source=../../lib/domain-code/frontmatter.sh
+. "$_rfm"
+rfm_require 1 || exit 70
+
 # ============================================================
 # CONFIG — extend these to evolve the audit shape over time.
 # ============================================================
@@ -122,19 +132,14 @@ EOF
 # Helpers — project / repo
 # ============================================================
 
-# Worktree root — the user's current view of files. Unlike save/load
+# This checkout's project root — the user's current view of files. Unlike save/load
 # (which use git-common-dir for project-scoped, branch-independent
 # state), audit reads CODE which differs per branch / per worktree.
 # Audits should reflect what the user is looking at right now.
-project_root() {
-  local top
-  top="$(git rev-parse --show-toplevel 2>/dev/null)" || {
-    echo "error: not inside a git repo" >&2
-    return 1
-  }
-  # Resolve symlinks physically (consistent with other kit scripts).
-  ( cd -P "$top" 2>/dev/null && pwd -P )
-}
+# The project this install serves — its ledgers and .claude/ live here.
+# rasa_root (the shared library) walks up to the install's lockfile and
+# never past the repository top; see its comment for the order.
+project_root() { rasa_root; }
 
 # Slug from target: lowercase, alphanumeric+hyphen, kebab-case.
 target_slug() {

@@ -119,6 +119,8 @@ branch_exists() {
 branch_in_use_elsewhere() {
   local branch="$1"
   local self
+  # Git's own question — which worktree is this? — so the git toplevel, not
+  # the project root (rasa_root): `git worktree list` names worktree roots.
   self="$(git rev-parse --show-toplevel 2>/dev/null)" || return 1
   git worktree list --porcelain 2>/dev/null \
     | awk -v branch="refs/heads/$branch" -v self="$self" '

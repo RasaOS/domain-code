@@ -93,6 +93,15 @@ jobs:
           ln -s "$(command -v mawk)" "$shim/awk"
           PATH="$shim:$PATH" bash bin/check-frontmatter
 
+      # Install-root resolution (rasa_root): per-package installs, nested
+      # repositories and worktrees resolve to their own install, never a parent.
+      - name: Install-root resolution (mawk)
+        run: |
+          set -euo pipefail
+          shim="$(mktemp -d)"
+          ln -s "$(command -v mawk)" "$shim/awk"
+          PATH="$shim:$PATH" bash bin/test-root
+
   macos:
     name: runs on stock macOS bash
     runs-on: macos-latest
@@ -119,6 +128,9 @@ jobs:
       # The frontmatter contract under stock bash 3.2 and BWK awk.
       - name: Frontmatter contract (bash 3.2)
         run: /bin/bash bin/check-frontmatter
+
+      - name: Install-root resolution (bash 3.2)
+        run: /bin/bash bin/test-root
 
       # The approval gate must (a) auto-approve under FORCE_APPROVAL=1 and
       # (b) fail CLOSED with no controlling terminal. A CI runner has no

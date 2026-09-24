@@ -19,6 +19,16 @@
 
 set -euo pipefail
 
+# The shared record library — rasa_root, the frontmatter reader and writer,
+# rasa_actor. Found relative to this script (content/lib/domain-code/ in the
+# Element, .claude/lib/domain-code/ in an install), never through the project
+# root it exists to resolve.
+_rfm="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../lib/domain-code" 2>/dev/null && pwd)/frontmatter.sh"
+[ -f "$_rfm" ] || { echo "error: $(basename "$0"): .claude/lib/domain-code/frontmatter.sh is missing — re-run the Element's bin/init" >&2; exit 70; }
+# shellcheck source=../../lib/domain-code/frontmatter.sh
+. "$_rfm"
+rfm_require 1 || exit 70
+
 # ── tunables (env-overridable) ───────────────────────────────────
 # Autosave fires when ANY threshold trips. The time backstop is the
 # one that catches forgetfulness — a small change left abandoned.
@@ -74,12 +84,10 @@ EOF
 }
 
 # ── helpers ──────────────────────────────────────────────────────
-repo_root() {
-  git rev-parse --show-toplevel 2>/dev/null || {
-    echo "error: not inside a git repo" >&2
-    return 1
-  }
-}
+# The project this install serves — its ledgers and .claude/ live here.
+# rasa_root (the shared library) walks up to the install's lockfile and
+# never past the repository top; see its comment for the order.
+repo_root() { rasa_root; }
 
 # Shared .git dir — correct inside worktrees (hooks + markers live here).
 git_common_dir() {

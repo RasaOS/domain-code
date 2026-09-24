@@ -35,8 +35,12 @@ cd "$T" || exit 2
 git init -q .
 git config user.name tester
 git config user.email tester@example.invalid
-mkdir -p .claude/skills/contract contracts/stamps
+mkdir -p .claude/skills/contract .claude/lib/domain-code contracts/stamps
 cp "$SRC" .claude/skills/contract/contract.sh
+# Laid out as bin/init installs it: the shared library beside the skills,
+# and a lockfile, which is how contract.sh finds this project (rasa_root).
+cp "$(dirname "$SRC")/../../lib/domain-code/frontmatter.sh" .claude/lib/domain-code/frontmatter.sh
+printf '{"lock_version": 1}\n' > .claude/rasa.lock.json
 printf '# Contract ledger\n' > contracts/LEDGER.md
 
 # Run contract.sh under the SAME interpreter as this harness, so

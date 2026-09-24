@@ -398,12 +398,14 @@ EXIT CODES:
 EOF
 }
 
-repo_root() {
-  git rev-parse --show-toplevel 2>/dev/null || {
-    echo "error: not inside a git repo" >&2
-    return 1
-  }
-}
+# The shared record library: rasa_root (the project), the frontmatter
+# reader/writer, rasa_actor. Found relative to this script, never through
+# the project root.
+_rfm="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../lib/domain-code" 2>/dev/null && pwd)/frontmatter.sh"
+[ -f "$_rfm" ] || { echo "error: .claude/lib/domain-code/frontmatter.sh is missing — re-run the Element's bin/init" >&2; exit 70; }
+. "$_rfm"; rfm_require 1 || exit 70
+
+project_root() { rasa_root; }
 
 # <TODO: helper functions here. Small, named, single-purpose.>
 

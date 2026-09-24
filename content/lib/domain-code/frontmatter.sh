@@ -59,6 +59,13 @@
 RFM_LIB_VERSION=1
 RFM_BOM="$(printf '\357\273\277')"; export RFM_BOM
 
+# The directory of the script that sourced this library, resolved NOW —
+# before the script can `cd` — for rasa_root's install walk.
+RFM_CALLER_DIR=""
+if [ -n "${BASH_SOURCE[1]:-}" ]; then
+  RFM_CALLER_DIR="$(cd "$(dirname "${BASH_SOURCE[1]}")" 2>/dev/null && pwd -P || true)"
+fi
+
 # rfm_require <n> — a caller asserts the lib it sourced is new enough.
 rfm_require() {
   [ "${RFM_LIB_VERSION:-0}" -ge "${1:-1}" ] 2>/dev/null && return 0
@@ -291,6 +298,42 @@ rfm_write_atomic() {
     mv -f "$tmp" "$dest" && return 0
   fi
   rm -f "$tmp"; echo "error: cannot write $dest" >&2; return 1
+}
+
+# ── location ────────────────────────────────────────────────────────────────
+# rasa_root [<explicit-root>] — the project this install serves: where its
+# ledgers, records and .claude/ configuration live. Resolution order:
+#   1. an explicit root argument, else $RASA_ROOT;
+#   2. the install that owns the calling script: walk up from the script's
+#      own directory to the first directory holding .claude/rasa.lock.json;
+#   3. the same walk from the current directory.
+# Each walk stops at the enclosing repository's top — the first directory
+# holding a .git directory or file — and never crosses it. So a per-package
+# install inside a monorepo resolves to its package, and a repository nested
+# inside another never resolves to the parent. `git rev-parse
+# --show-toplevel` did neither: it answered the monorepo's root, and a
+# "nearest ancestor with a lockfile" rule would have walked out of the
+# repository. rc 70 when nothing resolves.
+rasa_root() {
+  local d start
+  if [ -n "${1:-}" ] || [ -n "${RASA_ROOT:-}" ]; then
+    d="${1:-$RASA_ROOT}"
+    [ -d "$d" ] || { echo "error: project root '$d' is not a directory" >&2; return 70; }
+    (cd "$d" && pwd -P)
+    return
+  fi
+  for start in "$RFM_CALLER_DIR" "$(pwd -P)"; do
+    [ -n "$start" ] || continue
+    d="$start"
+    while :; do
+      if [ -f "$d/.claude/rasa.lock.json" ]; then printf '%s\n' "$d"; return 0; fi
+      [ -e "$d/.git" ] && break
+      [ "$d" = "/" ] && break
+      d="$(dirname "$d")"
+    done
+  done
+  echo "error: no RasaOS install here — no .claude/rasa.lock.json between this script or the current directory and the top of its repository. Run from inside an installed project, or set RASA_ROOT." >&2
+  return 70
 }
 
 # ── identity ────────────────────────────────────────────────────────────────
