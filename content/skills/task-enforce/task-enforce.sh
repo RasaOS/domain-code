@@ -34,8 +34,13 @@
 #   task-enforce.sh current               print the linked task
 #   task-enforce.sh set <TASK-NNN>        link work to an existing task
 #   task-enforce.sh clear                 unlink (next code edit re-gates)
-#   task-enforce.sh new "<title>"         mint a stub and link it
+#   task-enforce.sh new "<title>"         file a task (triage/) and link it
+#   task-enforce.sh stamp <id> <key> <v>  set an x- key (code-task-rules.md §7)
 #   task-enforce.sh classify <path>       show how a path classifies
+#
+# Tasks are filed through .claude/bin/task (rasa.module.tasks v1.0.0), never
+# written by hand: it allocates the id, writes tasks/history.tsv and records
+# the task's digest in one act.
 #
 # Exit: 0 ok · 1 error · 2 usage · 3 refused
 #
@@ -142,94 +147,111 @@ classify_path() {
 }
 
 # ------------------------------------------------------------ task id
-# Reserve the ID with a real mutex. `set -C` on a filename does NOT work
-# here: two sessions both compute TASK-012, write
-# TASK-012-<different-slug>.md, and BOTH succeed because the paths
-# differ. mkdir is atomic everywhere.
-next_task_id() {
-  local root="$1" lockdir="$root/tasks/.id.lock" n=0 id
-  mkdir -p "$root/tasks" 2>/dev/null || true
-  while ! mkdir "$lockdir" 2>/dev/null; do
-    n=$(( n + 1 ))
-    if [ "$n" -gt 50 ]; then
-      # Stale lock from a killed process — 50 tries is ~5s.
-      rm -rf "$lockdir" 2>/dev/null || true
-    fi
-    [ "$n" -lt 100 ] || return 1
-    sleep 0.1 2>/dev/null || sleep 1
-  done
-  local max=0 f base num
-  for f in $(find "$root/tasks" -name 'TASK-*.md' 2>/dev/null || true); do
-    base="$(basename "$f")"
-    num="$(printf '%s' "$base" | sed -n 's/^TASK-\([0-9][0-9]*\).*/\1/p')"
-    [ -n "$num" ] || continue
-    num="$(printf '%s' "$num" | sed 's/^0*//')"; [ -n "$num" ] || num=0
-    [ "$num" -gt "$max" ] && max="$num"
-  done
-  id="$(printf 'TASK-%03d' "$(( max + 1 ))")"
-  printf '%s\n' "$id"
-  rmdir "$lockdir" 2>/dev/null || true
+# Filing goes through .claude/bin/task. It allocates the id under an atomic
+# lock AND creates the file inside that lock, so two sessions can never be
+# handed one number — the window the mkdir-then-write allocator that used to
+# live here left open (kernel's duplicate TASK-170..175 are exactly that).
+# It also writes the tasks/history.tsv line and records the digest.
+
+task_driver() { printf '%s\n' "$1/.claude/bin/task"; }
+
+# actor_handle — RASA_ACTOR (stamps.md "Stamp: run"), else the git identity,
+# folded into the handle grammar bin/task enforces ([a-z0-9][a-z0-9._-]*,
+# at most 32). Empty when neither is set: bin/task then resolves it itself.
+actor_handle() {
+  local a="${RASA_ACTOR:-}"
+  [ -n "$a" ] || a="$(git config user.name 2>/dev/null || true)"
+  printf '%s' "$a" | tr '[:upper:]' '[:lower:]' \
+    | sed 's/[^a-z0-9._-]\{1,\}/-/g; s/^[^a-z0-9]\{1,\}//' | cut -c1-32
 }
 
-slugify() {
-  printf '%s' "$1" | tr '[:upper:]' '[:lower:]' \
-    | sed 's/[^a-z0-9]\{1,\}/-/g; s/^-//; s/-$//' | cut -c1-48
+# task_annotate <root> <file> <key> <value> [<note>]
+# Upsert one frontmatter key, set `updated` to today, optionally put a note
+# under the H1, then re-record the task's digest row — what a bin/task verb
+# does after it writes. Without the re-digest, the validator would read this
+# write as an unrecorded same-day edit (I-34) on its next run.
+task_annotate() {
+  python3 - "$@" <<'PY'
+import datetime, hashlib, os, sys
+root, path, key, value = sys.argv[1:5]
+note = sys.argv[5] if len(sys.argv) > 5 else ""
+with open(path, encoding="utf-8") as fh:
+    lines = fh.read().split("\n")
+if not lines or lines[0] != "---" or "---" not in lines[1:]:
+    sys.stderr.write("error: %s has no frontmatter block\n" % path)
+    sys.exit(1)
+close = lines.index("---", 1)
+today = datetime.date.today().isoformat()
+
+
+def upsert(k, v):
+    global close
+    for i in range(1, close):
+        if lines[i].startswith(k + ":"):
+            lines[i] = "%s: %s" % (k, v)
+            return
+    lines.insert(close, "%s: %s" % (k, v))
+    close += 1
+
+
+upsert(key, value)
+upsert("updated", today)
+tid = ""
+for i in range(1, close):
+    if lines[i].startswith("id:"):
+        tid = lines[i].split(":", 1)[1].strip()
+if note:
+    for i in range(close + 1, len(lines)):
+        if lines[i].startswith("# "):
+            lines[i + 1:i + 1] = ["", note]
+            break
+with open(path, "w", encoding="utf-8") as fh:
+    fh.write("\n".join(lines))
+
+digests = os.path.join(root, "tasks", ".state", "digests.tsv")
+if tid and os.path.isfile(digests):
+    rows = {}
+    with open(digests, encoding="utf-8") as fh:
+        for ln in fh.read().split("\n"):
+            if not ln:
+                continue
+            f = ln.split("\t")
+            if len(f) != 4:
+                sys.exit(0)  # unparseable: check-tasks re-seeds it, and says so
+            rows[f[0]] = f
+    with open(path, "rb") as fh:
+        sha = hashlib.sha256(fh.read()).hexdigest()
+    rows[tid] = [tid, sha, today, os.path.basename(os.path.dirname(path))]
+    tmp = digests + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write("".join("\t".join(r) + "\n" for _, r in sorted(rows.items())))
+    os.replace(tmp, digests)
+PY
 }
 
 mint_stub() {
-  # mint_stub <root> <title> <origin> [trigger-path]
+  # mint_stub <root> <title> <origin> [trigger-path]  → prints the new id
   local root="$1" title="$2" origin="$3" trigger="${4:-}"
-  local id slug dir file
-  id="$(next_task_id "$root")" || return 1
-  slug="$(slugify "$title")"; [ -n "$slug" ] || slug="untitled"
-  dir="$root/tasks/backlog"
-  mkdir -p "$dir"
-  file="$dir/$id-$slug.md"
-  {
-    echo "---"
-    echo "id: $id"
-    echo "category: stub"
-    echo "phase: null"
-    echo "status: backlog"
-    echo "owner: unassigned"
-    echo "blocked_by:"
-    echo "outcome: unrecorded"
-    # One timestamp grammar across the Element: the hotfix template's
-    # `YYYY-MM-DD HH:MM UTC` is canonical. This used to emit seconds too.
-    echo "filed: $(date -u '+%Y-%m-%d %H:%M UTC')"
-    echo "origin: $origin"
-    echo "---"
-    echo ""
-    echo "# $id: $title"
-    echo ""
-    echo "> STATUS: STUB — light tracking only. No full spec is expected."
-    if [ "$origin" = "auto-fallback" ]; then
-      echo ">"
-      echo "> **Filed automatically** because a code change was attempted with"
-      echo "> no task linked. The title came from the file being edited, not"
-      echo "> from anyone's intent — rewrite it to say what this work IS."
-    fi
-    echo ""
-    echo "## What this is"
-    echo ""
-    if [ -n "$trigger" ]; then
-      echo "Work touching \`$trigger\`."
-    else
-      echo "_(describe in one or two sentences)_"
-    fi
-    echo ""
-    echo "## Files expected to change"
-    echo ""
-    [ -n "$trigger" ] && echo "- \`$trigger\`" || echo "- _(unknown)_"
-    echo ""
-    echo "## References"
-    echo ""
-    echo "_(deploy records, evidence, related tasks)_"
-    echo ""
-    echo "## Notes"
-    echo ""
-    echo "-"
-  } > "$file"
+  local drv by note out id file body=""
+  drv="$(task_driver "$root")"
+  [ -f "$drv" ] || return 1
+  by="$(actor_handle)"
+  note="$origin"; [ -n "$trigger" ] && note="$origin: $trigger"
+  if [ -n "$by" ]; then
+    out="$(python3 "$drv" new --root "$root" --quiet --type change \
+      --by "$by" --note "$note" "$title" </dev/null 2>/dev/null)" || return 1
+  else
+    out="$(python3 "$drv" new --root "$root" --quiet --type change \
+      --note "$note" "$title" </dev/null 2>/dev/null)" || return 1
+  fi
+  id="$(printf '%s\n' "$out" | awk 'NR==1 { print $1 }')"
+  file="$(printf '%s\n' "$out" | awk 'NR==2 { sub(/^[[:space:]]+/, ""); print }')"
+  case "$id" in TASK-*) ;; *) return 1 ;; esac
+  [ -f "$file" ] || return 1
+  if [ "$origin" = "auto-fallback" ]; then
+    body="> **Filed automatically** because a code change${trigger:+ to \`$trigger\`} was attempted with no task linked. The title came from the file being edited, not from anyone's intent — rewrite it to say what this work IS, then graduate it into a phase or close it."
+  fi
+  task_annotate "$root" "$file" x-origin "$origin" "$body" || return 1
   printf '%s\n' "$id"
 }
 
@@ -357,13 +379,13 @@ PY
   if id="$(mint_stub "$root" "$title" auto-fallback "$rel")"; then
     set_current "$root" "$id"
     ledger_row "$root" "$id" "$rel" code; ledger_index "$root"
-    emit_deny "No task was linked to this change, so one was filed: ${id} (tasks/backlog/). It is now the current task — RETRY THIS EDIT and it will proceed, along with everything after it.
+    emit_deny "No task was linked to this change, so one was filed: ${id} (tasks/triage/). It is now the current task — RETRY THIS EDIT and it will proceed, along with everything after it.
 
 The title was derived from the filename, not from intent. Before continuing, open ${id} and write what this work actually is, plus the files you expect to change.
 
 If this belongs to an existing task instead: bash .claude/skills/task-enforce/task-enforce.sh set TASK-NNN"
   else
-    emit_deny "Task enforcement is on and a task could not be filed (could not allocate an id under tasks/). Fix the tasks/ directory or run: bash .claude/skills/task-enforce/task-enforce.sh off"
+    emit_deny "Task enforcement is on and a task could not be filed: .claude/bin/task is missing or refused. Run .claude/bin/check-tasks to see why, re-run the Element's bin/init, or run: bash .claude/skills/task-enforce/task-enforce.sh off"
   fi
   exit 0
 }
@@ -416,16 +438,19 @@ cmd_status() {
   # Both counters read FRONTMATTER, not the whole file. The old unanchored
   # `grep -l '^origin: auto-fallback'` also matched any task whose BODY quoted
   # that line at column 0 — which every task spec documenting this field does.
+  # An auto-filed task still in triage/ is one nobody has looked at yet; an
+  # outcome is only meaningful once a task has reached completed/.
   local n_auto=0 n_unrec=0 f
-  for f in $(find "$root/tasks" -name 'TASK-*.md' 2>/dev/null); do
+  for f in "$root"/tasks/triage/TASK-*.md; do
     [ -f "$f" ] || continue
-    [ "$(fm_field "$f" origin)" = "auto-fallback" ] && n_auto=$((n_auto + 1))
-    case "$(fm_field "$f" outcome)" in
-      ''|unrecorded) n_unrec=$((n_unrec + 1)) ;;
-    esac
+    [ "$(fm_field "$f" x-origin)" = "auto-fallback" ] && n_auto=$((n_auto + 1))
   done
-  [ "$n_auto" -gt 0 ] && echo "  auto-filed stubs needing a real title: ${n_auto}"
-  [ "$n_unrec" -gt 0 ] && echo "  tasks with no recorded outcome: ${n_unrec}"
+  for f in "$root"/tasks/completed/TASK-*.md; do
+    [ -f "$f" ] || continue
+    [ -n "$(fm_field "$f" x-outcome)" ] || n_unrec=$((n_unrec + 1))
+  done
+  [ "$n_auto" -gt 0 ] && echo "  auto-filed tasks in triage needing a real title: ${n_auto}"
+  [ "$n_unrec" -gt 0 ] && echo "  completed tasks with no recorded outcome: ${n_unrec}"
   echo ""
 }
 
@@ -447,49 +472,65 @@ fm_field() {
   ' "$1" 2>/dev/null
 }
 
-# The keys `stamp` may write. Restricted on purpose: nothing else validates
-# task frontmatter, so a typo'd key would otherwise be written silently and
-# read back as absent forever.
-STAMPABLE="id category status phase owner blocked_by outcome filed origin severity"
-
-# stamp <TASK-NNN> <key> <value> — a real UPSERT over a task's frontmatter.
+# stamp <TASK-NNN> <key> <value> — set one of this domain's own keys.
 #
-# Rewrites the key if present, INSERTS it before the closing `---` if absent,
-# and fails loudly when the file has no frontmatter block at all. That last
-# case matters: contract.sh's fm_set — the Element's only other frontmatter
-# writer — has no insert branch, so setting a missing key returns exit 0 with
-# the file byte-identical. A field nothing can write does not exist.
+# rasa.module.tasks v1.0.0 owns every bare frontmatter key and rejects any it
+# does not know (I-11); the `x-` prefix is the one extension seam. So stamp
+# writes only x- keys (code-task-rules.md §7) plus `priority`, checks each
+# value, and refuses the keys the lifecycle owns with the command to use
+# instead. The old names — origin, owner, outcome, severity — are accepted
+# and written as their x- form, so a caller from before 0.53 still lands.
 cmd_stamp() {
-  local id="$1" key="$2" val="$3" root file tmp
+  local id="$1" key="$2" val="$3" root file allowed=""
   root="$(repo_root)" || return 1
 
-  case " $STAMPABLE " in
-    *" $key "*) ;;
-    *) echo "error: '$key' is not a stampable field" >&2
-       echo "  allowed: $STAMPABLE" >&2
-       return 2 ;;
+  case "$key" in
+    origin|owner|outcome|severity) key="x-$key" ;;
   esac
+  case "$key" in
+    x-origin)   allowed="manual auto-fallback auto-guard" ;;
+    x-outcome)  allowed="shipped reverted" ;;
+    x-severity) allowed="critical high medium low" ;;
+    priority)   allowed="now high normal low" ;;
+    x-owner)
+      case "$val" in
+        ''|*[!a-z0-9._-]*) echo "error: x-owner must be a handle ([a-z0-9._-])" >&2; return 2 ;;
+      esac ;;
+    status)
+      echo "error: there is no status field — the directory is the state." >&2
+      echo "  move it with .claude/bin/task (start, submit, pass, block, close, …)" >&2
+      return 2 ;;
+    phase)
+      echo "error: phase is set by: .claude/bin/task graduate $id --phase <P>" >&2
+      return 2 ;;
+    id|type|created|created_by|updated|completed_by|resolution|resolution_ref|needs|target)
+      echo "error: '$key' belongs to the task lifecycle — see .claude/task-rules.md §3" >&2
+      return 2 ;;
+    *)
+      echo "error: '$key' is not a stampable field" >&2
+      echo "  allowed: x-origin x-owner x-outcome x-severity priority" >&2
+      return 2 ;;
+  esac
+  if [ -n "$allowed" ]; then
+    case " $allowed " in
+      *" $val "*) ;;
+      *) echo "error: $key must be one of: $allowed" >&2; return 2 ;;
+    esac
+  fi
 
-  file="$(find "$root/tasks" -name "$id-*.md" 2>/dev/null | head -1)"
+  file="$(find "$root/tasks" -path "$root/tasks/.state" -prune -o -name "$id-*.md" -print 2>/dev/null | head -1)"
   [ -n "$file" ] || { echo "error: no task file for $id under tasks/" >&2; return 1; }
 
-  head -1 "$file" | grep -q '^---$' || {
-    echo "error: $file has no frontmatter block — refusing to stamp" >&2
-    echo "  add a '---' block first; see stamps.md 'Stamp: task'" >&2
-    return 1
-  }
+  if [ "$key" = "priority" ] && [ "$val" = "now" ]; then
+    case "$file" in
+      */tasks/triage/*|*/tasks/backlog/*)
+        echo "error: priority now is a route, not a label — a now task is being worked." >&2
+        echo "  start it first: .claude/bin/task start $id  (task-rules.md §7, I-14)" >&2
+        return 2 ;;
+    esac
+  fi
 
-  tmp="$(mktemp)"
-  awk -v k="$key" -v v="$val" '
-    NR==1 && $0=="---" { fm=1; print; next }
-    fm && $0=="---" {
-      if (!seen) print k": "v          # insert before the closing fence
-      fm=0; print; next
-    }
-    fm && $0 ~ "^"k"[[:space:]]*:" { print k": "v; seen=1; next }
-    { print }
-  ' "$file" > "$tmp" && mv "$tmp" "$file"
-
+  task_annotate "$root" "$file" "$key" "$val" || return 1
   echo "$id: $key = $val"
 }
 
@@ -513,13 +554,19 @@ cmd_stamp() {
 # NO BYPASS VARIABLE, by the class-guard precedent.
 
 # The allowlist, defined ONCE. Prose cites this; this is what runs.
-SPEC_ALLOW_GLOBS="tasks/*.md tasks/**/*.md"
+SPEC_ALLOW_GLOBS="tasks/*.md tasks/**/*.md tasks/history.tsv"
 
 # spec_path_ok <path> — bash 3.2, no extglob, no globstar.
-# Allowed: anything under tasks/ ending .md, at any depth. That covers
-# tasks/PHASES.md, tasks/ROADMAP.md, tasks/RELEASES.md and tasks/**/*.md.
+# Allowed: anything under tasks/ ending .md, at any depth — tasks/PHASES.md,
+# tasks/ROADMAP.md, tasks/RELEASES.md and tasks/**/*.md — plus
+# tasks/history.tsv, the transition log .claude/bin/task appends to on every
+# filing and move. It is data, not code: without it, no spec-only change set
+# that files or moves a task could ever pass. tasks/tasks.config.yml is NOT
+# allowed — it declares the ledger's actors and targets, and a change to it
+# is a decision, not a spec.
 spec_path_ok() {
   case "$1" in
+    tasks/history.tsv) return 0 ;;
     tasks/*.md) return 0 ;;
     tasks/*/*.md|tasks/*/*/*.md|tasks/*/*/*/*.md) return 0 ;;
     *) return 1 ;;

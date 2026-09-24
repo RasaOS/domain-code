@@ -493,8 +493,8 @@ cmd_bundle() {
   # fact recorded twice" and a mismatch a bug to fix, not a tiebreak.
   #
   # It lives here rather than only in the skill so that no caller can
-  # forget it. /release-add does the active/->completed/ move first when
-  # git proves the merge; by the time it calls bundle, this passes.
+  # forget it. /release-add runs `.claude/bin/task pass` first when git
+  # proves the merge; by the time it calls bundle, this passes.
   #
   # A `Phase N` bullet has no task file and is gated by its members
   # instead — the caller checks ROADMAP membership.
@@ -507,8 +507,12 @@ cmd_bundle() {
         elsewhere="$(find "$ROOT/tasks" -name "$id-*.md" 2>/dev/null | head -1 || true)"
         if [ -n "$elsewhere" ]; then
           echo "  it is at: ${elsewhere#$ROOT/}" >&2
-          echo "  if the work is merged:" >&2
-          echo "      git mv ${elsewhere#$ROOT/} tasks/completed/    # then set status: completed" >&2
+          echo "  if the work is merged, pass its done-gate (.claude/done-gate.md):" >&2
+          case "$elsewhere" in
+            */tasks/review/*) ;;
+            *) echo "      .claude/bin/task submit $id" >&2 ;;
+          esac
+          echo "      .claude/bin/task pass $id --by <who> --note \"gate: …\"" >&2
         else
           echo "  no spec file found under tasks/ for $id." >&2
         fi

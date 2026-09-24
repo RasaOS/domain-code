@@ -358,6 +358,12 @@
         "note": "The append-only transition log, header row only; written by .claude/bin/task, never by hand. Vendored from rasa.module.tasks v1.0.0. Held back with tasks.config.yml while a pre-1.0 ledger is unmigrated."
       },
       {
+        "from": "seed/tasks/.gitignore.template",
+        "to": "tasks/.gitignore",
+        "policy": "skip-if-exists",
+        "note": "Keeps tasks/.state/ - the validator's digest cache and the id-allocation lock, both regenerable - out of version control. rasa.domain.code's addition; the module ships no ignore file, so every install left the cache untracked."
+      },
+      {
         "from": "seed/tasks/triage/.keep",
         "to": "tasks/triage/.keep",
         "policy": "skip-if-exists",

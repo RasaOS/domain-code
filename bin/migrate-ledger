@@ -225,17 +225,20 @@ def prepare(tasks):
     return done
 
 
-def ensure_gitignore(project):
-    path = os.path.join(project, ".gitignore")
-    entry = "tasks/.state/"
+def ensure_gitignore(tasks):
+    """Keep tasks/.state/ (the validator's cache and the allocation lock) out
+    of version control, with an ignore file inside tasks/ rather than an edit
+    to the project's own .gitignore."""
+    path = os.path.join(tasks, ".gitignore")
     existing = read(path) if os.path.isfile(path) else ""
-    if any(l.strip() in (entry, "/" + entry, "tasks/.state") for l in existing.split("\n")):
+    if any(l.strip() in (".state/", "/.state/", ".state") for l in existing.split("\n")):
         return None
     with open(path, "a", encoding="utf-8") as fh:
         if existing and not existing.endswith("\n"):
             fh.write("\n")
-        fh.write("# rasa.module.tasks machine cache (regenerable)\n%s\n" % entry)
-    return "added %s to .gitignore" % entry
+        fh.write("# rasa.module.tasks machine cache (digests, the allocation lock) — regenerable,\n"
+                 "# never committed. Seeded by rasa.domain.code; yours to extend.\n.state/\n")
+    return "added tasks/.gitignore for the tasks/.state/ cache"
 
 
 def run_migrate(args):
@@ -326,7 +329,7 @@ def main(argv=None):
         return 2
 
     if git:
-        note = ensure_gitignore(project)
+        note = ensure_gitignore(tasks)
         if note:
             say("migrate-ledger: " + note)
 

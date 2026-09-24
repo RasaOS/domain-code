@@ -10,9 +10,16 @@
 # unattended from the hook.
 #
 # The model is auto-create, never block: a commit is never
-# rejected. When an auditable change has no task, the hook creates
-# a minimal stub and rides it (plus the ledger row) into the same
-# commit, so the audit trail is never broken.
+# rejected. When an auditable change has no task, the hook files one
+# with .claude/bin/task (rasa.module.tasks v1.0.0) into tasks/triage/
+# and rides it — plus its tasks/history.tsv line and the ledger row —
+# into the same commit, so the audit trail is never broken.
+#
+# "Has a task" means, in order: the current-task pointer /task-enforce
+# keeps; else a task in active/ or review/ (in flight — review/ is an
+# open PR, and a fix-up commit on it belongs to it). A filed stub becomes
+# the current task, so the next unlinked commit links to it instead of
+# filing another.
 
 set -euo pipefail
 
@@ -27,15 +34,16 @@ task-guard.sh — enforce: every code/config change is task-linked.
 USAGE:
   task-guard.sh on | off | status
 
-  on        Install the pre-commit hook; scaffold tasks/ + the
-            change ledger (tasks/CHANGES.md). Idempotent.
+  on        Install the pre-commit hook; start the change ledger
+            (tasks/CHANGES.md). Idempotent.
   off       Remove the pre-commit hook. Leaves tasks/ + the ledger.
   status    Report ON / OFF and the ledger entry count.
 
 HOOK HANDLER (called by the hook — not for direct use):
   guard-commit   pre-commit: ensure staged code/config changes are
-                 task-linked; auto-create a stub if not; append to
-                 the change ledger. Always exits 0 — never blocks.
+                 task-linked; file a task (tasks/triage/) through
+                 .claude/bin/task if not; append to the change ledger.
+                 Always exits 0 — never blocks.
 
 EXIT CODES:
   0  success
@@ -100,31 +108,6 @@ is_auditable() {
   return 0
 }
 
-# ── next task id ─────────────────────────────────────────────────
-# Highest TASK-NNN across tasks/, plus one, zero-padded to 3.
-next_task_id() {
-  local root max=0 n f
-  root="$(repo_root)" || return 1
-  while IFS= read -r f; do
-    n="$(basename "$f")"
-    n="${n#TASK-}"
-    n="${n%%-*}"
-    n="${n%.md}"
-    case "$n" in ''|*[!0-9]*) continue ;; esac
-    n=$((10#$n))
-    [ "$n" -gt "$max" ] && max="$n"
-  done < <(find "$root/tasks" -name 'TASK-*.md' 2>/dev/null)
-  printf 'TASK-%03d' $((max + 1))
-}
-
-# slugify <string> — lowercase kebab-case, alnum only.
-slugify() {
-  printf '%s' "$1" \
-    | tr '[:upper:]' '[:lower:]' \
-    | tr -c 'a-z0-9' '-' \
-    | sed 's/-\{2,\}/-/g; s/^-//; s/-$//'
-}
-
 # ── change ledger ────────────────────────────────────────────────
 ensure_ledger() {
   local ledger; ledger="$(ledger_path)"
@@ -161,51 +144,49 @@ ledger_append() {
 }
 
 # ── stub task creation ───────────────────────────────────────────
-# create_stub <task-id> <slug> <file>... — writes the stub, echoes
-# its path.
+ENFORCE_SH=".claude/skills/task-enforce/task-enforce.sh"
+
+# actor_handle — actor() folded into the handle grammar bin/task accepts
+# ([a-z0-9][a-z0-9._-]*, at most 32 characters).
+actor_handle() {
+  actor | tr '[:upper:]' '[:lower:]' \
+    | sed 's/[^a-z0-9._-]\{1,\}/-/g; s/^[^a-z0-9]\{1,\}//' | cut -c1-32
+}
+
+# create_stub <file>... — files a task for these paths through
+# .claude/bin/task, marks it x-origin: auto-guard, and echoes
+# "<id> <path>". Returns non-zero if the task driver is missing or refuses.
 create_stub() {
-  local id="$1" slug="$2"; shift 2
-  local root file path
-  root="$(repo_root)"
-  mkdir -p "$root/tasks/active"
-  path="$root/tasks/active/${id}-auto-${slug}.md"
-  {
-    # Real frontmatter, per stamps.md "Stamp: task". This used to emit only
-    # bold-markdown body lines (**Status.** / **Created.** / **Author.**),
-    # which made every task-guard stub invisible to the machine: the two
-    # stub-counters grep for the literal `STATUS: STUB` and got `**Status.**`,
-    # and release.sh's title parser got nothing at all.
-    printf -- '---\n'
-    printf 'id: %s\n' "$id"
-    printf 'category: stub\n'
-    printf 'phase: null\n'
-    # status must equal the directory, and this files to tasks/active/.
-    printf 'status: active\n'
-    printf 'owner: %s\n' "$(actor)"
-    printf 'blocked_by:\n'
-    printf 'outcome: unrecorded\n'
-    printf 'filed: %s\n' "$(date -u '+%Y-%m-%d %H:%M UTC')"
-    printf 'origin: auto-guard\n'
-    printf -- '---\n\n'
-    # Colon H1: release.sh's _title_for accepts the em-dash form now too, but
-    # the colon form is what task-enforce.sh emits and what RELEASES.md expects.
-    printf '# %s: auto-created — %s\n\n' "$id" "$slug"
-    printf '> ⚠️ Auto-created by /task-guard at commit time. A code or\n'
-    printf '> configuration change was committed with no active task.\n'
-    printf '> This stub exists so the change keeps an audit trail.\n\n'
-    printf '> STATUS: STUB — not spec'"'"'d.\n\n'
-    printf '**Why not spec'"'"'d.** The change was made directly — a quick\n'
-    printf 'fix or hotfix — without filing a task first. /task-guard\n'
-    printf 'created this retroactively so the change ledger stays\n'
-    printf 'complete.\n\n'
-    printf '**Files touched in the triggering commit.**\n'
-    for file in "$@"; do printf -- '- `%s`\n' "$file"; done
-    printf '\n## Next step\n\n'
-    printf 'Spec this retroactively with `/task` (Operation 3), or — if\n'
-    printf 'the change genuinely needs no spec — close it with a one-line\n'
-    printf 'note and move it to `tasks/completed/`.\n'
-  } > "$path"
-  echo "$path"
+  local root drv by out id path title note
+  root="$(repo_root)" || return 1
+  drv="$root/.claude/bin/task"
+  [ -f "$drv" ] || return 1
+  title="change to $(basename "$1")"
+  note="auto-guard: $(printf '%s ' "$@" | cut -c1-160)"
+  by="$(actor_handle)"
+  if [ -n "$by" ]; then
+    out="$(python3 "$drv" new --root "$root" --quiet --type change \
+      --by "$by" --note "$note" "$title" </dev/null 2>/dev/null)" || return 1
+  else
+    out="$(python3 "$drv" new --root "$root" --quiet --type change \
+      --note "$note" "$title" </dev/null 2>/dev/null)" || return 1
+  fi
+  id="$(printf '%s\n' "$out" | awk 'NR==1 { print $1 }')"
+  path="$(printf '%s\n' "$out" | awk 'NR==2 { sub(/^[[:space:]]+/, ""); print }')"
+  case "$id" in TASK-*) ;; *) return 1 ;; esac
+  # x-origin + a re-recorded digest, through the one writer that does both.
+  [ -f "$root/$ENFORCE_SH" ] \
+    && bash "$root/$ENFORCE_SH" stamp "$id" x-origin auto-guard >/dev/null 2>&1 || true
+  printf '%s %s\n' "$id" "$path"
+}
+
+# current_task — the /task-enforce pointer, if it names a task on disk.
+current_task() {
+  local root t
+  root="$(repo_root)" || return 1
+  [ -f "$root/$ENFORCE_SH" ] || return 1
+  t="$(bash "$root/$ENFORCE_SH" current 2>/dev/null | tr -d '[:space:]')"
+  case "$t" in TASK-*) printf '%s\n' "$t" ;; *) return 1 ;; esac
 }
 
 # ── git-hook shim install / remove (sentinel block) ──────────────
@@ -264,7 +245,6 @@ git_hook_installed() {
 cmd_on() {
   local root; root="$(repo_root)" || return 1
   install_git_hook || return 1
-  mkdir -p "$root/tasks/active"
   ensure_ledger
   cat <<EOF
 
@@ -314,25 +294,32 @@ cmd_guard_commit() {
 
   [ "${#auditable[@]}" -gt 0 ] || exit 0   # no code/config change
 
-  # Active tasks present?
+  # In-flight tasks present? active/ is being worked; review/ is an open
+  # PR, and a fix-up commit on it belongs to it.
   local active=() a
   while IFS= read -r a; do
     [ -n "$a" ] || continue
     active+=("$(basename "$a" .md)")
-  done < <(ls "$root"/tasks/active/*.md 2>/dev/null || true)
+  done < <(ls "$root"/tasks/active/*.md "$root"/tasks/review/*.md 2>/dev/null || true)
 
-  local task_ref auto=0 note="—"
-  if [ "${#active[@]}" -eq 0 ]; then
-    # No active task — auto-create a stub and ride it in this commit.
-    local id slug stub
-    id="$(next_task_id)"
-    slug="$(slugify "$(basename "${auditable[0]%.*}")")"
-    [ -n "$slug" ] || slug="change"
-    stub="$(create_stub "$id" "$slug" "${auditable[@]}")"
-    git add -- "$stub" 2>/dev/null || true
-    task_ref="$id"
-    auto=1
-    note="Stub — spec retroactively or close with a note."
+  local task_ref auto=0 note="—" cur=""
+  cur="$(current_task 2>/dev/null || true)"
+  if [ -n "$cur" ]; then
+    task_ref="$cur"
+  elif [ "${#active[@]}" -eq 0 ]; then
+    # No task in flight — file one and ride it in this commit.
+    local made id stub
+    if made="$(create_stub "${auditable[@]}")"; then
+      id="${made%% *}"; stub="${made#* }"
+      git add -- "$stub" "$root/tasks/history.tsv" 2>/dev/null || true
+      [ -f "$root/$ENFORCE_SH" ] && bash "$root/$ENFORCE_SH" set "$id" >/dev/null 2>&1 || true
+      task_ref="$id"
+      auto=1
+      note="Filed to tasks/triage/ — retitle it, then graduate or close it."
+    else
+      task_ref="unlinked"
+      note="No task could be filed (.claude/bin/task missing or refused) — run .claude/bin/check-tasks."
+    fi
   elif [ "${#active[@]}" -eq 1 ]; then
     task_ref="$(printf '%s' "${active[0]}" | cut -d- -f1,2)"
   else
