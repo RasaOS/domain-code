@@ -69,3 +69,15 @@ date	id	from	to	actor	note
 2026-09-23	TASK-062	review	completed	claude	gate: all eight gates recorded in the completion report; Public remedied in 0.53.1
 2026-09-23	TASK-063	active	review	claude	PR opened
 2026-09-23	TASK-064	active	review	claude	PR opened
+2026-09-24	TASK-063	review	completed	claude	gate: PR #13 merged as 86500e2, CI 8/8 green, tagged v0.53.1
+2026-09-24	TASK-064	review	completed	claude	gate: PR #13 merged as 86500e2, CI 8/8 green, tagged v0.53.1
+2026-09-24	TASK-065	-	backlog	claude	0.54.0 plan step 1.8
+2026-09-24	TASK-066	-	backlog	claude	0.54.0 plan step 1.8
+2026-09-24	TASK-067	-	backlog	claude	0.54.0 plan step 1.8
+2026-09-24	TASK-068	-	backlog	claude	0.54.0 plan step 1.8
+2026-09-24	TASK-069	-	backlog	claude	0.54.0 plan step 1.8
+2026-09-24	TASK-070	-	backlog	claude	0.54.0 plan step 1.8
+2026-09-24	TASK-071	-	backlog	claude	0.54.0 plan step 1.8
+2026-09-24	TASK-072	-	backlog	claude	0.54.0 plan step 1.8
+2026-09-24	TASK-073	-	backlog	claude	0.54.0 plan step 1.8
+2026-09-24	TASK-074	-	backlog	claude	0.54.0 plan step 1.8

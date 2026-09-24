@@ -3,9 +3,11 @@ id: TASK-063
 type: defect
 created: 2026-09-23
 created_by: claude
-updated: 2026-09-23
+updated: 2026-09-24
 phase: P7
+completed_by: claude
 priority: now
+x-outcome: shipped
 ---
 # TASK-063: Fence 0.53.x off existing installations
 
@@ -20,3 +22,5 @@ priority: now
 ## Notes
 
 - Verified on the 0.53.1 branch: check-manifest, lint, check-invocations, check-bash32, test-contract pass; every script parses with its own interpreter; this ledger 0 errors; `bin/init` into an empty repo gives a 0-error ledger; no added line names a private repository.
+
+Gate satisfied 2026-09-24 by claude — PR #13 merged as 86500e2, CI 8/8 green, tagged v0.53.1
