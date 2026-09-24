@@ -1,10 +1,11 @@
 ---
 id: TASK-050
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P9
-status: backlog
 ---
-
 # TASK-050: Queue group and bounded worker pool on commands.dispatch
 
 **User story.** As an **operator**, I want **the kernel to run more than one agent turn at a time, safely** so that **scaling out does not mean every replica executes every command**.

@@ -1,10 +1,12 @@
 ---
 id: TASK-018
-category: spec
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P2
-status: completed
+completed_by: chazzcoin
 ---
-
 # TASK-018: Define the task and run record shape
 
 **User story.** As an **operator**, I want **every task to carry who is

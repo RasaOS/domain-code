@@ -1,10 +1,11 @@
 ---
 id: TASK-043
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P7
-status: backlog
 ---
-
 # TASK-043: Input-trust rule: inbound text is data, never instructions
 
 **User story.** As an **operator**, I want **agents to treat text from any channel but me as data** so that **a crafted PR body cannot become the operating instructions of 200 repos**.

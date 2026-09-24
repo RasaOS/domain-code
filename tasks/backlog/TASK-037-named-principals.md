@@ -1,10 +1,11 @@
 ---
 id: TASK-037
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P6
-status: backlog
 ---
-
 # TASK-037: Named principals in the tenant roster
 
 **User story.** As an **operator**, I want **decisions to have an owner who is not "whoever is at the terminal"** so that **business decisions the agents correctly flag have somewhere to go**.

@@ -1,10 +1,11 @@
 ---
 id: TASK-033
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P5
-status: backlog
 ---
-
 # TASK-033: Ship render-active-notice as the active-notice writer
 
 **User story.** As an **org tier**, I want **a supported way to publish a notice that member repos already read** so that **the one cross-repo protocol this Element defines is not dead on the write side**.

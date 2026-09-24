@@ -1,0 +1,314 @@
+#!/usr/bin/env python3
+# bin/migrate-ledger — upgrade a consumer's pre-1.0 task ledger to the
+# rasa.module.tasks v1.0.0 shape that rasa.domain.code ships from v0.53.0.
+#
+# Element-side tooling: lives in bin/, is never registered in rasa.json and
+# never installed into a consumer. bin/init calls it on a re-run; a person
+# can call it directly from any checkout of this Element:
+#
+#   bin/migrate-ledger <project>            plan only, on a scratch copy
+#   bin/migrate-ledger --apply <project>    migrate tasks/ in place
+#
+# It wraps the vendored bin/migrate-tasks (rasa.module.tasks v1.0.0) and does
+# the three things that converter leaves to its caller:
+#
+#   1. Prepare. migrate-tasks refuses a ledger holding a task file with no
+#      frontmatter, recognizes a phase only under a `## Phase <id>` heading,
+#      and reads ROADMAP task lines only as `- TASK-NNN — title`. Real
+#      ledgers written by rasa.domain.code <= 0.52 break all three. This
+#      gives each bare task file a one-line block (its id, from its name),
+#      prefixes `Phase ` to a heading whose first word is a phase the tasks
+#      actually use, and rewrites numbered or backticked task lines into the
+#      canonical bullet, joining wrapped continuation lines. Nothing else in
+#      the file is touched, and order is preserved.
+#   2. Supply history. This is an engineering domain, so version control is
+#      a fair assumption here in a way it is not for the module: created,
+#      created_by and completed_by are read from git, so the migrated ledger
+#      carries real dates and real people instead of "unknown".
+#   3. Keep the result reviewable. --apply requires tasks/ to have no
+#      uncommitted changes, so everything it writes is a plain `git diff`
+#      and `git checkout -- tasks && git clean -fd tasks` undoes it. In a git
+#      repository no backup folder is left behind (git is the backup); in a
+#      project without one, migrate-tasks' own backup is kept.
+#
+# Exit: 0 migrated (or already v1.0.0, or no ledger) and validating clean ·
+#       1 migrated but the validator still reports errors a human must fix ·
+#       2 refused or could not run.
+
+import argparse
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+ELEMENT = os.path.dirname(HERE)
+MIGRATE = os.path.join(HERE, "migrate-tasks")
+CHECK = os.path.join(ELEMENT, "content", "bin", "check-tasks")
+
+SCHEMA_ID = "rasa.module.tasks/1.0.0"
+LEGACY_STAGES = ("triage", "backlog", "active", "review", "blocked", "completed", "done")
+
+ID_FROM_NAME = re.compile(r"^((?:TASK|HOTFIX)-(?:[A-Z][A-Z0-9.]{1,5}-)?[0-9]{1,6}[a-z]?)")
+LEGACY_PHASE = re.compile(r"^phase:[ \t]*(.*?)[ \t]*$")
+V1_HEADING = re.compile(r"^##[ \t]+Phase[ \t]+\S")
+LIST_TASK = re.compile(
+    r"^(?:[-*]|[0-9]+[.)])[ \t]+`?((?:TASK|HOTFIX)-[A-Za-z0-9.-]+?)`?[ \t]+(?:—|–|-{1,2})[ \t]+(.+)$")
+FENCE = re.compile(r"^(`{3,}|~{3,})")
+
+# git: the commit that ADDED a path (following renames) is its creation; the
+# commit that added it at its current path (no --follow) is the move into a
+# terminal stage, i.e. whoever completed it. --date=short, not %as, so this
+# works on git older than 2.25.
+GIT_CREATED = "git log --diff-filter=A --follow --date=short --format=%ad -1 --"
+GIT_CREATED_BY = "git log --diff-filter=A --follow --format=%an -1 --"
+GIT_COMPLETED_BY = "git log --diff-filter=A --format=%an -1 --"
+
+
+def say(msg=""):
+    # Flushed: migrate-tasks writes to the same stream from a child process.
+    sys.stdout.write(msg + "\n")
+    sys.stdout.flush()
+
+
+def die(msg, code=2):
+    sys.stderr.write("migrate-ledger: %s\n" % msg)
+    sys.exit(code)
+
+
+def in_git(project):
+    r = subprocess.run(["git", "-C", project, "rev-parse", "--is-inside-work-tree"],
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    return r.returncode == 0 and r.stdout.strip() == b"true"
+
+
+def git_dirty(project, rel):
+    r = subprocess.run(["git", "-C", project, "status", "--porcelain", "--", rel],
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    return r.stdout.decode("utf-8", "replace").strip()
+
+
+def ledger_state(tasks):
+    """'none', 'v1' or 'legacy'."""
+    if not os.path.isdir(tasks):
+        return "none"
+    cfg = os.path.join(tasks, "tasks.config.yml")
+    if os.path.isfile(cfg):
+        with open(cfg, encoding="utf-8", errors="replace") as fh:
+            if ("schema: %s" % SCHEMA_ID) in fh.read():
+                return "v1"
+    if any(os.path.isdir(os.path.join(tasks, s)) for s in LEGACY_STAGES):
+        return "legacy"
+    return "none"
+
+
+def task_files(tasks):
+    for stage in LEGACY_STAGES:
+        d = os.path.join(tasks, stage)
+        if not os.path.isdir(d):
+            continue
+        for name in sorted(os.listdir(d)):
+            p = os.path.join(d, name)
+            if name.endswith(".md") and os.path.isfile(p):
+                yield stage, name, p
+
+
+def read(p):
+    with open(p, encoding="utf-8", errors="surrogateescape") as fh:
+        return fh.read()
+
+
+def write(p, text):
+    with open(p, "w", encoding="utf-8", errors="surrogateescape") as fh:
+        fh.write(text)
+
+
+def prepare(tasks):
+    """Step 1. Returns a list of human-readable changes; mutates tasks/."""
+    done = []
+    phases = set()
+
+    for stage, name, p in task_files(tasks):
+        text = read(p)
+        if text.startswith("---\n") or text.startswith("---\r\n"):
+            # Collect the phases tasks already name, so a ROADMAP heading is
+            # only rewritten when its first word is one of them.
+            for ln in text.split("\n")[1:]:
+                if ln.strip() == "---":
+                    break
+                m = LEGACY_PHASE.match(ln)
+                if m:
+                    v = m.group(1).strip().strip("'\"")
+                    if v and v.lower() not in ("null", "none", "~"):
+                        phases.add(v)
+            continue
+        m = ID_FROM_NAME.match(name)
+        if not m:
+            # Not recognizably a task. migrate-tasks will name it and stop;
+            # only a person knows whether it is a task or a stray note.
+            continue
+        write(p, "---\nid: %s\n---\n\n%s" % (m.group(1), text))
+        done.append("gave %s/%s a frontmatter block (id: %s)" % (stage, name, m.group(1)))
+
+    roadmap = os.path.join(tasks, "ROADMAP.md")
+    if os.path.isfile(roadmap):
+        lines = read(roadmap).split("\n")
+        out = []
+        fence = None
+        headings = lists = 0
+        i = 0
+        while i < len(lines):
+            ln = lines[i]
+            fm = FENCE.match(ln.strip())
+            if fm:
+                tok = fm.group(1)[0]
+                fence = None if fence == tok else (fence or tok)
+                out.append(ln)
+                i += 1
+                continue
+            if fence:
+                out.append(ln)
+                i += 1
+                continue
+            if ln.startswith("## ") and not V1_HEADING.match(ln):
+                first = ln[3:].strip().split()[0].rstrip(":.") if ln[3:].strip() else ""
+                if first in phases:
+                    out.append("## Phase " + ln[3:].lstrip())
+                    headings += 1
+                    i += 1
+                    continue
+            m = LIST_TASK.match(ln)
+            if m:
+                title = m.group(2).strip()
+                j = i + 1
+                # A wrapped entry continues on indented lines that are not
+                # themselves list items.
+                while j < len(lines):
+                    nxt = lines[j]
+                    if not nxt.strip() or not nxt[:1].isspace():
+                        break
+                    if re.match(r"^\s*(?:[-*]|[0-9]+[.)])\s", nxt):
+                        break
+                    title += " " + nxt.strip()
+                    j += 1
+                canon = "- %s — %s" % (m.group(1), title)
+                if canon != ln or j != i + 1:
+                    lists += 1
+                out.append(canon)
+                i = j
+                continue
+            out.append(ln)
+            i += 1
+        if headings or lists:
+            write(roadmap, "\n".join(out))
+            if headings:
+                done.append("ROADMAP.md: %d phase heading(s) given the `## Phase <id>` form" % headings)
+            if lists:
+                done.append("ROADMAP.md: %d task line(s) rewritten as `- TASK-NNN — title`" % lists)
+    return done
+
+
+def ensure_gitignore(project):
+    path = os.path.join(project, ".gitignore")
+    entry = "tasks/.state/"
+    existing = read(path) if os.path.isfile(path) else ""
+    if any(l.strip() in (entry, "/" + entry, "tasks/.state") for l in existing.split("\n")):
+        return None
+    with open(path, "a", encoding="utf-8") as fh:
+        if existing and not existing.endswith("\n"):
+            fh.write("\n")
+        fh.write("# rasa.module.tasks machine cache (regenerable)\n%s\n" % entry)
+    return "added %s to .gitignore" % entry
+
+
+def run_migrate(args):
+    cmd = [sys.executable, MIGRATE] + args
+    return subprocess.run(cmd).returncode
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(
+        prog="migrate-ledger",
+        description="Upgrade a pre-1.0 task ledger to rasa.module.tasks v1.0.0.")
+    ap.add_argument("project", nargs="?", default=".", help="the project root (default: .)")
+    ap.add_argument("--apply", action="store_true", help="migrate in place (default: plan only)")
+    a = ap.parse_args(argv)
+
+    for need in (MIGRATE, CHECK):
+        if not os.path.isfile(need):
+            die("missing %s — run this from a complete checkout of rasa.domain.code" % need)
+
+    project = os.path.realpath(a.project)
+    tasks = os.path.join(project, "tasks")
+    state = ledger_state(tasks)
+
+    if state == "none":
+        say("migrate-ledger: no task ledger under %s — nothing to do." % project)
+        return 0
+    if state == "v1":
+        say("migrate-ledger: tasks/ is already %s. Validating it:" % SCHEMA_ID)
+        return subprocess.run([sys.executable, CHECK, "--quiet", project]).returncode
+
+    git = in_git(project)
+    say("migrate-ledger: tasks/ is a pre-1.0 ledger (%s)."
+        % ("under git" if git else "no version control"))
+
+    if not a.apply:
+        scratch = tempfile.mkdtemp(prefix="migrate-ledger.")
+        try:
+            shutil.copytree(tasks, os.path.join(scratch, "tasks"), symlinks=True)
+            for line in prepare(os.path.join(scratch, "tasks")):
+                say("  prepare: " + line)
+            say("")
+            rc = run_migrate(["--dry-run", scratch])
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+        say("")
+        say("Plan only; nothing in %s was written. (Dates in a plan come from file" % project)
+        say("times; --apply reads them from git.) To migrate:")
+        say("  %s --apply %s" % (os.path.realpath(__file__), project))
+        return 0 if rc == 0 else 2
+
+    if git:
+        dirty = git_dirty(project, "tasks")
+        if dirty:
+            die("refusing to --apply: tasks/ has uncommitted changes, and the migration\n"
+                "must be reviewable as one clean diff. Commit or stash them first:\n%s" % dirty)
+
+    for line in prepare(tasks):
+        say("  prepare: " + line)
+    say("")
+
+    margs = ["--apply", "--validate-with", CHECK, project]
+    if git:
+        # tasks/ was clean a moment ago; the only uncommitted changes in it
+        # now are prepare()'s own, which is what --force is for.
+        margs = ["--force", "--no-backup",
+                 "--created-from", GIT_CREATED,
+                 "--created-by-from", GIT_CREATED_BY,
+                 "--completed-by-from", GIT_COMPLETED_BY] + margs
+    rc = run_migrate(margs)
+    if rc == 2:
+        if git:
+            say("\nmigrate-ledger: the migration did not run. Undo the preparation with:")
+            say("  git -C %s checkout -- tasks" % project)
+        return 2
+
+    if git:
+        note = ensure_gitignore(project)
+        if note:
+            say("migrate-ledger: " + note)
+
+    say("")
+    say("Next:")
+    say("  1. Read tasks/MIGRATION-REVIEW.md — every judgement the migration could not make.")
+    say("  2. Review the diff:  git -C %s diff --stat" % project if git else
+        "  2. Compare against the backup folder migrate-tasks left beside tasks/.")
+    say("  3. Commit it on its own, before any other work.")
+    return 0 if rc == 0 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

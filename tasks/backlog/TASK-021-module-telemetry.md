@@ -1,10 +1,11 @@
 ---
 id: TASK-021
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P2
-status: backlog
 ---
-
 # TASK-021: rasa.module.telemetry — roll per-repo run lines into a fleet view
 
 **User story.** As an **engineering leader**, I want **one view of throughput, success rate and cost across every repo** so that **I can answer whether the development arm is healthy today**.

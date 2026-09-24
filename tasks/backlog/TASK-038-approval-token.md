@@ -1,10 +1,11 @@
 ---
 id: TASK-038
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P6
-status: backlog
 ---
-
 # TASK-038: Approval token accepted in place of a TTY
 
 **User story.** As an **operator**, I want **a headless run to be authorized without a human at a terminal** so that **the choice is not "50 live terminals" or "FORCE_APPROVAL=1 across 200 repos"**.

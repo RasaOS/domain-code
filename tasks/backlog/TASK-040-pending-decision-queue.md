@@ -1,10 +1,11 @@
 ---
 id: TASK-040
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P6
-status: backlog
 ---
-
 # TASK-040: Pending-decision queue for headless runs
 
 **User story.** As an **agent hitting a hard gate**, I want **to file a pending decision and park, rather than render a question into a void** so that **a blocked run is recoverable instead of lost**.

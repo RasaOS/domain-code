@@ -1,10 +1,11 @@
 ---
 id: TASK-046
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P8
-status: backlog
 ---
-
 # TASK-046: Regulatory scope stamp
 
 **User story.** As a **compliance owner**, I want **a repo to declare the regimes it operates under** so that **an agent cannot unknowingly violate an obligation the company has already made**.

@@ -1,10 +1,11 @@
 ---
 id: TASK-045
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P7
-status: backlog
 ---
-
 # TASK-045: Pin and record the model and harness a run used
 
 **User story.** As an **operator**, I want **to know what my workforce was made of when it produced a result** so that **a vendor-side model update is not an untested simultaneous change to all 50 agents**.

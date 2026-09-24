@@ -1,10 +1,11 @@
 ---
 id: TASK-048
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P8
-status: backlog
 ---
-
 # TASK-048: Public-API deprecation policy and breaking-change gate
 
 **User story.** As an **API consumer**, I want **to be warned before an interface I depend on changes** so that **a silently-broken public API is not discovered by the counterparty**.

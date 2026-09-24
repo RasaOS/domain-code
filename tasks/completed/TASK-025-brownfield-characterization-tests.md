@@ -1,10 +1,12 @@
 ---
 id: TASK-025
-category: stub
+type: change
+created: 2026-09-21
+created_by: chazzcoin
+updated: 2026-09-21
 phase: P3
-status: completed
+completed_by: chazzcoin
 ---
-
 # TASK-025: Brownfield carve-out for characterization tests, plus /pin-behavior
 
 **User story.** As an **agent working a legacy repo**, I want **a sanctioned way to pin existing behavior before changing it** so that **untested code has a path to becoming testable instead of being permanently ungated**.

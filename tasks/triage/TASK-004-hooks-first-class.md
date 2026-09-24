@@ -1,4 +1,11 @@
-# TASK-004 — Hooks and scripts as first-class enforcement primitives
+---
+id: TASK-004
+type: change
+created: 2026-05-17
+created_by: claude
+updated: 2026-05-17
+---
+# TASK-004: TASK-004 — Hooks and scripts as first-class enforcement primitives
 
 **User story.** As a kit maintainer, I want hooks and scripts used
 wherever appropriate to enforce that things happen correctly — the

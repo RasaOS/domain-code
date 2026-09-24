@@ -1,10 +1,11 @@
 ---
 id: TASK-049
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P8
-status: backlog
 ---
-
 # TASK-049: Org-level standards register
 
 **User story.** As an **architect**, I want **a company standard to have one home** so that **"auth goes through our OIDC service" is not 200 copies of one paragraph**.

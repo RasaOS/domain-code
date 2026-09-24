@@ -1,10 +1,11 @@
 ---
 id: TASK-051
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P9
-status: backlog
 ---
-
 # TASK-051: Configurable turn timeout with a default retry
 
 **User story.** As an **operator**, I want **a long autonomous run not to be hard-killed mid-edit** so that **a `/mission` run can exceed five minutes**.

@@ -1,15 +1,15 @@
 ---
 id: TASK-023
-category: bug
+type: defect
+created: 2026-09-21
+created_by: chazzcoin
+updated: 2026-09-21
 phase: P3
-status: completed
-owner: unassigned
-blocked_by:
-outcome: shipped
-filed: 2026-09-21 05:40 UTC
-origin: manual
+completed_by: chazzcoin
+x-origin: manual
+x-outcome: shipped
+x-owner: unassigned
 ---
-
 # TASK-023: the only independent grader reads narration, not evidence
 
 **User story.** As an **operator running work under `/goal`**, I want **the

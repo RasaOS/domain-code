@@ -1,10 +1,11 @@
 ---
 id: TASK-052
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P9
-status: backlog
 ---
-
 # TASK-052: Per-cwd lease and kernel-managed worktree per session
 
 **User story.** As an **operator**, I want **two agents in one repo not to share a git index** so that **agent isolation is a substrate primitive rather than a borrowed IDE feature**.

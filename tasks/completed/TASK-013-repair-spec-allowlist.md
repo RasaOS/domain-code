@@ -1,10 +1,12 @@
 ---
 id: TASK-013
-category: bug
+type: defect
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P1
-status: completed
+completed_by: chazzcoin
 ---
-
 # TASK-013: Repair the spec-file allowlist
 
 **User story.** As a **reviewer**, I want **the spec-file allowlist to say

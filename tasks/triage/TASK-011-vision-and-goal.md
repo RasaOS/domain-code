@@ -1,4 +1,11 @@
-# TASK-011 — Project vision & goal concept
+---
+id: TASK-011
+type: change
+created: 2026-05-17
+created_by: claude
+updated: 2026-05-17
+---
+# TASK-011: TASK-011 — Project vision & goal concept
 
 **User story.** As a project lead, I want the project to hold an
 explicit long-term **vision** and a current short-term **goal**, so

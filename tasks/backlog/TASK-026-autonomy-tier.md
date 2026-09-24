@@ -1,10 +1,11 @@
 ---
 id: TASK-026
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P3
-status: backlog
 ---
-
 # TASK-026: autonomy_tier on rasa.lock.json
 
 **User story.** As an **operator**, I want **a repo's autonomy to be scoped to what that repo has earned** so that **repo #47 with no surviving author does not get the authority repo #3 with green CI gets**.

@@ -1,10 +1,11 @@
 ---
 id: TASK-039
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P6
-status: backlog
 ---
-
 # TASK-039: Truthful approval provenance in the ledger
 
 **User story.** As an **auditor**, I want **the ledger to distinguish how an approval was obtained** so that **a bypass is visible as a bypass**.

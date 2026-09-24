@@ -1,4 +1,11 @@
-# TASK-003 — Formalized task spec with dev/test/deploy work modes
+---
+id: TASK-003
+type: change
+created: 2026-05-17
+created_by: claude
+updated: 2026-05-17
+---
+# TASK-003: TASK-003 — Formalized task spec with dev/test/deploy work modes
 
 **User story.** As a planner, I want a more detailed, formulated way
 to create and spec stub tasks, with an explicit phase per related

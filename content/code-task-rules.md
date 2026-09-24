@@ -48,6 +48,13 @@ Never move a task file with `git mv` or a plain `mv`, and never write
 `status:` — it is a hard error (I-10). The directory is the state and
 `bin/task` is the only thing that changes it. A hand-move is caught by I-33.
 
+Editing a task's **body** by hand is normal — ticking a criterion, writing
+notes, the completion report. Afterwards run `.claude/bin/check-tasks --fix`:
+the validator keeps a digest of every task, and a file that changed while
+its `updated` did not is an error (I-34) until `--fix` bumps the date and
+accepts the new content. Run it before `submit` and before `pass`; a gate
+that fails on your own edit is still a failing gate.
+
 ## 3. Types, for software work
 
 | type | in this domain | was (≤ v0.52) |

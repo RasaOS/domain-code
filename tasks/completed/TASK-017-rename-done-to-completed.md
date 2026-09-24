@@ -1,10 +1,12 @@
 ---
 id: TASK-017
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P1
-status: completed
+completed_by: chazzcoin
 ---
-
 # TASK-017: Rename tasks/done/ to tasks/completed/
 
 **User story.** As a **maintainer**, I want **this repo's own task folders to match the rule it ships** so that **the Element is not drifting from its own documented lifecycle**.

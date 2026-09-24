@@ -1,1 +1,3 @@
 .DS_Store
+# rasa.module.tasks machine cache (regenerable)
+tasks/.state/

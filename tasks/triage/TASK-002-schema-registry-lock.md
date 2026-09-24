@@ -1,4 +1,11 @@
-# TASK-002 — Schema registry with version stamp and lock flag
+---
+id: TASK-002
+type: change
+created: 2026-05-17
+created_by: claude
+updated: 2026-05-17
+---
+# TASK-002: TASK-002 — Schema registry with version stamp and lock flag
 
 **User story.** As a developer, I want one core place that holds the
 project's database schema — stamped with version + date — plus a

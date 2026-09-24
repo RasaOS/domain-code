@@ -51,7 +51,7 @@ change that completes or files a covering task.
 
 ---
 
-## P1 — Fail-closed defaults
+## Phase P1 — Fail-closed defaults
 
 Today a fresh install ships gates that pass when their input is absent:
 the production test stage exits 0 on an empty suite, task enforcement
@@ -61,30 +61,19 @@ changes to things that are actively wrong and shipping into new repos
 right now. Nothing else in the program is worth doing while the floor
 is this soft.
 
-1. `TASK-012` — Fail-closed test gate: an empty or missing suite must
-   fail at prod class
-2. `TASK-013` — Repair the corrupted spec-file allowlist in Rule 2 and
-   its `autonomy-rules.md` mirror
-3. `TASK-014` — Fix dead pointers shipped into every seeded repo
-   (archived `claude-orchestrator`, unbuilt `/migration`, `/ultrareview`)
-4. `TASK-015` — Wire `project-map.md` into the seeded CLAUDE.md
-   `@`-imports
-5. `TASK-016` — `bin/init` enables task enforcement, with an explicit
-   brownfield carve-out
-6. `TASK-017` — Rename `tasks/done/` to `tasks/completed/` in this repo
-   to match the rule it ships
-7. `TASK-055` — The `bin/lint` release gate is red on `main` (14
-   pre-existing findings); found while verifying TASK-013
-8. `TASK-059` — Keep the program audit's gap-to-task coverage in the
-   repository (`docs/audits/`)
-9. `TASK-056` — A `$(cmd || echo unknown)` fallback corrupted two ledgers
-   in a commit-less repo
-10. `TASK-060` — The contract lock fails open on bytes it did not write
-    (a BOM, CRLF, a deleted or garbled `is_locked` key)
-11. `TASK-061` — Tag v0.51.0 and v0.52.0, backfill the CHANGELOG, and
-    validate `rasa.json` against the schema in CI
+- TASK-012 — Fail-closed test gate: an empty or missing suite must fail at prod class
+- TASK-013 — Repair the corrupted spec-file allowlist in Rule 2 and its `autonomy-rules.md` mirror
+- TASK-014 — Fix dead pointers shipped into every seeded repo (archived `claude-orchestrator`, unbuilt `/migration`, `/ultrareview`)
+- TASK-015 — Wire `project-map.md` into the seeded CLAUDE.md `@`-imports
+- TASK-016 — `bin/init` enables task enforcement, with an explicit brownfield carve-out
+- TASK-017 — Rename `tasks/done/` to `tasks/completed/` in this repo to match the rule it ships
+- TASK-055 — The `bin/lint` release gate is red on `main` (14 pre-existing findings); found while verifying TASK-013
+- TASK-059 — Keep the program audit's gap-to-task coverage in the repository (`docs/audits/`)
+- TASK-056 — A `$(cmd || echo unknown)` fallback corrupted two ledgers in a commit-less repo
+- TASK-060 — The contract lock fails open on bytes it did not write (a BOM, CRLF, a deleted or garbled `is_locked` key)
+- TASK-061 — Tag v0.51.0 and v0.52.0, backfill the CHANGELOG, and validate `rasa.json` against the schema in CI
 
-## P2 — The run record
+## Phase P2 — The run record
 
 Nothing in this system currently writes down what an agent did or
 whether it worked. Autonomy reports are *rendered to chat* — all 20 call
@@ -94,19 +83,13 @@ release" resolves to a service account and is recorded as if a human
 consented. This phase has zero dependencies, is the cheapest item in the
 program, and unblocks four of the others.
 
-1. `TASK-018` — Adopt the task stamp fields already specced as
-   "proposed but not yet adopted", plus `actor`, `actor_kind`, `run_id`,
-   `outcome`, `attempts`
-2. `TASK-019` — Thread one `RASA_ACTOR` value through all five
-   `$(whoami)` provenance sites and the approval gate
-3. `TASK-020` — The autonomy report appends a machine-readable run line
-   instead of only rendering to chat
-4. `TASK-021` — `rasa.module.telemetry`: roll per-repo run lines into a
-   fleet view
-5. `TASK-057` — `/wrangle`'s remediation plan is filed into `tasks/`, not
-   only rendered to chat
+- TASK-018 — Adopt the task stamp fields already specced as "proposed but not yet adopted", plus `actor`, `actor_kind`, `run_id`, `outcome`, `attempts`
+- TASK-019 — Thread one `RASA_ACTOR` value through all five `$(whoami)` provenance sites and the approval gate
+- TASK-020 — The autonomy report appends a machine-readable run line instead of only rendering to chat
+- TASK-021 — `rasa.module.telemetry`: roll per-repo run lines into a fleet view
+- TASK-057 — `/wrangle`'s remediation plan is filed into `tasks/`, not only rendered to chat
 
-## P3 — Verification independence
+## Phase P3 — Verification independence
 
 The agent grades its own work. `content/agents/auditor.md` is a correct
 context-isolated, read-only, severity-tiered reviewer that advertises
@@ -115,20 +98,14 @@ squash-merge authority, never calls it. The one independent grader in
 the design (the `/goal` loop's evaluator) reads only the transcript by
 documented design: it "runs no tools and reads no files".
 
-1. `TASK-022` — Route `/peer-review` judgment through the `auditor`
-   subagent; record author-vs-reviewer on the PR
-2. `TASK-023` — Put falsifiable evidence into the transcript the `/goal`
-   evaluator reads (re-scoped: the evaluator cannot be given tools or files)
-3. `TASK-024` — Coverage-floor gate: refuse autonomous change to a
-   surface with no executable behavioral evidence
-4. `TASK-025` — Brownfield carve-out in `test-rules.md` sanctioning
-   characterization tests, plus a `/pin-behavior` skill to write them
-5. `TASK-026` — `autonomy_tier` on `rasa.lock.json`, read by
-   `autonomy-rules.md`
-6. `TASK-058` — The spec fast-path's allowlist is checked by a program
-   (`spec-gate`), not by a model reading prose
+- TASK-022 — Route `/peer-review` judgment through the `auditor` subagent; record author-vs-reviewer on the PR
+- TASK-023 — Put falsifiable evidence into the transcript the `/goal` evaluator reads (re-scoped: the evaluator cannot be given tools or files)
+- TASK-024 — Coverage-floor gate: refuse autonomous change to a surface with no executable behavioral evidence
+- TASK-025 — Brownfield carve-out in `test-rules.md` sanctioning characterization tests, plus a `/pin-behavior` skill to write them
+- TASK-026 — `autonomy_tier` on `rasa.lock.json`, read by `autonomy-rules.md`
+- TASK-058 — The spec fast-path's allowlist is checked by a program (`spec-gate`), not by a model reading prose
 
-## P4 — The production loop
+## Phase P4 — The production loop
 
 The loop is open at both ends: no inbound path turns a production signal
 into a task, and nothing verifies a deploy after the deploy command
@@ -136,17 +113,13 @@ returns. "Deploy succeeded" is a statement about a shell process exiting
 0. A release that shipped cleanly and then took production down is
 indistinguishable, forever, from one that worked.
 
-1. `TASK-027` — `60-verify.sh` post-deploy verification stage
-2. `TASK-028` — `/rollback` skill invoking the rollback command that
-   `release-rules.md` and the cloud stamp already specify
-3. `TASK-029` — `deploys.sh` gains `outcome`/`health` and an `annotate`
-   subcommand so a sealed record can learn what happened later
-4. `TASK-030` — Make `content/build/deploy` honor the `[hooks]
-   post_deploy` it already reads config for
-5. `TASK-031` — `rasa.module.signals`: normalize an inbound alert,
-   ticket or advisory into a task with an idempotency key and provenance
+- TASK-027 — `60-verify.sh` post-deploy verification stage
+- TASK-028 — `/rollback` skill invoking the rollback command that `release-rules.md` and the cloud stamp already specify
+- TASK-029 — `deploys.sh` gains `outcome`/`health` and an `annotate` subcommand so a sealed record can learn what happened later
+- TASK-030 — Make `content/build/deploy` honor the `[hooks] post_deploy` it already reads config for
+- TASK-031 — `rasa.module.signals`: normalize an inbound alert, ticket or advisory into a task with an idempotency key and provenance
 
-## P5 — The fleet
+## Phase P5 — The fleet
 
 `rasa.module.cto` v0.3.0 and a `taskflow` dispatcher run a real
 three-repo company today, out of `/Volumes/256GB/vsi-orchestration` and
@@ -155,18 +128,13 @@ reachability is broken in both directions. Meanwhile the one read-side
 protocol this Element defines (active-orchestrator notices, read at
 session start and treated as authoritative) has no shipped writer.
 
-1. `TASK-032` — `tenant_root` in `rasa.lock.json` and a `/roster` skill
-   that reads `tenant.members[]`
-2. `TASK-033` — Ship `render-active-notice` as the writer for the
-   active-notice protocol this Element already consumes
-3. `TASK-034` — An upward channel: a member repo can raise a flag or
-   blocker to the org tier
-4. `TASK-035` — Cross-repo change set: N repos as one ordered unit with
-   landing order and joint revert
-5. `TASK-036` — **Cross-repo.** Promote `module.cto` into `elements/`
-   and extract `taskflow` as `rasa.module.taskflow`
+- TASK-032 — `tenant_root` in `rasa.lock.json` and a `/roster` skill that reads `tenant.members[]`
+- TASK-033 — Ship `render-active-notice` as the writer for the active-notice protocol this Element already consumes
+- TASK-034 — An upward channel: a member repo can raise a flag or blocker to the org tier
+- TASK-035 — Cross-repo change set: N repos as one ordered unit with landing order and joint revert
+- TASK-036 — **Cross-repo.** Promote `module.cto` into `elements/` and extract `taskflow` as `rasa.module.taskflow`
 
-## P6 — Authority
+## Phase P6 — Authority
 
 Every gate resolves to "the user, on this channel". The one
 machine-enforced approval reads yes from `/dev/tty`, and the documented
@@ -175,17 +143,12 @@ operational choice becomes: staff 50 live terminals, or set that flag in
 the fleet image and delete the production gate across every repo at
 once — while the ledger keeps recording a consent that never happened.
 
-1. `TASK-037` — Named principals: extend the tenant roster with owners
-   and approvers; `requester`/`owner`/`approver` on the task stamp
-2. `TASK-038` — An approval token bound to release + env + commit,
-   carrying approver identity and an expiry, accepted in place of a TTY
-3. `TASK-039` — Truthful approval provenance: distinguish tty-answered
-   from token-authorized from force-bypassed in the ledger
-4. `TASK-040` — Pending-decision queue: a headless run blocks on an
-   out-of-band decision instead of rendering a question into a
-   transcript nobody is reading
+- TASK-037 — Named principals: extend the tenant roster with owners and approvers; `requester`/`owner`/`approver` on the task stamp
+- TASK-038 — An approval token bound to release + env + commit, carrying approver identity and an expiry, accepted in place of a TTY
+- TASK-039 — Truthful approval provenance: distinguish tty-answered from token-authorized from force-bypassed in the ledger
+- TASK-040 — Pending-decision queue: a headless run blocks on an out-of-band decision instead of rendering a question into a transcript nobody is reading
 
-## P7 — Supply chain and workforce integrity
+## Phase P7 — Supply chain and workforce integrity
 
 `bin/init` overwrites 74 SKILL.md files and 27 rule files with whatever
 is on disk — no version pin, no signature, no canary, no rollback. An
@@ -195,19 +158,14 @@ opus` is a family name, nothing records which model produced a result,
 and nothing tests whether a skill still *behaves* correctly —
 `check-invocations` proves only that commands are runnable.
 
-1. `TASK-041` — Port `domain-core`'s `/sync` + `/promote`; retire
-   `/contribute`. Restores the severed learning-return leg
-2. `TASK-042` — Content-tree digest in `rasa.json`, `bin/init --ref`,
-   and a consumer-set `expected_sha`
-3. `TASK-043` — Input-trust rule: text from any channel other than the
-   operator is data, never instructions — with a `source`/`trust` field
-   on the task stamp
-4. `TASK-044` — Behavior evals for shipped skills: prove a skill still
-   does what it claims, not merely that it can be invoked
-5. `TASK-045` — Pin and record the model and harness a run used; define
-   a supported range and a canary cohort for Element updates
+- TASK-041 — Port `domain-core`'s `/sync` + `/promote`; retire `/contribute`. Restores the severed learning-return leg
+- TASK-042 — Content-tree digest in `rasa.json`, `bin/init --ref`, and a consumer-set `expected_sha`
+- TASK-043 — Input-trust rule: text from any channel other than the operator is data, never instructions — with a `source`/`trust` field on the task stamp
+- TASK-044 — Behavior evals for shipped skills: prove a skill still does what it claims, not merely that it can be invoked
+- TASK-045 — Pin and record the model and harness a run used; define a supported range and a canary cohort for Element updates
+- TASK-062 — Adopt rasa.module.tasks v1.0.0 and migrate consumers' ledgers on update
 
-## P8 — External commitments
+## Phase P8 — External commitments
 
 Nothing in the Element knows that a codebase has obligations to anyone
 outside the company. Grepping `GDPR|HIPAA|PII|GPL|copyleft|license
@@ -218,17 +176,12 @@ The first copyleft contamination and the first silently-broken public
 API are not bugs an agent can fix — they are contractual events,
 discovered by the counterparty.
 
-1. `TASK-046` — Regulatory scope stamp: a repo declares PCI / HIPAA /
-   GDPR / export-control scope, and it gates
-2. `TASK-047` — License-compatibility gate in the release dependency
-   sweep, which today covers dependency security and not dependency
-   legality
-3. `TASK-048` — Public-API contract: deprecation policy and a
-   breaking-change gate for repos with external consumers
-4. `TASK-049` — Org-level standards register, so a company-specific
-   standard has a home other than 200 copies of one paragraph
+- TASK-046 — Regulatory scope stamp: a repo declares PCI / HIPAA / GDPR / export-control scope, and it gates
+- TASK-047 — License-compatibility gate in the release dependency sweep, which today covers dependency security and not dependency legality
+- TASK-048 — Public-API contract: deprecation policy and a breaking-change gate for repos with external consumers
+- TASK-049 — Org-level standards register, so a company-specific standard has a home other than 200 copies of one paragraph
 
-## P9 — Substrate (cross-repo: `kernel`)
+## Phase P9 — Substrate (cross-repo: `kernel`)
 
 **Not this repo's work.** The kernel executes exactly one agent turn
 process-wide, hard-kills every turn at 5 minutes with zero default
@@ -240,16 +193,11 @@ impossible on it today, and the naive scale-out is worse than the limit.
 Filed here for program completeness. Per the workspace role-split these
 are executed from `kernel/` in their own sessions.
 
-1. `TASK-050` — **Cross-repo.** Queue group plus a bounded worker pool
-   on `commands.dispatch`
-2. `TASK-051` — **Cross-repo.** Configurable turn timeout honoring
-   `WorkflowStep.timeout_ms`, with a non-zero default retry
-3. `TASK-052` — **Cross-repo.** Per-cwd lease and a kernel-managed
-   worktree per agent session
-4. `TASK-053` — **Cross-repo.** Ship canon L-011's three budget breakers
-   at the gateway
-5. `TASK-054` — Turn and cost ceiling enforced at the `Stop` hook seam
-   that `git-guard` and `task-enforce` already install (this repo)
+- TASK-050 — **Cross-repo.** Queue group plus a bounded worker pool on `commands.dispatch`
+- TASK-051 — **Cross-repo.** Configurable turn timeout honoring `WorkflowStep.timeout_ms`, with a non-zero default retry
+- TASK-052 — **Cross-repo.** Per-cwd lease and a kernel-managed worktree per agent session
+- TASK-053 — **Cross-repo.** Ship canon L-011's three budget breakers at the gateway
+- TASK-054 — Turn and cost ceiling enforced at the `Stop` hook seam that `git-guard` and `task-enforce` already install (this repo)
 
 ---
 

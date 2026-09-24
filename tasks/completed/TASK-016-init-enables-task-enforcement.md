@@ -1,10 +1,12 @@
 ---
 id: TASK-016
-category: bug
+type: defect
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P1
-status: completed
+completed_by: chazzcoin
 ---
-
 # TASK-016: bin/init sets the task-enforcement default per target
 
 **User story.** As an **operator**, I want **task enforcement on by default in a

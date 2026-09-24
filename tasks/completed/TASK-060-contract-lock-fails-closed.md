@@ -1,16 +1,16 @@
 ---
 id: TASK-060
-category: bug
+type: defect
+created: 2026-09-23
+created_by: chazzcoin
+updated: 2026-09-23
 phase: P1
-status: completed
-owner: unassigned
-blocked_by:
-outcome: unrecorded
-filed: 2026-09-23 20:14 UTC
-origin: manual
-severity: medium
+completed_by: chazzcoin
+x-origin: manual
+x-outcome: unrecorded
+x-owner: unassigned
+x-severity: medium
 ---
-
 # TASK-060: the contract lock fails open on bytes it did not write
 
 **User story.** As an **operator**, I want **a locked contract to stay

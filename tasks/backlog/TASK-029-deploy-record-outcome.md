@@ -1,10 +1,11 @@
 ---
 id: TASK-029
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P4
-status: backlog
 ---
-
 # TASK-029: deploys.sh gains outcome/health and an annotate subcommand
 
 **User story.** As an **auditor**, I want **a sealed deploy record to learn what happened after the deploy** so that **a release that shipped cleanly and then took production down is distinguishable from one that worked**.

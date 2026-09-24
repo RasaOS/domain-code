@@ -1,4 +1,11 @@
-# TASK-001 — Smoother task-management lifecycle
+---
+id: TASK-001
+type: change
+created: 2026-05-17
+created_by: claude
+updated: 2026-05-17
+---
+# TASK-001: TASK-001 — Smoother task-management lifecycle
 
 **User story.** As a project lead, I want a rough-draft staging
 structure where loose ideas become phases and phases get promoted

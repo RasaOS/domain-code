@@ -1,10 +1,11 @@
 ---
 id: TASK-053
-category: stub
+type: change
+created: 2026-09-20
+created_by: chazzcoin
+updated: 2026-09-20
 phase: P9
-status: backlog
 ---
-
 # TASK-053: Budget breakers at the gateway
 
 **User story.** As an **operator**, I want **spend to be bounded** so that **an agent loop cannot burn the budget unattended**.

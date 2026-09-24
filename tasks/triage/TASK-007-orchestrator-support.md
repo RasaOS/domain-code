@@ -1,4 +1,11 @@
-# TASK-007 — Full-service orchestrator support
+---
+id: TASK-007
+type: change
+created: 2026-05-17
+created_by: claude
+updated: 2026-05-17
+---
+# TASK-007: TASK-007 — Full-service orchestrator support
 
 **User story.** As a multi-repo operator, I want deeper, fuller
 support for orchestrators coordinating work across the system.

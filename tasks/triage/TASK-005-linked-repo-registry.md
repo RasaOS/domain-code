@@ -1,4 +1,11 @@
-# TASK-005 — Linked-repo registry for multi-repo systems
+---
+id: TASK-005
+type: change
+created: 2026-05-17
+created_by: claude
+updated: 2026-05-17
+---
+# TASK-005: TASK-005 — Linked-repo registry for multi-repo systems
 
 **User story.** As a developer in a multi-repo system, I want to
 link other repos so the project knows their location and can read
