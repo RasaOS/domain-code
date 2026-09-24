@@ -102,6 +102,16 @@ jobs:
           ln -s "$(command -v mawk)" "$shim/awk"
           PATH="$shim:$PATH" bash bin/test-root
 
+      # The record writers: the release tracker's golden history and hostile
+      # values, and the writers driven inside a real bin/init install.
+      - name: Record writers (mawk)
+        run: |
+          set -euo pipefail
+          shim="$(mktemp -d)"
+          ln -s "$(command -v mawk)" "$shim/awk"
+          PATH="$shim:$PATH" bash bin/test-release
+          PATH="$shim:$PATH" bash bin/test-writers
+
   macos:
     name: runs on stock macOS bash
     runs-on: macos-latest
@@ -131,6 +141,11 @@ jobs:
 
       - name: Install-root resolution (bash 3.2)
         run: /bin/bash bin/test-root
+
+      - name: Record writers (bash 3.2)
+        run: |
+          /bin/bash bin/test-release
+          /bin/bash bin/test-writers
 
       # The approval gate must (a) auto-approve under FORCE_APPROVAL=1 and
       # (b) fail CLOSED with no controlling terminal. A CI runner has no
