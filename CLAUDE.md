@@ -52,7 +52,7 @@ Element Contract v1.3.0 as of v0.42.0 (2026-05-24).
 `rasa.domain.code` follows the **toolkit shape pattern** (per
 `elements/domain-core/content/SHAPE.md` Pattern 1):
 
-- `content/skills/` — 78 skill folders (one per skill capability)
+- `content/skills/` — 77 skill folders (one per skill capability)
 - `content/agents/` — 4 Claude subagent definitions
 - `content/modes/` — operating modes (drive prose)
 - `content/build/` — pipeline scaffolding

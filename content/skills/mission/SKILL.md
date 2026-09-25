@@ -181,15 +181,21 @@ turns ran out. Step 6 is where that honesty is enforced.
    - **Pass 1** — find every gap. Any gap → file it as a new task,
      return to Step 5, and re-enter Step 6 with the counter reset
      to zero.
-   - **Pass 2** — repeat the full re-walk against the same
-     criteria. If Pass 2 finds *anything* the first pass missed,
-     reset the counter and start over. Two consecutive clean
-     re-walks are required before proceeding.
+   - **Pass 2** — re-walk the same criteria *a different way*: a
+     different lens and different mechanics from Pass 1 (clean
+     build vs incremental, a different test order or entry point,
+     a fresh-eyes subagent handed only the goal). If Pass 2 finds
+     *anything* the first pass missed, reset the counter and start
+     over. Two consecutive clean re-walks are required before
+     proceeding.
 
-   This is the honest enforcement of "done" per the global
-   CLAUDE.md ethos: a single green re-walk could be the result of
-   asking the same flawed question twice. A second independent
-   re-walk catches what the first missed.
+   This is `validate/SKILL.md` at the **long** tier — follow it
+   for the lens catalog, the mechanics to vary, and the
+   validation block that records each pass. It is the honest
+   enforcement of "done" per the global CLAUDE.md ethos: a single
+   green re-walk could be the result of asking the same flawed
+   question twice, and so could two re-walks run the same way. A
+   second *independent* re-walk catches what the first missed.
 
    If successive re-walks surface the same gaps without progress,
    stop and report it as a blocker — a goal that will not
@@ -241,11 +247,11 @@ methodology, fixed goal recipe, optional scope arg:
 
 - **`/self-heal [scope]`** — audit and fix every real problem in
   scope. Two-pass clean re-walks required. Behavior-restoring.
-  See `kit/skills/self-heal/SKILL.md`.
+  See `self-heal/SKILL.md`.
 - **`/self-improve [scope]`** — audit and apply every obvious
   professional improvement in scope. Two-pass clean re-walks
   required. Behavior-preserving. See
-  `kit/skills/self-improve/SKILL.md`.
+  `self-improve/SKILL.md`.
 
 Both follow this file end-to-end; they only fix the goal recipe
 and the branch-name slug. If a user types `/self-heal billing`,

@@ -245,6 +245,7 @@ surface?" without touching the working tree.
 | `/instruct` | Convert human instructions into an atomic AI instruction recipe |
 | `/brainstorm` | Resume or start a tradeoff session at `.claude/tradeoffs/<topic>.md` |
 | `/stuck` | Socratic unblock-the-human partner |
+| `/validate` | Re-review a finished plan/spec/recipe, fill every gap, repeat until two consecutive clean passes with varied lenses; short / medium / long tiers |
 
 ### Universal — autonomous execution
 

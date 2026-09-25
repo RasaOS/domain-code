@@ -24,6 +24,43 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.55.0 — 2026-09-25
+
+**New skill: `/validate` — find the gaps, fill them, prove it twice.**
+`/self-heal` holds up over long runs because three mechanisms stack: a
+stopping rule (two consecutive clean passes; any gap resets the count),
+varied passes, and the harness `/goal` loop for duration. Only the first
+and last were written down. `/mission` Step 6 told Pass 2 to "repeat the
+full re-walk against the same criteria", so how independent the second
+pass was came down to luck. This release extracts the stopping rule into
+one reusable skill, writes the variation rule down, and adds a dial for
+how long it runs.
+
+- **`content/skills/validate/`** — re-reviews a finished artifact against
+  the *original ask*. Consecutive passes must use different lenses
+  (forward walk, backward from done, requirements trace, reality,
+  pre-mortem, edges, fresh-eyes subagent, stakeholder swap). Executing
+  passes must also vary their mechanics (build state, test order, entry
+  point, data, who checks). Three tiers: **short** (in-turn, 2 resets,
+  then report residual), **medium** (one fresh-eyes pass, 4 resets),
+  **long** (unbounded, run under `/goal`, stops on convergence or a
+  non-convergence blocker). Ends in a validation block that records each
+  pass as evidence.
+- **Appended to hosts:** `/instruct` (short, new Step 8; render is now
+  Step 9), `/user-story` (short), `/plan` (medium, before any hand-off;
+  fills are *proposed*, so `/plan` still edits no files), `/spec-phase`
+  (medium, cross-spec gaps before the working order), `/mvp` (medium,
+  cross-file gaps in the bundle).
+- **`/mission` Step 6** is now `/validate` at the long tier. Pass 2 must
+  use a different lens and different mechanics from Pass 1. `/self-heal`
+  and `/self-improve` inherit this. Also fixed two stale `kit/skills/`
+  paths.
+- Users can override the tier inline ("validate long", "skip
+  validation"). No manifest change: `content/skills/` is a
+  directory-mirror.
+
+---
+
 ## v0.54.0 — 2026-09-24
 
 **Preventive: no data migration, and no damaged record.** Every record this

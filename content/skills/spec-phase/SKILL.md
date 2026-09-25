@@ -140,8 +140,16 @@ resumes by re-reading current state.
 
 After all stubs are either expanded or explicitly deferred:
 
-1. **Re-read every spec in the phase** (full-specs, both newly-
-   expanded and pre-existing).
+1. **Re-read and validate every spec in the phase** (full-specs,
+   both newly-expanded and pre-existing), following
+   `validate/SKILL.md` at the **medium** tier. The artifact is
+   the phase's specs as a set; the original ask is the phase's
+   scope paragraph in `tasks/PHASES.md`. Look for what one-at-a-
+   time expansion misses: a scope item no spec covers, two specs
+   that each assume the other does something, criteria that
+   contradict. Fills are spec edits, so they go through the same
+   show-and-sign-off as Step 3 before they are written. Render
+   the validation block before the working order.
 2. **Identify dependencies** between tasks. Look for:
    - Hard sequencing (X must ship before Y because Y references
      a primitive only X creates).
