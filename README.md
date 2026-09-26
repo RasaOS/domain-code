@@ -125,7 +125,7 @@ claude-kit/
 │   ├── ENV.md.template           # env-var rollup template
 │   ├── pipeline-config.toml.template  # project pipeline config
 │   ├── deploy-log.md.template    # appended-to log of every deploy
-│   └── foundation.json           # initial sync-tracking file
+│   └── rasa.lock.json.template   # the install's pin + overrides[]
 ├── bin/
 │   └── init                      # bootstrap a target project
 ├── MANIFEST.json                 # what files this kit ships
@@ -355,8 +355,9 @@ entry is applied by its policy:
    `bookmarks.md`), the stamp templates under `.claude/clouds/`,
    `.claude/runtimes/`, `.claude/tests/`, plus `settings.json`,
    `env/ENV.md`, `build/pipeline-config.toml`, and more.
-3. **`.claude/foundation.json`** — stamped with the kit's commit SHA so
-   `/sync` knows what to compare against.
+3. **`.claude/rasa.lock.json`** — stamped with the Element's commit SHA so
+   `/sync` knows what to compare against, plus `overrides[]` — the
+   files this project has deliberately diverged on.
 4. **Scaffold directories** — empty output destinations the kit's
    skills write to (`tasks/`, `docs/`, `env/`, …), each with a
    `.gitkeep`.
@@ -401,14 +402,14 @@ already exists.
 | File / dir | Policy | What you should know |
 |---|---|---|
 | `.claude/skills/` | additive — overlays kit skills, doesn't delete project-only ones | If a kit skill name collides with a project-only skill, the kit wins. **Rename project-only skills with a `local-` prefix BEFORE init** if they share a name with a kit skill. |
-| `.claude/modes/` | additive — overlays kit modes | Mode definitions (drive prose) sync from `kit/modes/`. Local edits to `.claude/modes/<name>.md` are preserved across `/sync` if listed as overrides in `foundation.json`. |
+| `.claude/modes/` | additive — overlays kit modes | Mode definitions (drive prose) sync from `kit/modes/`. Local edits to `.claude/modes/<name>.md` are preserved across `/sync` if listed in `overrides[]` of `.claude/rasa.lock.json` (`sync.sh keep <path>`). |
 | `.claude/mode.md` | **never touched** by init or sync | Project-owned activation record (created by `/mode <name>`, removed by `/mode normal`). |
 | `.claude/mode-stats.md` | **never touched** by init or sync | Project-owned cross-activation accumulator. |
 | `.claude/task-rules.md` | **OVERWRITE** with the Element's version | The vendored `rasa.module.tasks` spine. Project-specific content (gated files, verification commands) belongs in `CLAUDE.md` and `.claude/done-gate.md` — **back it up first** if you elaborated it; see "Save your work" below. |
 | `.claude/task-templates/`, `.claude/bin/`, `.claude/code-task-rules.md` | **OVERWRITE** with the Element's version | The task templates, the two task programs, and the engineering extension. |
 | `.claude/done-gate.md` | `skip-if-exists` | What *done* means in this project. Edit its commands to match `CLAUDE.md`. |
 | `.claude/<platform>-*.md` (e.g. `ios-task-rules.md`) | added | New file — won't collide unless you happen to already have one with a matching name. |
-| `.claude/foundation.json` | created if missing | Skipped if exists — your existing pin stays. |
+| `.claude/rasa.lock.json` | created if missing; re-stamped on re-run | The pin is refreshed to the Element being installed; your `overrides[]` and any keys you added are kept. |
 | `.claude/pact.md`, `welcome.md`, `wont-do.md`, `playlists.md`, `bookmarks.md` | `skip-if-exists` | Primitive-layer files. Existing versions stay; user owns them after init. |
 | `tasks/{triage,backlog,active,review,blocked,completed,closed}/` | scaffolded if missing | A pre-1.0 ledger is **migrated** first (see "Updating an installed project"). |
 | `tasks/PHASES.md`, `tasks/ROADMAP.md`, `tasks/AUDIT.md` | `skip-if-exists` | Existing project-specific versions stay. |
@@ -508,7 +509,7 @@ upstream. That's how the kit gets better.
 
 ### What to do if you're unsure
 
-Use `/sync` after init. The skill reads `.claude/foundation.json`
+Use `/sync` after init. The skill reads `.claude/rasa.lock.json`
 and shows a diff of every kit-managed file vs the local version.
 You can accept changes file-by-file or mark a file as a "local
 override" so future syncs respect it.
@@ -542,7 +543,7 @@ operation — that's intentional, so changes are reviewed.
 
 Just edit the file locally. `/sync` will detect the divergence as a
 "local override" and **not** overwrite it without your approval. The
-override is recorded in `.claude/foundation.json` so future syncs
+override is recorded in `.claude/rasa.lock.json`'s `overrides[]` so future syncs
 respect it.
 
 ### "The kit shipped a bad change — I want to roll back"
@@ -555,7 +556,7 @@ git push
 /sync   # picks up the revert
 ```
 
-Or pin to an older commit by editing `.claude/foundation.json`'s
+Or pin to an older commit by editing `.claude/rasa.lock.json`'s
 `pinned_sha` field manually.
 
 ---

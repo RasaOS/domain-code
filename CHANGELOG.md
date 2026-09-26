@@ -24,6 +24,43 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.55.1 — 2026-09-26
+
+**Two fail-open bugs: a merge over a red build, and a dead contribution path.**
+
+- **`/peer-review` could merge over a failing, running or absent build.**
+  `peer-review.sh` counted a check as passing whenever its `conclusion` was
+  not a known failure, and a blank conclusion was on the pass list. GitHub's
+  rollup has two shapes: a CheckRun has a blank conclusion while it runs, and
+  a legacy StatusContext (many external CIs) has `state` and no `conclusion`
+  key at all. So a still-running check, a **failed** status context, and a
+  PR with no checks all read as green. The skill also never gated on
+  `failing_checks`; it relied on branch protection to refuse.
+  - Classification is now fail-closed. Only an explicit success passes,
+    anything running is `pending`, an unrecognised entry is failing, and an
+    empty rollup is `none`, never `pass`. `scope` emits `checks_state`,
+    `failing_checks` and `pending_checks`.
+  - New `peer-review.sh checks <N>` re-reads CI at the moment of merging.
+    Exit codes: 0 pass, 4 failing, 5 pending, 6 none. `/peer-review` merges
+    only on 0. Failing rejects, pending holds, and none posts the findings
+    as a comment and leaves the merge to the user.
+  - `bin/test-peer-review` (repo tooling, wired into CI on Linux and stock
+    macOS bash 3.2) runs 14 cases. The pre-fix script fails all 14.
+- **`/contribute` stopped on every install.** It required
+  `.claude/foundation.json`, which `bin/init` has not written since the
+  canon lock. It also recorded overrides there, where nothing reads them, so
+  the next `/sync` overwrote the file the override was meant to protect.
+  - It now reads `.claude/rasa.lock.json`, with `foundation.json` as a
+    read-only fallback the way `/sync` reads it.
+  - It detects drift through `/sync`'s own `sync.sh fetch` and `sync.sh
+    plan` instead of a second hand-rolled comparison, and it records
+    overrides with `sync.sh keep`.
+  - Legacy vocabulary is fixed throughout the file. The README's seven
+    `foundation.json` references now name the real lockfile, and the
+    re-install row now says the pin is restamped, not kept.
+
+---
+
 ## v0.55.0 — 2026-09-25
 
 **New skill: `/validate` — find the gaps, fill them, prove it twice.**

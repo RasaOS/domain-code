@@ -128,6 +128,12 @@ jobs:
           PATH="$shim:$PATH" bash bin/test-readers
           PATH="$shim:$PATH" bash bin/check-reader-parity
 
+      # /peer-review's CI gate: a running, failed-status-context or absent
+      # build must never read as green in the skill that holds merge
+      # authority. A stand-in gh serves each rollup; no network.
+      - name: Peer-review CI gate
+        run: bash bin/test-peer-review
+
   macos:
     name: runs on stock macOS bash
     runs-on: macos-latest
@@ -164,6 +170,9 @@ jobs:
           /bin/bash bin/test-writers
           /bin/bash bin/test-readers
           /bin/bash bin/check-reader-parity
+
+      - name: Peer-review CI gate (bash 3.2)
+        run: /bin/bash bin/test-peer-review
 
       # The approval gate must (a) auto-approve under FORCE_APPROVAL=1 and
       # (b) fail CLOSED with no controlling terminal. A CI runner has no

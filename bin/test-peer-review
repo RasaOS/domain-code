@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# bin/test-peer-review — regression tests for peer-review.sh's CI gate.
+# Repo tooling: lives in bin/, is not registered in rasa.json, and is never
+# installed into a consumer.
+#
+# peer-review.sh holds squash-merge authority. Before 0.55.1 it counted a
+# check as passing whenever its conclusion was not a known failure, and a
+# blank conclusion was on the pass list — so a still-running CheckRun, a
+# failed legacy StatusContext (which has `state`, no `conclusion`) and a PR
+# with no checks at all all read as green. These cases pin the fail-closed
+# classification and the `checks` verb's exit codes.
+#
+# A stand-in `gh` on PATH serves each case's rollup; nothing touches the
+# network.
+#
+# Usage:
+#   bin/test-peer-review
+#   TEST_PEER_REVIEW_SCRIPT=<path> bin/test-peer-review
+# The variable runs the suite against another copy of the script: a control
+# run against the pre-fix version shows which cases it failed.
+#
+# Portable on purpose: bash 3.2, POSIX tools. Exit 0 only if every case passes.
+
+set -u
+here="$(cd "$(dirname "$0")" && pwd -P)"
+SCRIPT="${TEST_PEER_REVIEW_SCRIPT:-$here/../content/skills/peer-review/peer-review.sh}"
+
+T="$(mktemp -d "${TMPDIR:-/tmp}/test-peer-review.XXXXXX")" || exit 2
+trap 'rm -rf "$T"' EXIT
+mkdir -p "$T/shim"
+
+# gh stand-in: `pr view` prints $T/rollup.json wrapped as a PR; `pr diff`
+# prints a one-line diff.
+cat > "$T/shim/gh" <<EOF
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "pr view") printf '{"number":7,"title":"t","author":{"login":"a"},"baseRefName":"main","headRefName":"task/x","files":[],"statusCheckRollup":%s}' "\$(cat "$T/rollup.json")" ;;
+  "pr diff") echo "diff --git a/x b/x" ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$T/shim/gh"
+
+pass=0; fail=0
+ok()  { pass=$((pass + 1)); printf '  ok    %s\n' "$1"; }
+bad() { fail=$((fail + 1)); printf '  FAIL  %s\n        %s\n' "$1" "$2"; }
+
+# case <name> <rollup-json> <expected-state> <expected-checks-exit>
+case_() {
+  local name="$1" rollup="$2" want_state="$3" want_rc="$4" out rc state
+  printf '%s' "$rollup" > "$T/rollup.json"
+  out="$(PATH="$T/shim:$PATH" bash "$SCRIPT" checks 7 2>/dev/null)"; rc=$?
+  state="$(printf '%s\n' "$out" | sed -n 's/^checks_state=//p')"
+  if [ "$rc" = "$want_rc" ] && [ "$state" = "$want_state" ]; then
+    ok "$name"
+  else
+    bad "$name" "want state=$want_state rc=$want_rc, got state=${state:-<none>} rc=$rc"
+  fi
+}
+
+echo "peer-review.sh checks — classification and exit codes"
+
+case_ "all checks green passes" \
+  '[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"},{"__typename":"StatusContext","context":"ext","state":"SUCCESS"}]' \
+  pass 0
+case_ "neutral and skipped pass" \
+  '[{"__typename":"CheckRun","name":"a","status":"COMPLETED","conclusion":"NEUTRAL"},{"__typename":"CheckRun","name":"b","status":"COMPLETED","conclusion":"SKIPPED"}]' \
+  pass 0
+case_ "no checks at all is none, never pass" \
+  '[]' none 6
+case_ "a running check run is pending" \
+  '[{"__typename":"CheckRun","name":"ci","status":"IN_PROGRESS","conclusion":""}]' \
+  pending 5
+case_ "a queued check run with a null conclusion is pending" \
+  '[{"__typename":"CheckRun","name":"ci","status":"QUEUED","conclusion":null}]' \
+  pending 5
+case_ "a failed status context fails" \
+  '[{"__typename":"StatusContext","context":"jenkins","state":"FAILURE"}]' \
+  fail 4
+case_ "an errored status context fails" \
+  '[{"__typename":"StatusContext","context":"jenkins","state":"ERROR"}]' \
+  fail 4
+case_ "a pending status context is pending" \
+  '[{"__typename":"StatusContext","context":"jenkins","state":"PENDING"}]' \
+  pending 5
+case_ "a status context without __typename is still read by its state" \
+  '[{"context":"jenkins","state":"FAILURE"}]' \
+  fail 4
+case_ "a completed run with a blank conclusion fails" \
+  '[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":""}]' \
+  fail 4
+case_ "cancelled and timed-out runs fail" \
+  '[{"__typename":"CheckRun","name":"a","status":"COMPLETED","conclusion":"CANCELLED"},{"__typename":"CheckRun","name":"b","status":"COMPLETED","conclusion":"TIMED_OUT"}]' \
+  fail 4
+case_ "failing outranks pending" \
+  '[{"__typename":"CheckRun","name":"a","status":"IN_PROGRESS"},{"__typename":"CheckRun","name":"b","status":"COMPLETED","conclusion":"FAILURE"}]' \
+  fail 4
+case_ "an unrecognised entry fails closed" \
+  '[{"name":"mystery"}]' fail 4
+
+echo "peer-review.sh scope — reports the same classification"
+printf '%s' '[{"__typename":"StatusContext","context":"jenkins","state":"FAILURE"},{"__typename":"CheckRun","name":"ci","status":"IN_PROGRESS"}]' > "$T/rollup.json"
+out="$(PATH="$T/shim:$PATH" bash "$SCRIPT" scope 7 2>/dev/null)"; rc=$?
+if [ "$rc" = 0 ] \
+   && printf '%s\n' "$out" | grep -qx 'checks_state=fail' \
+   && printf '%s\n' "$out" | grep -qx 'failing_checks=jenkins' \
+   && printf '%s\n' "$out" | grep -qx 'pending_checks=ci' \
+   && printf '%s\n' "$out" | grep -qx 'pr=7' \
+   && printf '%s\n' "$out" | grep -q '^diff_file='; then
+  ok "scope emits checks_state, failing and pending lists beside the scope"
+else
+  bad "scope emits checks_state, failing and pending lists beside the scope" "got: $(printf '%s' "$out" | tr '\n' '|')"
+fi
+rm -f "${TMPDIR:-/tmp}"/pr-7-diff.* 2>/dev/null
+
+echo
+echo "$pass passed, $fail failed"
+[ "$fail" -eq 0 ]
