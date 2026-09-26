@@ -124,6 +124,10 @@ during scope, merges with its method, and reports the `on_merge` next action.
   and each post-merge action. A mutation that lets a prod deploy through fails
   it. `bin/test-open-pr` gains 18 manifest cases and `bin/test-peer-review` 2
   classify cases. All run in CI on Linux and on macOS bash 3.2.
+- **`bin/check-bash32` rule 7:** no `case` inside a one-line `$( )`. bash 3.2
+  ends the substitution at the pattern's `)`, so the line fails at runtime on
+  stock macOS while parsing cleanly on bash 4 and later. The first macOS run of
+  `bin/test-auto-merge` hit exactly this.
 
 ---
 

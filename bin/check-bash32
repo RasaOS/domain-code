@@ -23,6 +23,9 @@
 #   4. &>>                                 append stdout+stderr      (4.0)
 #   5. ;;&  and  ;&                        case fall-through         (4.0)
 #   6. shopt -s globstar                   ** recursive glob         (4.0)
+#   7. case … in pat) … inside $( ) on one line: 3.2 ends the command
+#      substitution at the pattern's `)` and the script fails to parse
+#      at runtime. Compute the value before the $( ), or write `(pat)`.
 #
 # Full-line comments are stripped before matching, so a script may name a
 # construct in prose while not using it. A line needing a deliberate
@@ -59,6 +62,7 @@ CHECK_NAMES=(
   'append-both redirect (&>>)'  # bash32-ok
   'case fall-through (;;& or ;&)'  # bash32-ok
   'globstar (**)'  # bash32-ok
+  'case inside $( ) (3.2 closes the substitution at the pattern paren)'  # bash32-ok
 )
 CHECK_RES=(
   '\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?(,,?|\^\^?)([^}]*)?\}'  # bash32-ok
@@ -67,6 +71,7 @@ CHECK_RES=(
   '&>>'  # bash32-ok
   ';;&|[^;];&([ 	]|$)'  # bash32-ok
   'shopt[ 	]+-s[ 	]+globstar'  # bash32-ok
+  '\$\([^)]*(^|[^A-Za-z0-9_])case[ 	]'  # bash32-ok
 )
 
 enumerate() {

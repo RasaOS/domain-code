@@ -300,7 +300,11 @@ echo "v2" > app.txt && git add app.txt && git commit -qm "merge PR" && git push 
 OID="$(git rev-parse HEAD)"
 git reset -q --hard HEAD~1
 merged() {  # merged <n> <on_merge> [state]
-  body "on_merge: $2" "release: $( case "$2" in release:*) echo "${2#release:}" ;; *) echo none ;; esac )" \
+  # The release is computed before the $( ): bash 3.2 cannot parse a
+  # `case` inside a command substitution (bin/check-bash32 rule 7).
+  local rel=none
+  case "$2" in release:*) rel="${2#release:}" ;; esac
+  body "on_merge: $2" "release: $rel" \
     | python3 -c 'import json,sys; print(json.dumps({"state": sys.argv[1], "url": "u", "mergeCommit": {"oid": sys.argv[2]}, "body": sys.stdin.read()}))' "${3:-MERGED}" "$OID" \
     > "$T/gh/pr-$1.json"
 }
