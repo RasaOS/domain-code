@@ -225,7 +225,8 @@ surface?" without touching the working tree.
 | `/skills` | List every locally-defined skill |
 | `/backlog` | Forward-looking task list, grouped by phase |
 | `/roadmap` | Per-phase view including completed work |
-| `/build` | Toolchain-detecting "does it build?" |
+| `/build` | BUILD phase — `./build/build` runs the one build stage from a clean tree and records the commit + artifact fingerprint; compile-check fallback when no pipeline |
+| `/test` | TEST phase — `./build/test` tests that recorded build: gate suite, then e2e with runtimes started, health-checked, always stopped; `/test add` wires a test into the suite that gates |
 | `/run` | Toolchain-detecting launcher |
 | `/schema-check` | Cross-platform schema mirror reconciliation |
 | `/scope-check` | Reality-check planned-change surface area vs estimate |

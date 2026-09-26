@@ -1,0 +1,285 @@
+#!/usr/bin/env bash
+# build/test — the TEST phase: test one recorded build, end to end.
+#
+# Usage:
+#   ./build/test [--build=<BLD-id>]
+#
+# Default build: the newest successful build record for HEAD. Refused (exit 3,
+# no record) when there is none, when its commit is not HEAD, when the tree
+# differs from HEAD, or when its artifacts no longer match the fingerprint the
+# build recorded — a test of something other than what was built proves
+# nothing about it.
+#
+# PHASES, in order; the first failure stops the run:
+#   1. gate  the strongest gate suite — tests/suites/prod-gate.md, else
+#            pre-deploy.md — through stages/30-test.sh with TEST_STRICT=1:
+#            a suite that runs nothing FAILS here, at every class.
+#   2. e2e   tests/suites/e2e.md, when it exists. Its `runtimes:` list names
+#            .claude/runtimes/<name>.md stamps. Each one is started with its
+#            `commands.start` in its own process group, polled until its
+#            `health_check` passes (`url` + `expect_status`, or `command`),
+#            and STOPPED on every exit path — pass, fail, error or Ctrl-C.
+#            Then the e2e suite runs, strict. An e2e.md that exists is never
+#            optional: listing no tests fails.
+#
+# Writes tests/runs/TST-<utc>.md naming the BLD it tested; ./build/deploy's
+# verified-build gate reads it. Runtime and suite output goes beside it.
+#
+# Exported to every test: RASA_BUILD_ID, RASA_TEST_RUN, and for each e2e
+# runtime RUNTIME_<NAME>_HEALTH_URL (name upper-cased, - → _).
+#
+# Exit: 0 passed · 1 failed (record written) · 2 usage · 3 refused
+#
+# Portability: bash 3.2. curl for URL health checks.
+
+set -euo pipefail
+
+BUILD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$BUILD_DIR/.." && pwd)"
+cd "$PROJECT_DIR"
+# shellcheck source=/dev/null
+. "$BUILD_DIR/gates/verify-lib.sh"
+rfm_require 1 || exit 70
+# shellcheck source=/dev/null
+. "$BUILD_DIR/gates/suite-lib.sh"
+
+WANT_BUILD=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --build=*) WANT_BUILD="${1#*=}" ;;
+    --build)   WANT_BUILD="${2:-}"; shift ;;
+    -h|--help) sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "error: unknown arg: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+refuse() { echo "✗ test refused: $*" >&2; exit 3; }
+
+SHA="$(vl_head)" || refuse "this repository has no commits."
+DIRTY="$(vl_source_dirty)"
+[ -z "$DIRTY" ] || refuse "the tree differs from HEAD — commit, then ./build/build again.
+$(echo "$DIRTY" | sed 's/^/    /')"
+
+if [ -n "$WANT_BUILD" ]; then
+  case "$WANT_BUILD" in BLD-*) ;; *) echo "error: --build takes a BLD-… id" >&2; exit 2 ;; esac
+  BREC="$VL_BUILDS_DIR/$WANT_BUILD.md"
+  [ -f "$BREC" ] || refuse "no build record $WANT_BUILD."
+  [ "$(vl_field "$BREC" status)" = "success" ] || refuse "$WANT_BUILD did not succeed."
+  [ "$(vl_field "$BREC" sha)" = "$SHA" ] || refuse "$WANT_BUILD built $(vl_field "$BREC" sha | cut -c1-12), not HEAD ${SHA:0:12}."
+else
+  BREC="$(vl_latest "$VL_BUILDS_DIR" BLD "$SHA" success)" \
+    || refuse "no successful build of HEAD (${SHA:0:12}) — run ./build/build first."
+fi
+BID="$(basename "$BREC" .md)"
+vl_build_still_matches "$BREC" || refuse "$BID's artifacts are not what was built — run ./build/build again."
+
+ACTOR="$(rasa_actor)" || { echo "✗ cannot record who is testing — fix RASA_ACTOR or git user.name." >&2; exit 2; }
+REC="$(vl_new_record "$VL_RUNS_DIR" TST)" || exit 1
+TID="$(basename "$REC" .md)"
+OUT="${REC%.md}"
+mkdir -p "$OUT"
+export RASA_BUILD_ID="$BID" RASA_TEST_RUN="$TID"
+STARTED="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+T0=$(date +%s)
+
+echo "════════════════════════════════════════════════════════════"
+echo "  test   $TID"
+echo "  build  $BID (${SHA:0:12}, fingerprint $(vl_field "$BREC" artifacts_digest | cut -c1-16))"
+echo "════════════════════════════════════════════════════════════"
+
+GATE_RESULT="not-run"; E2E_RESULT="none"; GATE_SUITE=""; REASON=""; RUNTIMES_USED=""
+
+# ─── runtime lifecycle ─────────────────────────────────────────────────────
+PIDS=""
+SUITE_PID=""
+teardown() {
+  local p
+  if [ -n "$SUITE_PID" ]; then
+    kill -TERM -- "-$SUITE_PID" 2>/dev/null || kill -TERM "$SUITE_PID" 2>/dev/null || true
+    SUITE_PID=""
+  fi
+  for p in $PIDS; do
+    kill -TERM -- "-$p" 2>/dev/null || kill -TERM "$p" 2>/dev/null || true
+  done
+  for p in $PIDS; do
+    local n=0
+    while kill -0 "$p" 2>/dev/null && [ "$n" -lt 20 ]; do sleep 0.5; n=$((n + 1)); done
+    kill -KILL -- "-$p" 2>/dev/null || kill -KILL "$p" 2>/dev/null || true
+  done
+  PIDS=""
+}
+trap teardown EXIT
+trap 'teardown; exit 130' INT TERM
+
+unquote() {
+  case "$1" in
+    \"*\") v="${1#\"}"; printf '%s' "${v%\"}" ;;
+    \'*\') v="${1#\'}"; printf '%s' "${v%\'}" ;;
+    *) printf '%s' "$1" | sed 's/[ 	][ 	]*#.*$//' ;;
+  esac
+}
+child() { unquote "$(rfm_get_child "$1" "$2" "$3" 2>/dev/null || true)"; }
+
+# start_runtime <name> — start it, wait for health; rc 1 with a reason on stderr.
+start_runtime() {
+  local name="$1" stamp start url expect timeout hcmd pid n var
+  stamp=".claude/runtimes/$name.md"
+  [ -f "$stamp" ] || { echo "runtime '$name': no stamp at $stamp" >&2; return 1; }
+  start="$(child "$stamp" commands start)"
+  [ -n "$start" ] || { echo "runtime '$name': $stamp has no commands.start — the command that serves the BUILT app (not the dev server, unless you mean it)" >&2; return 1; }
+  url="$(child "$stamp" health_check url)"
+  hcmd="$(child "$stamp" health_check command)"
+  expect="$(child "$stamp" health_check expect_status)"; expect="${expect:-200}"
+  timeout="$(child "$stamp" health_check timeout_seconds)"; timeout="${timeout:-30}"
+  case "$timeout" in *[!0-9]*|"") timeout=30 ;; esac
+  [ -n "$url" ] || [ -n "$hcmd" ] || { echo "runtime '$name': $stamp has no health_check.url or health_check.command — nothing can tell when it is up" >&2; return 1; }
+  if [ -n "$url" ] && [ -z "$hcmd" ] && ! command -v curl >/dev/null 2>&1; then
+    echo "runtime '$name': health_check.url needs curl, which is not installed" >&2; return 1
+  fi
+
+  echo "  ▶ start $name: $start"
+  set -m
+  bash -c "$start" > "$OUT/runtime-$name.log" 2>&1 &
+  pid=$!
+  set +m
+  PIDS="$PIDS $pid"
+  if [ -n "$url" ]; then
+    var="RUNTIME_$(printf '%s' "$name" | tr 'a-z-' 'A-Z_')_HEALTH_URL"
+    export "$var=$url"
+  fi
+
+  n=0
+  while [ "$n" -lt $((timeout * 2)) ]; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      echo "runtime '$name' exited before it was healthy — log: $OUT/runtime-$name.log" >&2
+      tail -20 "$OUT/runtime-$name.log" | sed 's/^/      /' >&2
+      return 1
+    fi
+    if [ -n "$hcmd" ]; then
+      bash -c "$hcmd" >/dev/null 2>&1 && { echo "    ✓ healthy ($hcmd)"; return 0; }
+    else
+      [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$url" 2>/dev/null || true)" = "$expect" ] \
+        && { echo "    ✓ healthy ($url → $expect)"; return 0; }
+    fi
+    sleep 0.5; n=$((n + 1))
+  done
+  echo "runtime '$name' not healthy after ${timeout}s — log: $OUT/runtime-$name.log" >&2
+  tail -20 "$OUT/runtime-$name.log" | sed 's/^/      /' >&2
+  return 1
+}
+
+# run_suite <name> <logname> — in the background, in its own process group,
+# and WAITED on. A foreground child defers bash's signal traps until it exits,
+# so a Ctrl-C or kill during a hung e2e test used to leave every runtime up
+# for as long as the test hung. `wait` returns on the signal; teardown then
+# stops the suite's whole group along with the runtimes.
+run_suite() {
+  local rc
+  set -m
+  ( TEST_SUITE="$1" TEST_STRICT=1 ENV_CLASS="test" bash "$BUILD_DIR/stages/30-test.sh" test 2>&1 | tee "$OUT/$2.log"
+    exit "${PIPESTATUS[0]}" ) &
+  SUITE_PID=$!
+  set +m
+  set +e
+  wait "$SUITE_PID"; rc=$?
+  set -e
+  SUITE_PID=""
+  return "$rc"
+}
+
+# ─── 1. gate ───────────────────────────────────────────────────────────────
+if GATE_FILE="$(suite_file_for_class tests/suites prod)"; then
+  GATE_SUITE="$(basename "$GATE_FILE" .md)"
+  echo ""; echo "▶ Phase 1 — gate suite: $GATE_SUITE"
+  if run_suite "$GATE_SUITE" gate; then GATE_RESULT="passed"
+  else GATE_RESULT="failed"; REASON="gate suite '$GATE_SUITE' failed"
+  fi
+else
+  GATE_RESULT="failed"; REASON="no gate suite (tests/suites/pre-deploy.md) — a test phase that runs nothing is not a test"
+  echo "✗ $REASON" >&2
+fi
+
+# ─── 2. e2e ────────────────────────────────────────────────────────────────
+if [ "$GATE_RESULT" = "passed" ] && [ -f tests/suites/e2e.md ]; then
+  echo ""; echo "▶ Phase 2 — end-to-end"
+  set +e
+  RUNTIMES="$(suite_list tests/suites/e2e.md runtimes)"; LRC=$?
+  set -e
+  if [ "$LRC" -ne 0 ]; then
+    E2E_RESULT="error"; REASON="tests/suites/e2e.md has a runtimes: list this parser cannot read"
+  else
+    E2E_RESULT="passed"
+    # Every runtime an e2e test declares it needs must be one the suite
+    # starts — checked before anything starts, so a missing one is named
+    # instead of surfacing as a connection error mid-test.
+    set +e
+    E2E_TESTS="$(suite_tests tests/suites/e2e.md)"
+    set -e
+    for t in $E2E_TESTS; do
+      st="$(stamp_for tests/stamps "$t" 2>/dev/null | head -1)" || true
+      [ -n "$st" ] && [ -f "$st" ] || continue
+      set +e
+      NEED="$(suite_list "$st" runtimes_required 2>/dev/null)"
+      set -e
+      for need in $NEED; do
+        case " $RUNTIMES " in
+          *" $need "*) ;;
+          *) E2E_RESULT="error"; REASON="e2e test '$t' needs runtime '$need', which e2e.md's runtimes: list does not start"; echo "✗ $REASON" >&2 ;;
+        esac
+      done
+    done
+    [ "$E2E_RESULT" = "passed" ] && for r in $RUNTIMES; do
+      if ! start_runtime "$r"; then E2E_RESULT="error"; REASON="runtime '$r' did not come up healthy"; break; fi
+      RUNTIMES_USED="$RUNTIMES_USED $r"
+    done
+    if [ "$E2E_RESULT" = "passed" ]; then
+      run_suite e2e e2e || { E2E_RESULT="failed"; REASON="e2e suite failed"; }
+    fi
+  fi
+  teardown
+  [ -z "$RUNTIMES_USED" ] || echo "  ■ stopped:$RUNTIMES_USED"
+fi
+
+STATUS="failed"
+if [ "$GATE_RESULT" = "passed" ] && { [ "$E2E_RESULT" = "passed" ] || [ "$E2E_RESULT" = "none" ]; }; then
+  STATUS="passed"
+fi
+DURATION=$(( $(date +%s) - T0 ))
+
+rfm_check actor "$ACTOR" || exit 2
+{
+  echo "---"
+  echo "kind: test-run"
+  echo "id: $TID"
+  echo "status: $STATUS"
+  echo "sha: $SHA"
+  echo "build: $BID"
+  echo "artifacts_digest: $(vl_field "$BREC" artifacts_digest)"
+  echo "gate_suite: ${GATE_SUITE:-none}"
+  echo "gate: $GATE_RESULT"
+  echo "e2e: $E2E_RESULT"
+  echo "runtimes: [$(echo $RUNTIMES_USED | tr ' ' ',')]"
+  echo "actor: $ACTOR"
+  echo "started: $STARTED"
+  echo "duration_s: $DURATION"
+  echo "reason: $(rfm_clean "$REASON")"
+  echo "---"
+  echo ""
+  echo "# $TID — test of $BID"
+  echo ""
+  echo "| Phase | Result | Log |"
+  echo "|---|---|---|"
+  echo "| gate (${GATE_SUITE:-none}) | $GATE_RESULT | \`$OUT/gate.log\` |"
+  echo "| e2e | $E2E_RESULT | \`$OUT/e2e.log\` |"
+} | rfm_write_atomic "$REC" || exit 1
+
+echo ""
+if [ "$STATUS" = "passed" ]; then
+  echo "✓ test $TID passed — build $BID (gate: $GATE_RESULT, e2e: $E2E_RESULT, ${DURATION}s)"
+  [ "$E2E_RESULT" = "none" ] && echo "  ⚠ no tests/suites/e2e.md — nothing end-to-end was run"
+  echo "  next: ./build/deploy --env=<env> --intent=<deploy|release>"
+  exit 0
+fi
+echo "✗ test $TID failed — $REASON" >&2
+exit 1

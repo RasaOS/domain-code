@@ -53,11 +53,23 @@ The setup is a conversation, not a form. Walk the user through:
      - python lib: `python -m build`
      - go: `go build -o build/<name> ./cmd/<name>`
    - Confirm or override.
+   - **Declare what it produces.** Add the artifact line after the build
+     command — `echo "dist" >> "$BUILD_ARTIFACTS"` (a file or directory),
+     or `echo "image=<id>" >> "$BUILD_ARTIFACTS"` for a container — so
+     `/build` can fingerprint it and the deploy gate can refuse a changed
+     one (`pipeline-rules.md` → "The chain"). Make sure the output path is
+     in `.gitignore`: a build that dirties the tree fails.
 
 4. **Test command source** (for populating `tests/suites/pre-deploy.md`)
    - "Do you already have tests in this project? Where do they live?"
    - If yes: "What command runs your full test suite?" → create a test stamp pointing at it
-   - If no: leave `pre-deploy` empty; suggest user adds tests via `/test add` (future skill) or by writing scripts to `tests/scripts/`
+   - If no: leave `pre-deploy` empty; suggest user adds tests via `/test add` or by writing scripts to `tests/scripts/`
+   - "Does the app run as a server or worker you can hit end to end?" If yes, offer
+     `tests/suites/e2e.md` with a `runtimes:` list, and check each
+     `.claude/runtimes/<name>.md` has `commands.start` (serves the built app) and a
+     `health_check` (`test-rules.md` → "End-to-end").
+   - "What proves a deployed environment is up?" → a smoke stamp in
+     `tests/suites/smoke.md`. **Required before any prod release.**
 
 5. **Publish command** (`build/stages/40-publish.sh`, if still TODO)
    - container: "Which registry? (e.g. `myacr.azurecr.io`, `ghcr.io/myorg`)" → generates `docker push` line
@@ -99,7 +111,7 @@ After each user confirmation:
 
 Once all questions are answered:
 
-1. Run `./build/deploy --env=<first-env> --intent=deploy --dry-run` to validate the wiring (stages discover correctly, env folder exists, no syntax errors).
+1. Run `./build/build` then `./build/test` (commit first — both refuse a dirty tree), then `./build/deploy --env=<first-env> --intent=deploy --dry-run` to validate the wiring (stages discover correctly, env folder exists, no syntax errors, the verified-build gate finds the run).
 2. Surface the dry-run output to the user.
 3. If anything errors, flag the specific file + line that needs attention. Don't try to fix silently.
 

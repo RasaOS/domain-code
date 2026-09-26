@@ -140,6 +140,14 @@ jobs:
       - name: Open-PR hand-off
         run: bash bin/test-open-pr
 
+      # The build → test → deploy chain in a real install: a web app built to
+      # dist/, an e2e phase that starts a real HTTP runtime, health-checks it
+      # and always stops it (killed mid-test included), the verified-build
+      # gate refusing untested/stale/tampered builds at staging and prod, and
+      # 60-verify failing a deploy whose smoke check fails.
+      - name: Build, test, deploy chain
+        run: bash bin/test-pipeline
+
   macos:
     name: runs on stock macOS bash
     runs-on: macos-latest
@@ -182,6 +190,9 @@ jobs:
 
       - name: Open-PR hand-off (bash 3.2)
         run: /bin/bash bin/test-open-pr
+
+      - name: Build, test, deploy chain (bash 3.2)
+        run: /bin/bash bin/test-pipeline
 
       # The approval gate must (a) auto-approve under FORCE_APPROVAL=1 and
       # (b) fail CLOSED with no controlling terminal. A CI runner has no

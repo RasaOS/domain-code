@@ -23,6 +23,14 @@
 # same reason, but that gate does not cover DIRECT invocation of this stage —
 # which the shipped suite body tells operators to do.
 #
+# TWO INPUTS from the phase scripts (build/test, 60-verify.sh). Both can
+# only narrow or tighten the stage, never loosen it:
+#   TEST_SUITE=<name>  run tests/suites/<name>.md instead of choosing by
+#                      class. A named suite that does not exist is an error
+#                      at every class — never a fall-back to another suite.
+#   TEST_STRICT=1      apply the prod rule (a suite that runs nothing fails)
+#                      whatever the class. build/test always sets it.
+#
 # $1 = environment name
 
 set -euo pipefail
@@ -40,13 +48,17 @@ cd "$PROJECT_DIR"
 # shellcheck source=/dev/null
 . "$PROJECT_DIR/build/gates/suite-lib.sh"
 
-at_prod() { [ "$ENV_CLASS" = "prod" ]; }
+at_prod() { [ "$ENV_CLASS" = "prod" ] || [ "${TEST_STRICT:-0}" = "1" ]; }
 
 # fail_or_warn <message> — exit 1 at prod class, warn and exit 0 below it.
 fail_or_warn() {
   if at_prod; then
     echo "✗ $1" >&2
-    echo "  Environment '$ENV' is class prod: a suite that runs no tests fails." >&2
+    if [ "$ENV_CLASS" = "prod" ]; then
+      echo "  Environment '$ENV' is class prod: a suite that runs no tests fails." >&2
+    else
+      echo "  TEST_STRICT=1: a suite that runs no tests fails." >&2
+    fi
     exit 1
   fi
   echo "⚠ $1 (class '$ENV_CLASS' — warning only; this fails at prod class)"
@@ -54,7 +66,16 @@ fail_or_warn() {
 }
 
 # ─── Pick the suite ────────────────────────────────────────────────────────
-if ! SUITE_FILE="$(suite_file_for_class "$SUITES_DIR" "$ENV_CLASS")"; then
+if [ -n "${TEST_SUITE:-}" ]; then
+  case "$TEST_SUITE" in
+    */*|.*|"") echo "✗ TEST_SUITE must be a suite name, got '$TEST_SUITE'" >&2; exit 1 ;;
+  esac
+  SUITE_FILE="$SUITES_DIR/$TEST_SUITE.md"
+  if [ ! -f "$SUITE_FILE" ]; then
+    echo "✗ Suite '$TEST_SUITE' was asked for by name and does not exist ($SUITE_FILE)." >&2
+    exit 1
+  fi
+elif ! SUITE_FILE="$(suite_file_for_class "$SUITES_DIR" "$ENV_CLASS")"; then
   fail_or_warn "No test suite found in $SUITES_DIR"
 fi
 SUITE="$(basename "$SUITE_FILE" .md)"

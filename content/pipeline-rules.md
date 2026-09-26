@@ -25,7 +25,8 @@ build/
 │   ├── 20-build.sh
 │   ├── 30-test.sh
 │   ├── 40-publish.sh
-│   └── 50-deploy.sh              # delegates to environments/<env>/deploy.sh
+│   ├── 50-deploy.sh              # delegates to environments/<env>/deploy.sh
+│   └── 60-verify.sh              # smoke-tests the environment after it lands
 ├── environments/                 # one folder per environment (names = environments.json)
 │   ├── local/
 │   │   ├── env.sh                # exports env vars for this environment
@@ -39,9 +40,13 @@ build/
 ├── gates/                        # reusable check scripts (project picks which)
 │   ├── git-clean.sh
 │   ├── tag-matches.sh
-│   └── approval.sh
+│   ├── approval.sh
+│   ├── verified-build.sh         # deploy only what ./build/test passed (no bypass)
+│   └── verify-lib.sh             # shared by build, test and the gate (sourced)
 ├── deploy-log.md                 # appended every run (timestamp, env, who, result)
-└── deploy                        # entry point: ./build/deploy --env=staging --intent=deploy
+├── build                         # BUILD phase: ./build/build → builds/records/BLD-*.md
+├── test                          # TEST phase:  ./build/test  → tests/runs/TST-*.md
+└── deploy                        # DEPLOY phase: ./build/deploy --env=staging --intent=deploy
 ```
 
 ## Entry point: `./build/deploy`
@@ -101,6 +106,34 @@ Any non-zero exit aborts the pipeline.
   `environment-rules.md`.
 - `DEPLOY_USER`, `DEPLOY_TIMESTAMP`.
 
+## The chain: build → test → deploy
+
+Three phases, three entry points, each writing a record the next one
+checks — so what reaches staging or production is exactly what was built
+from a commit and then tested.
+
+| Phase | Entry point | Skill | Writes | Refuses when |
+|---|---|---|---|---|
+| **Build** | `./build/build [--env=<e>]` | `/build` | `builds/records/BLD-<utc>.md` (+ `.artifacts`, `.log`) | no commits; the tree differs from HEAD; the build wrote files git does not ignore; a declared artifact is missing |
+| **Test** | `./build/test [--build=<id>]` | `/test` | `tests/runs/TST-<utc>.md` (+ logs) | no successful build of HEAD; the tree differs from HEAD; the build's artifacts changed since it was built |
+| **Deploy** | `./build/deploy --env --intent` | `/deploy`, `/release` | `deploys/records/DEP-….md` | at staging and prod: no passing test run of HEAD whose build's artifacts are unchanged (`gates/verified-build.sh`); at prod also no `tests/suites/smoke.md` |
+
+- **Build once.** `20-build.sh` is the one build definition. `./build/build`
+  runs it and fingerprints what it declares; with a verified build,
+  `./build/deploy` skips `20-build` and ships those artifacts.
+- **Test the build.** `./build/test` runs the gate suite strict, then
+  `tests/suites/e2e.md` with its runtimes started, health-checked and
+  always stopped (`test-rules.md` → "End-to-end").
+- **Verify after deploy.** `60-verify.sh` runs `tests/suites/smoke.md`
+  against the environment that was just deployed.
+- **Calibration.** `verified-build` refuses at `staging` and `prod`, warns
+  at `dev` and `unclassified`, and has no bypass variable. `--dry-run`,
+  `--skip-gates`, `--skip-tests` and `env.sh` all still reach it.
+- **The records are files.** They make a skipped or stale step impossible
+  to ship by accident; they do not stop someone forging one on purpose —
+  the approval gate and branch protection do that. `git-clean.sh` never
+  counts `builds/` or `tests/runs/` as dirt.
+
 ## Stages
 
 The kit ships skeleton scripts. Each stage receives the environment name as `$1`. Each stage either does its job and exits 0, does nothing and exits 0, or fails and exits non-zero.
@@ -127,13 +160,28 @@ Project-specific. Examples:
 
 If the project type has no build step, leave it as `exit 0`.
 
+**Declare the artifacts.** Append one line per output to
+`$BUILD_ARTIFACTS` — a path relative to the project (a file or a
+directory), or `label=value` for something that is not a file:
+
+```sh
+echo "dist" >> "$BUILD_ARTIFACTS"
+echo "image=$(docker image inspect -f '{{.Id}}' "$IMAGE_NAME:$DEPLOY_TAG")" >> "$BUILD_ARTIFACTS"
+```
+
+`./build/build` fingerprints them; the deploy gate refuses a build whose
+artifacts changed after it was tested. The variable is always set, in
+`./build/build` and in `./build/deploy` alike. Build outputs must be in
+`.gitignore` — a build that dirties the tree fails.
+
 ### `30-test.sh` — run the test suite
 
 Reads `tests/suites/pre-deploy.md` (or another suite based on env), iterates the listed tests, runs each. See `test-rules.md` for the test stamp model.
 
-```sh
-./build/run-suite tests/suites/pre-deploy.md "$1"
-```
+Two inputs from the phase scripts, both of which can only narrow or
+tighten it: `TEST_SUITE=<name>` runs `tests/suites/<name>.md` (missing is
+an error, never a fall-back) and `TEST_STRICT=1` applies the prod rule —
+a suite that runs nothing fails — at any class. `./build/test` sets both.
 
 Failures abort the pipeline. `--skip-tests` skips the stage below `prod` class and is **REFUSED at `prod` class** (exit 2) — the parenthetical "don't use for prod" was a comment, and a comment is not a gate. A suite that would run no tests also refuses at `prod` class, via `build/gates/tests-required.sh`, which has no bypass variable.
 
@@ -151,6 +199,15 @@ Leave as no-op if your project's deploy step does both publish + deploy in one s
 ### `50-deploy.sh` — invoke the env-specific deploy command
 
 By default just `exec` into the environment's `deploy.sh`. Keep this generic; per-env logic lives in `environments/<env>/deploy.sh`.
+
+### `60-verify.sh` — prove the deployed environment works
+
+Runs `tests/suites/smoke.md` through `30-test.sh` against the environment
+just deployed (`ENVIRONMENT`, `DEPLOY_TO`, `DEPLOY_TAG` are exported). At
+prod class the suite is required and must run at least one test; below
+prod, a missing `smoke.md` warns. A failure fails the deploy and the ship
+log records `failed at 60-verify` — **with the new build live.** Roll it
+back.
 
 ## Environments
 
@@ -193,6 +250,15 @@ kubectl rollout status deployment/myapp -n prod
 ## Gates
 
 Reusable check scripts. The kit ships a few; projects add more as needed.
+
+### `gates/verified-build.sh`
+
+Run by `./build/deploy` right after `tests-required.sh`, before any stage,
+where no flag reaches it. Passes when `tests/runs/` holds a passed run of
+HEAD whose build (`builds/records/`) succeeded, built HEAD, was built for
+this environment or for any, and whose artifacts still match their
+fingerprint. Refuses at `staging` and `prod`; warns below. No bypass
+variable. Shared logic lives in `gates/verify-lib.sh`.
 
 ### `gates/git-clean.sh`
 

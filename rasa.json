@@ -2,7 +2,7 @@
   "$schema": "https://rasa-os.github.io/schema/rasa.schema.v1.json",
   "contract_version": "1.3.0",
   "name": "rasa.domain.code",
-  "version": "0.56.0",
+  "version": "0.57.0",
   "kind": "domain",
   "aliases": [
     "claude-kit",
@@ -60,7 +60,7 @@
     "namespace": "rasa-domain",
     "domain": "code",
     "note": "Rasa-specific metadata. Registry-visible alternate names live in top-level `aliases`. Kind, version, source, and requires are part of the universal Connection Contract.",
-    "convergence": "v0.43.0 (2026-06-25) declared the five canonical engineering modules (rasa.module.{tasks,releases,pipelines,tests,jobs}) as standards via requires.elements[]. v0.53.0 (2026-09-23) is the first to actually converge one: rasa.module.tasks v1.0.0 ships inside this Element, vendored byte-identical (vendored.json pins every file's sha256; bin/check-manifest fails on an in-place edit) - because no installer resolves requires.elements[] yet, carrying it is the only way a consumer receives it. The engineering half the module delegates to its parent is content/code-task-rules.md and seed/done-gate.md.template. The inline release / pipeline / test entries (.claude/release-rules.md, .claude/pipeline-rules.md, .claude/test-rules.md, content/build/*, content/tests/*, content/skills/{release,release-add,build,setup-deploy}) remain DEPRECATED-PENDING-REMOVAL under the original gate: the kernel dependency-resolver existing, plus the three design issues scoped 2026-06-25 (80 dangling refs across 57 kept files; the /build compile-vs-pipeline collision; the build/gates/approval.sh prod-gate regression). See CHANGELOG 0.43.0 and 0.53.0.",
+    "convergence": "v0.43.0 (2026-06-25) declared the five canonical engineering modules (rasa.module.{tasks,releases,pipelines,tests,jobs}) as standards via requires.elements[]. v0.53.0 (2026-09-23) is the first to actually converge one: rasa.module.tasks v1.0.0 ships inside this Element, vendored byte-identical (vendored.json pins every file's sha256; bin/check-manifest fails on an in-place edit) - because no installer resolves requires.elements[] yet, carrying it is the only way a consumer receives it. The engineering half the module delegates to its parent is content/code-task-rules.md and seed/done-gate.md.template. The inline release / pipeline / test entries (.claude/release-rules.md, .claude/pipeline-rules.md, .claude/test-rules.md, content/build/*, content/tests/*, content/skills/{release,release-add,build,setup-deploy}) remain DEPRECATED-PENDING-REMOVAL under the original gate: the kernel dependency-resolver existing, plus the three design issues scoped 2026-06-25 (80 dangling refs across 57 kept files; the /build compile-vs-pipeline collision; the build/gates/approval.sh prod-gate regression). See CHANGELOG 0.43.0 and 0.53.0. v0.57.0 hardens the inline pipeline anyway, because it is the only copy a consumer can receive: the build \u2192 test \u2192 deploy chain (build/build, build/test, gates/verified-build.sh, stages/60-verify.sh). It is built to move, not to stay: its contracts are three record kinds (builds/records/BLD-*, tests/runs/TST-*, deploys/records/DEP-*) and one gate that reads them, so the later move to rasa.module.{pipelines,tests} relocates files without changing a record format. It also settles design issue 1: /build now means the pipeline build, which is what module.pipelines means by it.",
     "identity": {
       "one_liner": "the RasaOS domain for software engineering",
       "role": "domain",
@@ -277,6 +277,18 @@
         "note": "Universal pipeline entry point. --env required, no defaults."
       },
       {
+        "from": "content/build/build",
+        "to": "build/build",
+        "policy": "file-replace",
+        "note": "BUILD phase: runs stages/20-build.sh once from a clean tree and writes builds/records/BLD-*.md — commit, result, and the fingerprint of every artifact the stage declared via $BUILD_ARTIFACTS. Added in v0.57.0."
+      },
+      {
+        "from": "content/build/test",
+        "to": "build/test",
+        "policy": "file-replace",
+        "note": "TEST phase: tests one recorded build — the gate suite, then tests/suites/e2e.md with its runtimes started, health-checked and always stopped — and writes tests/runs/TST-*.md. gates/verified-build.sh reads it before staging and prod deploys. Added in v0.57.0."
+      },
+      {
         "from": "content/build/stages/",
         "to": "build/stages/",
         "policy": "directory-mirror",
@@ -480,25 +492,25 @@
         "from": "seed/test-endpoint.md.template",
         "to": ".claude/tests/_template-endpoint-test.md",
         "policy": "skip-if-exists",
-        "note": "Test template for single API endpoint verification. Stamp declares runtimes_required, verification script path, expected outcome. References field marks the script as a reference implementation for client code. Added in v0.18.0."
+        "note": "Test template for one API endpoint, in the pipeline's stamp format (kind: test, run_command). test_kind e2e + e2e.md against a running server, or integration + pre-deploy.md in-process. Rewritten in v0.57.0 onto the format 30-test.sh reads."
       },
       {
         "from": "seed/test-flow.md.template",
         "to": ".claude/tests/_template-flow.md",
         "policy": "skip-if-exists",
-        "note": "Test template for multi-step user flows (signup, checkout, etc.). Same shape as endpoint-test but with multi-step body and longer timeout. Added in v0.18.0."
+        "note": "Test template for a multi-step user flow: test_kind e2e, member of tests/suites/e2e.md, runtimes started by ./build/test. Rewritten in v0.57.0 onto the format 30-test.sh reads."
       },
       {
         "from": "seed/test-e2e.md.template",
         "to": ".claude/tests/_template-e2e.md",
         "policy": "skip-if-exists",
-        "note": "Test template for end-to-end across multiple runtimes (web + api + worker). Coordinates parallel runtime starts. Test framework field declares Playwright/Cypress/etc. Added in v0.18.0."
+        "note": "Test template for an end-to-end test across runtimes: test_kind e2e, runtimes_required, member of tests/suites/e2e.md; ./build/test starts, health-checks and stops the runtimes. Rewritten in v0.57.0 — the v0.18.0 shape (kind: e2e, verification.script) was never read by the pipeline."
       },
       {
         "from": "seed/test-smoke.md.template",
         "to": ".claude/tests/_template-smoke.md",
         "policy": "skip-if-exists",
-        "note": "Test template for minimal 'does it boot?' smoke checks. Fast by design — typical use is pre-deploy / per-push CI. Added in v0.18.0."
+        "note": "Test template for a post-deploy smoke check: test_kind smoke, member of tests/suites/smoke.md, run by stages/60-verify.sh against the deployed environment; required before prod. Rewritten in v0.57.0 onto the format 30-test.sh reads."
       },
       {
         "from": "seed/welcome.md.template",

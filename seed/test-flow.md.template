@@ -1,65 +1,39 @@
 ---
 name: <kebab-case-test-name>
-kind: flow
-description: <one-sentence: what user flow / multi-step scenario this verifies>
-
-runtimes_required: []       # one or more — e.g. [api, web]
-
-verification:
-  type: script
-  script: "<path to script that walks the flow>"
-  expected:
-    exit_code: 0
-    timeout_seconds: 120    # flows take longer than single-endpoint tests
-
-references:
-  - file: "<verification script path>"
-    purpose: "Reference flow — sequence of steps a client follows for this scenario"
-
-tags: []                    # e.g. [auth, signup-flow, integration]
+kind: test
+test_kind: e2e
+language: <bash | typescript | python | swift | ...>
+location: <path to the test source>
+run_command: "bash tests/scripts/<flow>.sh"
+runtimes_required: [api]
+created: <YYYY-MM-DD>
+status: active                        # active / quarantined / retired
+tags: []
 ---
 
 # <Name>
 
-> Multi-step flow test. Walks a user scenario from start to finish,
-> verifying each step.
+> Template — copy to `tests/stamps/<YYYY-MM-DD>-<name>.md`, fill the
+> fields, then add `name` to the `tests:` list of **`tests/suites/e2e.md`**.
+> One stamp format for every test: the one `build/stages/30-test.sh` reads
+> (`test-rules.md`). `/test add` walks you through it.
 
 ## What this verifies
 
-<One paragraph: which flow, from what starting state to what ending
-state. E.g. "New user signup flow: registers → verifies email →
-completes profile → lands on dashboard. Verifies the full sequence
-works and intermediate state is correct.">
+<one multi-step user flow (signup, checkout) against the running app.>
 
-## Steps walked
+## How it runs
 
-1. <Step 1 — e.g. POST /auth/register with new email + password>
-2. <Step 2 — e.g. POST /auth/verify with token from email>
-3. <Step 3 — e.g. PATCH /users/me with profile fields>
-4. <Step 4 — e.g. GET /dashboard returns 200>
+1. A flow is an e2e test with one entry point: `test_kind: e2e`, member of
+   `e2e.md`, runtimes started by ./build/test (phase 2).
+2. Write the steps as one script that exits non-zero at the first step that
+   fails, printing which step.
+3. Keep it under `timeout`-scale: a flow that needs minutes belongs in a
+   nightly suite, not the gate.
 
-## How it works
+`run_command` runs from the project root and must exit non-zero on failure.
+Run it by hand once before adding it to the suite.
 
-1. Required runtimes start.
-2. Verification script walks each step in sequence, asserting
-   intermediate state.
-3. Pass if all steps succeed and final state matches.
+## Why it matters
 
-## Pre-conditions
-
-- All required runtimes healthy
-- Test database in a clean state (script may handle reset)
-- ...
-
-## Failure modes seen historically
-
-- Step <N> can fail intermittently if <reason>
-- ...
-
-## References
-
-- <link to flow docs / mockups>
-
----
-
-*Last verified working: <YYYY-MM-DD>.*
+<What breaks for a user if this fails.>

@@ -309,6 +309,22 @@ only if deploy succeeds.
 
 ### Step 5 — Deploy
 
+**Build and test the release commit first.** The pipeline's
+`verified-build` gate refuses a production target unless `./build/test`
+passed a `./build/build` of HEAD — the merge commit from Step 3 — and
+production also needs `tests/suites/smoke.md` for the post-deploy
+check. Run the two phases on that commit before the deploy:
+
+```sh
+./build/build && ./build/test
+```
+
+A build or test failure is a deploy failure: take the hard-stop branch
+below, with the phase that failed named. The release then ships
+**that** tested build — the pipeline skips `20-build` rather than
+rebuilding — and `60-verify` smoke-tests production after it lands; a
+failure there fails the release even though the new build is live.
+
 **Prefer the pipeline.** If `./build/deploy` exists, that is the deploy
 command — not something discovered from CLAUDE.md. Routing through it is
 what makes a release pass the class guard, run the production approval

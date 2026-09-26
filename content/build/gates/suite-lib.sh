@@ -60,10 +60,16 @@ suite_file_for_class() {
 #   tests:\n  - a     block, any indent including zero and tab
 # Comment lines beneath the key are ignored, so the shipped `#  - your-stamp`
 # placeholder counts as zero.
-suite_tests() {
-  _sl_file="$1"
+suite_tests() { suite_list "$1" tests; }
+
+# suite_list <suite-file> <key> — any list key in a suite's frontmatter, by the
+# same rules as `tests:` (flow or block sequence; rc 3 on anything it cannot
+# read). The e2e suite's `runtimes:` is read through this, so the stage and
+# the lifecycle can never disagree about what a list says.
+suite_list() {
+  _sl_file="$1"; _sl_key="$2"
   command -v python3 >/dev/null 2>&1 || return 4
-  python3 -B - "$_sl_file" "$SL_LIB_DIR" <<'PY'
+  python3 -B - "$_sl_file" "$SL_LIB_DIR" "$_sl_key" <<'PY'
 import sys, re
 sys.dont_write_bytecode = True
 sys.path.insert(0, sys.argv[2])
@@ -85,11 +91,11 @@ if fm is None:
 
 key = None
 for i, ln in enumerate(fm):
-    if re.match(r'^tests\s*:', ln):
+    if re.match(r'^' + re.escape(sys.argv[3]) + r'\s*:', ln):
         key = i
         break
 if key is None:
-    sys.exit(0)                      # no tests: key at all -> empty
+    sys.exit(0)                      # no such key at all -> empty
 
 rest = fm[key].split(':', 1)[1].strip()
 rest = re.sub(r'\s+#.*$', '', rest).strip()

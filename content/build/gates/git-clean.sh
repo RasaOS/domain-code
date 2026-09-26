@@ -9,6 +9,8 @@
 #
 #   tasks/            task enforcement files stubs and ledger rows
 #   deploys/          the ship log writes a record per execution
+#   builds/, tests/runs/  build/build and build/test write the build and
+#                     test records the verified-build gate reads
 #   build/deploy-log  the legacy one-line append
 #
 # The last two are written BY THIS PIPELINE. Without the exclusion the
@@ -69,7 +71,7 @@ STRICT="${BOOKKEEPING_STRICT:-${TASK_CHURN_STRICT:-0}}"
 # `:(exclude)` is a pathspec magic word, supported by git 1.9+.
 # `:/` anchors to the repo root so the result does not depend on the cwd
 # the caller happened to be in.
-PIPELINE_OWN=(':(exclude)deploys/' ':(exclude)build/deploy-log.md')
+PIPELINE_OWN=(':(exclude)deploys/' ':(exclude)build/deploy-log.md' ':(exclude)builds/' ':(exclude)tests/runs/')
 TASK_CHURN=(':(exclude)tasks/')
 
 DIRTY=""
@@ -78,10 +80,10 @@ if [[ "$STRICT" == "1" ]]; then
   DIRTY="$(git status --porcelain)"
 elif [[ "$ENV_CLASS" == "prod" ]]; then
   DIRTY="$(git status --porcelain -- . "${PIPELINE_OWN[@]}")"
-  EXCLUDED="$(git status --porcelain -- 'deploys/' 'build/deploy-log.md')"
+  EXCLUDED="$(git status --porcelain -- 'deploys/' 'build/deploy-log.md' 'builds/' 'tests/runs/')"
 else
   DIRTY="$(git status --porcelain -- . "${PIPELINE_OWN[@]}" "${TASK_CHURN[@]}")"
-  EXCLUDED="$(git status --porcelain -- 'tasks/' 'deploys/' 'build/deploy-log.md')"
+  EXCLUDED="$(git status --porcelain -- 'tasks/' 'deploys/' 'build/deploy-log.md' 'builds/' 'tests/runs/')"
 fi
 
 if [[ -n "$DIRTY" ]]; then
@@ -95,11 +97,11 @@ fi
 if [[ -n "$EXCLUDED" ]]; then
   n="$(printf '%s\n' "$EXCLUDED" | grep -c . || true)"
   if [[ "$ENV_CLASS" == "prod" ]]; then
-    echo "  (${n:-0} pipeline-owned bookkeeping file(s) ignored — deploys/,"
-    echo "   build/deploy-log.md. tasks/ IS counted for prod.)"
+    echo "  (${n:-0} pipeline-owned bookkeeping file(s) ignored — deploys/, builds/,"
+    echo "   tests/runs/, build/deploy-log.md. tasks/ IS counted for prod.)"
   else
-    echo "  (${n:-0} bookkeeping file(s) ignored — tasks/, deploys/,"
-    echo "   build/deploy-log.md. BOOKKEEPING_STRICT=1 counts them.)"
+    echo "  (${n:-0} bookkeeping file(s) ignored — tasks/, deploys/, builds/,"
+    echo "   tests/runs/, build/deploy-log.md. BOOKKEEPING_STRICT=1 counts them.)"
   fi
 fi
 

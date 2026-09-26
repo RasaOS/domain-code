@@ -24,6 +24,113 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.57.0 — 2026-09-26
+
+**Build → test → deploy: three phases, each recorded, each checked by the
+next.** ⚠ **BREAKING for staging and prod deploys.** After `/sync`, a staging
+or production deploy is refused until `/build` then `/test` have passed for
+the commit being shipped, and a production release also needs
+`tests/suites/smoke.md`. Dev deploys only warn and keep working as before. To
+migrate:
+1. Add `echo <output> >> "$BUILD_ARTIFACTS"` to `build/stages/20-build.sh`.
+2. Gitignore the build output.
+3. Write `tests/suites/smoke.md`.
+4. Run `/build`, then `/test`.
+
+**Why.** `./build/deploy` built, tested and deployed in one run, so the three
+steps could not happen separately. That caused five problems:
+- A deploy rebuilt the artifact instead of shipping the one that was tested.
+- `/build` detected its own compile command, which said nothing about what
+  `20-build.sh` would ship.
+- Nothing linked a deploy to a tested build.
+- End-to-end tests could not run at all:
+  - The shipped e2e template (`kind: e2e`, `verification.script`) used a
+    format `30-test.sh` never read, so every stamp made from it was
+    unrunnable.
+  - Nothing started the built app, waited until it was healthy, and stopped
+    it afterwards.
+- "Deploy succeeded" meant only that a shell process exited 0.
+
+**The chain**
+
+| Phase | Entry point | Skill | Writes | Refuses |
+|---|---|---|---|---|
+| Build | `./build/build` | `/build` | `builds/records/BLD-*.md` | no commits; a dirty tree; a build that dirties the tree; a declared artifact that is missing |
+| Test | `./build/test` | `/test` | `tests/runs/TST-*.md` | no build of HEAD; a dirty tree; artifacts changed since the build |
+| Deploy | `./build/deploy` | `/deploy`, `/release` | `deploys/records/DEP-*.md` | (staging and prod) no passing test of HEAD; artifacts changed since the test; a build made for another environment; (prod) no `smoke.md` |
+
+**Build.**
+- `./build/build` runs `20-build.sh`, the one build definition.
+- It fingerprints every artifact the stage declares through `$BUILD_ARTIFACTS`.
+  An artifact is a file, a directory, or a `label=value` entry such as a
+  container image id.
+- `--env` records an environment-specific build, and the deploy gate will not
+  ship it anywhere else.
+
+**Test.**
+- The gate suite runs strict: a suite that runs nothing fails at every class.
+- Then `tests/suites/e2e.md` runs. For each name in its `runtimes:` list,
+  `./build/test`:
+  1. starts `commands.start` from the runtime stamp in its own process group;
+  2. polls `health_check` (`url` + `expect_status`, or `command`) until it is
+     healthy or `timeout_seconds` passes;
+  3. runs the suite;
+  4. stops every runtime and any test still running. This happens on pass,
+     fail, error, Ctrl-C and kill. A kill mid-test now stops the runtimes in
+     under 5s rather than when the hung test finally exits: bash was deferring
+     the trap until its foreground child finished.
+- An e2e test that declares a runtime the suite does not start is named before
+  anything starts.
+
+**Deploy.**
+- `gates/verified-build.sh` sits beside `class-guard` and `tests-required`, so
+  `--dry-run`, `--skip-gates`, `--skip-tests` and `env.sh` all still reach it.
+  It has no bypass variable.
+- On a pass the pipeline skips `20-build` and ships the tested artifacts.
+  `30-test` still runs.
+
+**Verify.**
+- The new `stages/60-verify.sh` runs `tests/suites/smoke.md` against the
+  environment that was just deployed.
+- If it fails, the deploy is recorded as `failed at 60-verify`, and the output
+  says plainly that the new build is live.
+
+**Other changes**
+- **One test format.** `test_kind: e2e` and `runtimes_required` are added to
+  the stamp schema. The four seeded test templates (e2e, flow, endpoint,
+  smoke) are rewritten onto the format `30-test.sh` reads, and each names the
+  suite it belongs in.
+- **Runtime templates** gain `commands.start` (serve the *built* app). The
+  worker template gains a `health_check.command`.
+- **`30-test.sh`** accepts `TEST_SUITE` (an explicit suite; a missing one is an
+  error, never a fallback) and `TEST_STRICT`. Both can only narrow or tighten
+  the stage.
+- **`suite-lib.sh`** gains `suite_list <file> <key>`, and `suite_tests` now
+  uses it.
+- **`git-clean.sh`** never counts `builds/` or `tests/runs/` as dirt. Without
+  this, a build record would fail the deploy it authorises.
+- **`./build/deploy`** always exports `$BUILD_ARTIFACTS`. Without it, a dev
+  deploy that rebuilds in place crashed under `set -u` on a `20-build.sh`
+  following the convention. `bin/test-pipeline` found this.
+- **Skills.**
+  - `/build` now means the pipeline build (convergence design issue 1). Its
+    old compile check remains as a clearly labelled fallback that nothing
+    downstream accepts.
+  - New `/test` runs the test phase. `/test add` keeps the promise two shipped
+    files had carried since v0.18.
+  - `/deploy`, `/release` and `/setup-deploy` walk the chain.
+  - `pipeline-rules.md` and `test-rules.md` document it; the stale
+    `./build/run-suite` reference is removed.
+- **`rasa.json` convergence.** This work hardens the inline pipeline because
+  it is the only copy consumers can receive. It is built as three record kinds
+  and one gate, so it moves to `rasa.module.{pipelines,tests}` without a
+  format change.
+- **`bin/test-pipeline`** (repo tooling, CI on Linux and macOS bash 3.2) runs
+  40 cases in a real install. They cover a web app built to `dist/`, a real
+  HTTP runtime, a real e2e test, and every refusal above.
+
+---
+
 ## v0.56.0 — 2026-09-26
 
 **New skill: `/open-pr` — hand one task from build to review.** Nothing

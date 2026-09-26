@@ -232,6 +232,31 @@ esac
 # run it. There is no bypass variable, by design.
 "$BUILD_DIR/gates/tests-required.sh" "$ENV"
 
+# The build → test → deploy chain. Same placement as the two gates above, for
+# the same reason: --skip-tests, --skip-gates, --dry-run and env.sh all reach
+# it, and there is no bypass variable. Refuses staging and prod unless
+# ./build/test passed a build of HEAD whose artifacts are still on disk
+# unchanged; warns below staging. On a pass the pipeline ships THAT build:
+# stage 20-build is skipped, and BUILD_ID / BUILD_ARTIFACTS name the tested
+# artifacts for 40-publish and 50-deploy.
+VERIFIED_BUILD=""
+VERIFY_OUT="$("$BUILD_DIR/gates/verified-build.sh" "$ENV")" || exit 1
+VERIFIED_BUILD="$(printf '%s\n' "$VERIFY_OUT" | sed -n 's/^verified_build=//p')"
+VERIFIED_TEST="$(printf '%s\n' "$VERIFY_OUT" | sed -n 's/^verified_test=//p')"
+if [[ -n "$VERIFIED_BUILD" ]]; then
+  export BUILD_ID="$VERIFIED_BUILD"
+  export BUILD_ARTIFACTS="$PROJECT_DIR/$(printf '%s\n' "$VERIFY_OUT" | sed -n 's/^build_artifacts=//p')"
+  export VERIFIED_TEST
+else
+  # No verified build (allowed only below staging): 20-build runs in this
+  # pipeline as it always has. It still gets a $BUILD_ARTIFACTS to append to,
+  # or a build stage following the convention dies under `set -u`. What it
+  # declares here is thrown away — only ./build/build records a build.
+  BUILD_ARTIFACTS="$(mktemp "${TMPDIR:-/tmp}/build-artifacts.XXXXXX")"
+  export BUILD_ARTIFACTS BUILD_ID="unrecorded"
+  trap 'rm -f "$BUILD_ARTIFACTS"' EXIT
+fi
+
 # --skip-tests is REFUSED at prod class rather than honored. Measured before
 # this: with a deliberately failing test wired into the suite, --skip-tests at
 # prod gave exit 0, ran no tests, SHIPPED, and filed a plain ✓ in the deploys
@@ -281,6 +306,7 @@ echo "  Tag:  $DEPLOY_TAG"
 [[ -n "$PUBLISH_TO" ]] && echo "  Publish → $PUBLISH_TO"
 [[ -n "$DEPLOY_TO" ]]  && echo "  Target  → $DEPLOY_TO"
 echo "  User: $DEPLOY_USER"
+[[ -n "$VERIFIED_BUILD" ]] && echo "  Build: $VERIFIED_BUILD (tested by $VERIFIED_TEST)"
 echo "  Time: $DEPLOY_TIMESTAMP"
 $DRY_RUN  && echo "  Mode: DRY RUN (no execution)"
 $SKIP_TESTS && echo "  Tests: SKIPPED (refused at prod class)"
@@ -302,6 +328,13 @@ IFS=$'\n' STAGES=($(sort <<<"${STAGES[*]}")); unset IFS
 
 for stage in "${STAGES[@]}"; do
   STAGE_NAME=$(basename "$stage" .sh)
+
+  # A verified build is shipped as tested, never rebuilt: rebuilding here
+  # would deploy an artifact no test ever saw.
+  if [[ -n "$VERIFIED_BUILD" && "$STAGE_NAME" == *-build ]]; then
+    echo "▷ $STAGE_NAME (reusing $VERIFIED_BUILD, tested by $VERIFIED_TEST)"
+    continue
+  fi
 
   # --skip-tests skips any stage whose name contains "test".
   # Refused outright at prod class above, so this only ever runs below it.
