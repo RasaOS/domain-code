@@ -285,3 +285,29 @@ verification suite in its watched / headed mode, unfiltered, so every test
 plays in sequence. Do not redirect them to "just the new test" — the whole
 parade is how regressions across tasks get caught. The focused mode is for the
 inner loop, not final review.
+
+## 16. Keeping the ledger true
+
+A transition is a separate act from the work, so the ledger drifts unless
+every act has an owner and something notices when one is skipped.
+
+| Move | When | Who makes it |
+|---|---|---|
+| `start` | work begins on a branch | the person or agent starting — **refused** while they hold stale active work, are at the WIP limit, or merged work waits to be passed |
+| `submit` | the PR opens, ready | `/open-pr` (committed on the PR branch) |
+| `pass` | the done-gate passed, **inside the PR, just before it merges** | `/peer-review` — the trunk changes only through a merged PR, so a pass made after the merge has nowhere to land |
+| `reject` | a gate fails, or the PR closes unmerged | `/peer-review`; `/reconcile` for a closed PR |
+| `park` / `close` | work stalls or is abandoned | a person, via `/reconcile`'s proposal batch |
+
+Anything that slips through is caught by `/reconcile` (evidence-certain
+moves automatically, judgment calls in one batch, all through one ledger
+PR) and by the enforcement installed with the Element — thresholds in
+`.claude/task-hygiene.json`:
+
+- **Session start** prints the stale tasks.
+- **`task start`** is refused by the PreToolUse guard (`block_start`).
+- **`/release`** refuses while merged work sits unpassed (`release_gate`).
+- **CI** can run `.claude/skills/reconcile/reconcile.sh check --ci`.
+
+`tasks/history.tsv` merges as a union (`.gitattributes`): PR branches
+append to it concurrently.

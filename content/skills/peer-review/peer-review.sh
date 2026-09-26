@@ -15,7 +15,9 @@
 #
 # Usage:
 #   peer-review.sh scope <N>          resolve the PR, write the diff, emit scope
-#   peer-review.sh checks <N>         re-read CI right before a merge -> pass | not
+#   peer-review.sh checks <N> [--wait <secs>]
+#                                     re-read CI right before a merge -> pass | not;
+#                                     --wait polls while checks are pending
 #   peer-review.sh verdict <report>   read an auditor report -> accept | reject
 #
 # Exit: 0 ok · 1 error · 2 usage · 3 reject (verdict only)
@@ -133,13 +135,26 @@ print("pending_checks=" + ",".join(pending))
 # only on `pass`. Branch protection is not relied on: a repo without it would
 # otherwise merge over a red or still-running build.
 cmd_checks() {
-  local n="${1#\#}" meta out state
+  local n="${1#\#}" wait=0 meta out state waited=0
+  shift
+  if [ "${1:-}" = "--wait" ]; then
+    wait="${2:-}"
+    case "$wait" in ''|*[!0-9]*) echo "error: --wait takes whole seconds" >&2; return 2 ;; esac
+  fi
   need_gh || return 1
-  meta="$(gh pr view "$n" --json statusCheckRollup 2>/dev/null)" || {
-    echo "error: could not read PR $n's checks from the remote" >&2
-    return 1
-  }
-  out="$(printf '%s' "$meta" | summarize_checks)" || return 1
+  # --wait: a push (the ledger commit /peer-review makes before merging)
+  # restarts CI. Poll while checks are pending, bounded; never treat "still
+  # running" as passing.
+  while :; do
+    meta="$(gh pr view "$n" --json statusCheckRollup 2>/dev/null)" || {
+      echo "error: could not read PR $n's checks from the remote" >&2
+      return 1
+    }
+    out="$(printf '%s' "$meta" | summarize_checks)" || return 1
+    state="$(printf '%s\n' "$out" | sed -n 's/^checks_state=//p')"
+    [ "$state" = "pending" ] && [ "$waited" -lt "$wait" ] || break
+    sleep "${PEER_REVIEW_POLL:-15}"; waited=$((waited + ${PEER_REVIEW_POLL:-15}))
+  done
   printf '%s\n' "$out"
   state="$(printf '%s\n' "$out" | sed -n 's/^checks_state=//p')"
   case "$state" in
@@ -198,7 +213,7 @@ main() {
       cmd_scope "$1" ;;
     checks)
       [ $# -ge 1 ] || { echo "error: checks needs a PR number" >&2; return 2; }
-      cmd_checks "$1" ;;
+      cmd_checks "$@" ;;
     verdict)
       [ $# -ge 1 ] || { echo "error: verdict needs a report file" >&2; return 2; }
       cmd_verdict "$1" ;;

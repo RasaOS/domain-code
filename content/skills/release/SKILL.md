@@ -164,6 +164,12 @@ Run in parallel:
   fallback: the project's test command and build command (from
   `CLAUDE.md`) must exit 0, and a deploy command must be
   discoverable per "Discover" above.
+- **Ledger gate:** `bash .claude/skills/reconcile/reconcile.sh check
+  --release` must exit 0. It fails while merged work still sits in
+  `review/` or `active/` without having passed the done-gate — a
+  release would bundle work the ledger says is unfinished. The fix is
+  `/reconcile` (it runs the gate and passes it through a ledger PR), not
+  `release_gate: false`.
 - `tasks/RELEASES.md` lookup — read the release being shipped and
   cross-check it against commits since the last tag. **Report only;
   this step does not write** (see "Release tracker" below).

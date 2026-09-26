@@ -24,6 +24,82 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.59.0 — 2026-09-26
+
+**The task ledger stays true: `/reconcile`, and task enforcement that
+actually runs.** ⚠ **BREAKING** for day-to-day work. `task start` is now
+refused while you hold stale active work, are at the WIP limit, or merged work
+is waiting to be passed. `/release` refuses while merged work sits unpassed.
+
+To migrate:
+1. Run `/reconcile` once to clear what is already stale; it opens one ledger PR.
+2. Review `.claude/task-hygiene.json` (seeded on sync). It holds the thresholds and the `block_start` / `release_gate` switches, and turning those off should be a deliberate choice.
+3. Re-run the Element's `bin/init` (or `/sync`) so the hooks are installed and the broken one is removed.
+
+**Task enforcement never ran.** Two separate bugs caused it:
+- `task-enforce on` passed the matcher where install-hook expects the command.
+  The hook it installed was `command: "Edit|Write|MultiEdit|NotebookEdit"`
+  with no matcher. It ran on every tool call, failed with "command not found"
+  (which does not block), and the guard never executed.
+- `bin/init` set `enabled: true` for every new project and installed no hook
+  at all.
+
+So "no code change without a task" was enforced nowhere. The new
+`task-enforce.sh hooks` fixes this. It is idempotent, `bin/init` runs it on
+every install and sync, and it removes the broken entry. It installs three
+hooks into the committed `.claude/settings.json`:
+- the edit guard, for Edit, Write, MultiEdit and NotebookEdit;
+- the new `task start` guard, on Bash;
+- a SessionStart staleness report.
+
+Each hook checks its own switch.
+
+**Why tasks went stale.** A transition is a separate act from the work, and
+nothing owned the acts that went missing. `pass` was run only by
+`/release-add`, and the trunk changes only through a merged PR, so a pass made
+after a merge had nowhere to land. This repository's own TASK-065 to TASK-071
+sat in `review/` after PR #14 merged. Nothing ever looked at `active/`.
+
+**New: `/reconcile`** (`content/skills/reconcile/`). `reconcile.sh scan`
+gathers evidence for every open task: its days in stage (from `history.tsv`),
+its branches and last commit, and its PR (via `gh`, or the trunk's commit
+subjects without it). It then classifies the task.
+
+- **Certain moves are made automatically:**
+  - a merged PR → run the done-gate once on the trunk, then `pass` (or
+    `reject`);
+  - a PR closed unmerged → `reject`;
+  - an open, ready PR → `submit`.
+- **Judgment calls are proposed in one batch:** stale active work, an idle
+  review, a review with no PR, long-blocked tasks, old triage items, and old
+  stubs.
+- **All moves land through one ledger PR.**
+
+**Enforcement**
+
+| Where | What it does |
+|---|---|
+| Session start | Reports stale tasks. |
+| `task start` guard (PreToolUse, Bash) | Refuses while the actor holds stale active work, is at the WIP limit (default 3), or merged work is waiting. Other commands pass in about 10ms. |
+| `/release` pre-flight | Runs `reconcile.sh check --release`. |
+| `/peer-review` | **Passes the task on the PR branch before merging.** It writes the completion report and runs `task pass`, pushes, waits for the re-run CI with the new `peer-review.sh checks <N> --wait`, and then merges. The move to `completed/` lands inside the merge. |
+| CI | `reconcile.sh check --ci`. |
+
+Thresholds live in `.claude/task-hygiene.json`: active 7 days, idle review
+14, blocked 14, triage 14, backlog stubs 90, and a merged PR in review at
+once. `code-task-rules.md` §16 names who makes every move.
+
+**Also**
+- **`tasks/history.tsv merge=union`.** `bin/init` adds it to `.gitattributes`,
+  because PR branches append to the log concurrently.
+- **This repository's ledger is reconciled.** TASK-065 to TASK-071 are
+  passed, on PR #14's proven merge and a green gate. The 11 triage items open
+  since May are flagged for a decision.
+- **`bin/test-reconcile`** runs 33 cases in a real install. `bin/test-peer-review`
+  gains 3 `--wait` cases. Both run in CI on Linux and macOS bash 3.2.
+
+---
+
 ## v0.58.0 — 2026-09-26
 
 **Hardening the build → test → deploy chain.** Three independent audits, run

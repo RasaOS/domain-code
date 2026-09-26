@@ -1,0 +1,21 @@
+{
+  "_doc": "Task-ledger hygiene: how long a task may sit in each stage before /reconcile flags it, and how hard the Element stops staleness from building up. Project-owned and committed; bin/init seeds it once and never overwrites it. Read by .claude/skills/reconcile/reconcile.sh. See code-task-rules.md §12.",
+
+  "thresholds": {
+    "_doc": "Days. active: no commit on the task's branch (or, with no branch, since it was started) and no PR. review: an open PR with no activity; a MERGED PR still in review is flagged at once. blocked / triage: since the task entered the stage. backlog_stub: a stub with no acceptance criteria, untouched since it was filed.",
+    "active_days": 7,
+    "review_idle_days": 14,
+    "blocked_days": 14,
+    "triage_days": 14,
+    "backlog_stub_days": 90
+  },
+
+  "wip_limit": 3,
+  "_wip_limit_doc": "The most active tasks one actor may hold. 0 disables the limit.",
+
+  "block_start": true,
+  "_block_start_doc": "true: `task start` is refused (task-enforce's PreToolUse hook) while the actor holds stale active work, is at the WIP limit, or merged work is waiting to be passed. Set false only deliberately.",
+
+  "release_gate": true,
+  "_release_gate_doc": "true: /release refuses while merged work sits unpassed in review/ — /reconcile runs the done-gate and passes it."
+}

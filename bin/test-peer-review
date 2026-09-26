@@ -113,6 +113,26 @@ else
 fi
 rm -f "${TMPDIR:-/tmp}"/pr-7-diff.* 2>/dev/null
 
+echo "peer-review.sh checks --wait — polls while pending, never passes on pending"
+# A rollup that is pending for the first two reads, then green.
+cat > "$T/shim/gh" <<EOF2
+#!/usr/bin/env bash
+n=\$(cat "$T/reads" 2>/dev/null || echo 0); n=\$((n + 1)); echo \$n > "$T/reads"
+if [ \$n -le 2 ]; then r='[{"__typename":"CheckRun","name":"ci","status":"IN_PROGRESS"}]'
+else r='[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]'; fi
+printf '{"number":7,"statusCheckRollup":%s}' "\$r"
+EOF2
+chmod +x "$T/shim/gh"
+rm -f "$T/reads"
+out="$(PEER_REVIEW_POLL=0 PATH="$T/shim:$PATH" bash "$SCRIPT" checks 7 --wait 5 2>/dev/null)"; rc=$?
+[ "$rc" = 0 ] && ok "pending then green: --wait returns pass" || bad "pending then green: --wait returns pass" "rc=$rc $out"
+rm -f "$T/reads"; echo 99 > "$T/reads"
+printf '%s\n' '#!/usr/bin/env bash' 'printf "{\"number\":7,\"statusCheckRollup\":[{\"__typename\":\"CheckRun\",\"name\":\"ci\",\"status\":\"IN_PROGRESS\"}]}"' > "$T/shim/gh"
+out="$(PEER_REVIEW_POLL=1 PATH="$T/shim:$PATH" bash "$SCRIPT" checks 7 --wait 2 2>/dev/null)"; rc=$?
+[ "$rc" = 5 ] && ok "still pending when the wait runs out: rc 5, never pass" || bad "still pending when the wait runs out: rc 5, never pass" "rc=$rc"
+out="$(PATH="$T/shim:$PATH" bash "$SCRIPT" checks 7 --wait abc 2>/dev/null)"; rc=$?
+[ "$rc" = 2 ] && ok "--wait with a non-number is a usage error" || bad "--wait with a non-number is a usage error" "rc=$rc"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

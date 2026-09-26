@@ -3,8 +3,9 @@ id: TASK-066
 type: defect
 created: 2026-09-24
 created_by: claude
-updated: 2026-09-24
+updated: 2026-09-26
 phase: P2
+completed_by: claude
 ---
 # TASK-066: Resolve the install root without leaving the enclosing repository
 
@@ -26,3 +27,23 @@ phase: P2
 - `bin/test-contract` lays its temp project out as `bin/init` does (library + lockfile): 37/37.
 - Smoke: every converted script resolves its install from the project root and from a subdirectory of a fresh `bin/init` install.
 - Consequence to know: the Element's scripts run inside the Element's own source checkout (which has no lockfile) need `RASA_ROOT=.`.
+
+Gate satisfied 2026-09-26 by claude — PR #14 merged 41f5a12; suites green (reconcile 2026-09-26)
+
+## Completion report
+
+| | |
+|---|---|
+| **Outcome** | done |
+| **Type** | change |
+| **Branch** | `integration/0.54.0` |
+| **PR** | [#14](https://github.com/RasaOS/domain-code/pull/14) — merged 2026-09-24 (`41f5a12`); this task's commit `e35aae0` |
+
+**Done-gate** (this repository's gate: the CI suites in `.github/workflows/checks.yml`)
+- Build / manifest: pass · `bin/check-manifest`, `bin/check-bash32`, `bin/check-invocations`, `bin/check-frontmatter`, `bin/lint` clean
+- Verification suites: pass · PR #14 recorded test-writers 88/88, test-readers 31/31, test-contract 40/40, test-root 21/21, test-release 16/16; re-run green 2026-09-26 on a branch containing `main`
+- Merged: pass · PR #14
+
+**What changed** — see PR #14 and CHANGELOG v0.54.0.
+**What to do next** — nothing for this task.
+**Things I noticed** — this task sat in `review/` for two days after its PR merged because nothing ran `pass`; reconciled by `/reconcile` (v0.59.0), which also stops it recurring.

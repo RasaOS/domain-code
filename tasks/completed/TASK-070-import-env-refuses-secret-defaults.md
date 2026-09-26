@@ -3,8 +3,9 @@ id: TASK-070
 type: defect
 created: 2026-09-24
 created_by: claude
-updated: 2026-09-24
+updated: 2026-09-26
 phase: P1
+completed_by: claude
 ---
 # TASK-070: import-env refuses secret defaults
 
@@ -36,3 +37,23 @@ phase: P1
   - It keeps CRLF and the file mode.
 - `bin/test-writers`: 88 cases, of which 14 are import-env and 2 are the new goldens. Against 0.53.1, 11 of the 14 import-env cases fail, and 51 of the 88 overall.
 - This clears the last three sites of the grep gate, so TASK-069 can make it hard.
+
+Gate satisfied 2026-09-26 by claude — PR #14 merged 41f5a12; suites green (reconcile 2026-09-26)
+
+## Completion report
+
+| | |
+|---|---|
+| **Outcome** | done |
+| **Type** | change |
+| **Branch** | `integration/0.54.0` |
+| **PR** | [#14](https://github.com/RasaOS/domain-code/pull/14) — merged 2026-09-24 (`41f5a12`); this task's commit `99aeefe` |
+
+**Done-gate** (this repository's gate: the CI suites in `.github/workflows/checks.yml`)
+- Build / manifest: pass · `bin/check-manifest`, `bin/check-bash32`, `bin/check-invocations`, `bin/check-frontmatter`, `bin/lint` clean
+- Verification suites: pass · PR #14 recorded test-writers 88/88, test-readers 31/31, test-contract 40/40, test-root 21/21, test-release 16/16; re-run green 2026-09-26 on a branch containing `main`
+- Merged: pass · PR #14
+
+**What changed** — see PR #14 and CHANGELOG v0.54.0.
+**What to do next** — nothing for this task.
+**Things I noticed** — this task sat in `review/` for two days after its PR merged because nothing ran `pass`; reconciled by `/reconcile` (v0.59.0), which also stops it recurring.

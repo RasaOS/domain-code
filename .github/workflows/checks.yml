@@ -148,6 +148,13 @@ jobs:
       - name: Build, test, deploy chain
         run: bash bin/test-pipeline
 
+      # /reconcile and the task-discipline hooks in a real install: hook
+      # install and repair, the edit and task-start guards, every scan
+      # classification, the release/CI/session checks, and history.tsv's
+      # union merge across two branches.
+      - name: Task ledger reconcile and guards
+        run: bash bin/test-reconcile
+
   macos:
     name: runs on stock macOS bash
     runs-on: macos-latest
@@ -193,6 +200,9 @@ jobs:
 
       - name: Build, test, deploy chain (bash 3.2)
         run: /bin/bash bin/test-pipeline
+
+      - name: Task ledger reconcile and guards (bash 3.2)
+        run: /bin/bash bin/test-reconcile
 
       # The approval gate must (a) auto-approve under FORCE_APPROVAL=1 and
       # (b) fail CLOSED with no controlling terminal. A CI runner has no

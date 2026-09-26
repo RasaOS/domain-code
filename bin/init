@@ -405,6 +405,29 @@ PYEOF
   fi
 fi
 
+# ---------- Install the task-discipline hooks (every install and sync) ----------
+# Idempotent. Also REPAIRS the hook pre-0.59.0 `task-enforce on` wrote, whose
+# command was the matcher string: it ran on every tool call, failed, and the
+# guard never ran. Before 0.59.0 this script also set task enforcement
+# ENABLED for new projects without installing any hook at all. Each hook
+# checks its own switch (task-enforcement.json, task-hygiene.json), so
+# installing them never turns anything on by itself.
+TE_SH="$TARGET/.claude/skills/task-enforce/task-enforce.sh"
+if [[ -f "$TE_SH" ]] && command -v python3 >/dev/null 2>&1; then
+  ( cd "$TARGET" && RASA_ROOT="$TARGET" bash "$TE_SH" hooks ) 2>&1 | sed 's/^/  /' || true
+fi
+
+# ---------- tasks/history.tsv merges as a union ----------
+# The transition log is append-only and committed, and /open-pr and
+# /peer-review append to it on PR branches. Two PRs each moving a task would
+# conflict on every merge; a union merge keeps both rows. Added only if the
+# project has not said anything about the file already.
+GA="$TARGET/.gitattributes"
+if [[ -d "$TARGET/tasks" ]] && ! grep -qs '^tasks/history\.tsv' "$GA"; then
+  printf 'tasks/history.tsv merge=union\n' >> "$GA"
+  echo "  .gitattributes: tasks/history.tsv merge=union"
+fi
+
 # ---------- Clone the Element source into <target>/kit/<folder>/ (the /kit stash) ----------
 # A persistent, pinned reference clone of the Element's source repo. It powers
 # /sync (smart-pull upstream changes) and /promote (smart-push local changes back

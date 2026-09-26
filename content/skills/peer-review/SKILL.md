@@ -188,9 +188,25 @@ diff" was satisfied, in the authoring session, by memory of having written it.
      (`gh pr review <N> --comment`), do not approve or merge, and
      report that the merge is the user's call.
 
-   - **Accept** (auditor clean, checks `pass`) → `gh pr review <N>
-     --approve --body "<...>"`, then `gh pr merge <N> --squash
-     --delete-branch`.
+   - **Accept** (auditor clean, checks `pass`) → first **pass the task
+     inside the PR**, then merge. The trunk changes only through a merged
+     PR, so a `task pass` made after the merge has nowhere to land — that
+     is how merged work piled up in `review/`. If the PR carries a task
+     (`TASK-NNN:` title) and that task is in `tasks/review/` on the PR
+     branch:
+     1. `gh pr checkout <N>`; append the task's `## Completion report`
+        from this review's evidence (step 4's check output with counts,
+        the CI checks that passed, the auditor's clean verdict, the PR
+        number); `.claude/bin/check-tasks --fix`;
+     2. `.claude/bin/task pass TASK-NNN --by <actor> --note "PR #<N>:
+        <evidence>"`; commit `TASK-NNN: pass the done-gate`; push;
+     3. `peer-review.sh checks <N> --wait 900` — the push restarted CI.
+        `pass` → continue; failing → the review becomes a reject; still
+        pending → HELD, report, and re-run later.
+
+     Then `gh pr review <N> --approve --body "<...>"` and `gh pr merge <N>
+     --squash --delete-branch`. The task reaches `completed/` in the same
+     merge that ships its code.
    - **Reject** → `gh pr review <N> --request-changes --body
      "<numbered blocking issues, each with file:line and the rule>"`.
      A reject hands the PR back to the authoring agent, which is
@@ -201,6 +217,9 @@ diff" was satisfied, in the authoring session, by memory of having written it.
 
 8. **Track the merge in `RELEASES.md`** (accept path only), per
    `release-add/SKILL.md`. Idempotent; re-runs are no-ops.
+   A PR with no task, or whose task was not in `review/` on its branch,
+   merges without a ledger move — say so in the report; `/reconcile`
+   picks it up.
 
 9. **Render the review report** — template below. It records
    `review_mode: delegated-subagent` and the PR number, so a review
