@@ -5,7 +5,10 @@
 # both publish + deploy in one shot (e.g. Firebase Hosting).
 #
 # Examples:
-#   Container:  docker push "$REGISTRY/$IMAGE_NAME:$DEPLOY_TAG"
+#   Container:  docker tag "$IMAGE_NAME:$BUILD_TAG" "$REGISTRY/$IMAGE_NAME:$BUILD_TAG"
+#               docker push "$REGISTRY/$IMAGE_NAME:$BUILD_TAG"
+#               (push the tag the build made — $BUILD_TAG. $DEPLOY_TAG is this
+#               environment's release label; add it as a second tag if wanted.)
 #   iOS:        xcodebuild -exportArchive  # export .ipa (if not done in build)
 #   Web:        no-op (handled by deploy.sh)
 #   npm pkg:    npm publish --access public

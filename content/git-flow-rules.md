@@ -169,8 +169,9 @@ What the skill still does:
 MAY run `./build/deploy --env=<env> --intent=deploy` against a project-configured
 non-prod environment, but only when the goal explicitly asks for
 a preview deploy. The carve-out is opt-in (the goal must request
-it), bounded (never `prod`/`production`, never via `/release`,
-never tags), and best-effort (deploy failure is reported, not
+it), bounded (a `dev`- or `staging`-class environment only, after
+`./build/build && ./build/test` pass; never a prod-class one, never
+via `/release`, never tags), and best-effort (deploy failure is reported, not
 retried, and never rolls back the PR). See `autonomy-rules.md`
 "The preview-deploy exception" for the precise conditions.
 

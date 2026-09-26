@@ -1,80 +1,40 @@
 ---
 name: <kebab-case-test-name>
-kind: e2e
-description: <one-sentence: end-to-end scenario across multiple runtimes>
-
-runtimes_required: []       # multiple — e.g. [api, web, worker]
-
-verification:
-  type: script
-  script: "<path to e2e script>"
-  expected:
-    exit_code: 0
-    timeout_seconds: 300    # e2e tests can be slow
-
-# e2e tests often use a framework (Playwright, Cypress, Detox, etc.)
-test_framework: "<playwright | cypress | detox | xcuitest | espresso | none>"
-
-references:
-  - file: "<verification script path>"
-    purpose: "E2E reference — exactly how the system is exercised across runtimes"
-
-tags: []                    # e.g. [smoke, regression, daily, slow]
+kind: test
+test_kind: e2e
+language: <bash | typescript | python | swift | ...>
+location: <path to the test source>
+run_command: "npx playwright test e2e/<spec>.spec.ts"
+runtimes_required: [api, web]
+created: <YYYY-MM-DD>
+status: active                        # active / quarantined / retired
+tags: []
 ---
 
 # <Name>
 
-> End-to-end test across multiple runtimes. The "is the system
-> actually working together" check.
+> Template — copy to `tests/stamps/YYYYMMDD_NNN_<name>.md`, fill the
+> fields, then add `name` to the `tests:` list of **`tests/suites/e2e.md`**.
+> One stamp format for every test: the one `build/stages/30-test.sh` reads
+> (`test-rules.md`). `/test add` walks you through it.
 
 ## What this verifies
 
-<One paragraph: which surfaces are involved, what flow tests the
-integration. E.g. "Web frontend submits a form → API processes →
-worker enqueues → result appears in the web UI. Verifies the
-full pipeline.">
+<the running, BUILT system working across runtimes — a user journey through web + api + worker.>
 
-## Runtimes coordinated
+## How it runs
 
-| Runtime | Role |
-|---|---|
-| `<name>` | <what role it plays in this test> |
-| `<name>` | <role> |
+1. ./build/test (phase 2) starts every runtime in `e2e.md`'s `runtimes:` list —
+   `commands.start` from `.claude/runtimes/<name>.md` — waits for each
+   `health_check`, runs this test, and stops them all, always.
+2. Read the base URL from `RUNTIME_<NAME>_HEALTH_URL` (or your own config);
+   never hard-code a port the runtime stamp does not declare.
+3. Every runtime listed in `runtimes_required` must also be in `e2e.md`'s
+   `runtimes:` list — the suite starts runtimes, the stamp documents need.
 
-(Each runtime's full config lives in `.claude/runtimes/<name>.md`.)
+`run_command` runs from the project root and must exit non-zero on failure.
+Run it by hand once before adding it to the suite.
 
-## How it works
+## Why it matters
 
-1. All `runtimes_required` start in parallel (orchestrator waits for
-   each to be healthy).
-2. The verification script drives the test:
-   - <Step description>
-   - <Step description>
-3. Assertions check state across runtimes.
-4. Pass = all assertions hold; fail = any assertion fails.
-
-## Pre-conditions
-
-- All runtimes healthy
-- Test data fixtures loaded (script may handle)
-- ...
-
-## Reset / cleanup
-
-- <Database reset commands>
-- <Cache flush commands>
-- ...
-
-## Failure modes seen historically
-
-- Flakiness when <condition> — mitigation: <retry / delay / fix>
-- ...
-
-## References
-
-- <link to test framework docs>
-- <link to e2e test conventions doc, if any>
-
----
-
-*Last verified working: <YYYY-MM-DD>.*
+<What breaks for a user if this fails.>

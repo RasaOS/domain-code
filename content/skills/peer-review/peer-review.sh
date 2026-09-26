@@ -15,15 +15,17 @@
 #
 # Usage:
 #   peer-review.sh scope <N>          resolve the PR, write the diff, emit scope
+#   peer-review.sh checks <N>         re-read CI right before a merge -> pass | not
 #   peer-review.sh verdict <report>   read an auditor report -> accept | reject
 #
 # Exit: 0 ok · 1 error · 2 usage · 3 reject (verdict only)
+#       checks only: 0 pass · 4 failing · 5 pending · 6 no checks reported
 #
-# Portability: bash 3.2 (stock macOS). Requires `gh` for `scope` only.
+# Portability: bash 3.2 (stock macOS). Requires `gh` for `scope` and `checks`.
 
 set -euo pipefail
 
-usage() { sed -n '3,22p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,24p' "$0" | sed 's/^# \{0,1\}//'; }
 
 need_gh() {
   command -v gh >/dev/null 2>&1 || {
@@ -64,9 +66,6 @@ import json, sys, os
 meta = json.loads(sys.argv[1])
 diff = sys.argv[2]
 files = meta.get('files') or []
-rollup = meta.get('statusCheckRollup') or []
-failing = [c.get('name', '?') for c in rollup
-           if str(c.get('conclusion', '')).upper() not in ('SUCCESS', 'NEUTRAL', 'SKIPPED', '')]
 print(f"pr={meta.get('number','')}")
 print(f"title={meta.get('title','')}")
 # The PR author is a GitHub login. It is a FOREIGN identity: it does not share
@@ -79,11 +78,76 @@ print(f"head={meta.get('headRefName','')}")
 print(f"file_count={len(files)}")
 print(f"diff_file={diff}")
 print(f"diff_bytes={os.path.getsize(diff)}")
-print(f"failing_checks={','.join(failing)}")
 print("[files]")
 for f in files:
     print(f"{f.get('path','')}\t+{f.get('additions',0)}\t-{f.get('deletions',0)}")
 PYEOF
+  printf '%s' "$meta" | summarize_checks
+}
+
+# summarize_checks — read `gh pr view --json statusCheckRollup` on stdin and
+# classify every entry. Emits checks_state (pass | fail | pending | none),
+# checks_total, failing_checks and pending_checks.
+#
+# FAIL-CLOSED. Before 0.55.1 a check counted as passing whenever its
+# `conclusion` was not a known failure — and a blank conclusion was on the
+# pass list. The rollup carries two shapes: a CheckRun (status + conclusion,
+# blank conclusion while it is still running) and a legacy StatusContext
+# (state, no conclusion key at all). So a running check AND a failed status
+# context both read as green, in the one skill that holds merge authority.
+# Now: only an explicit success passes; running is pending; anything
+# unrecognised is failing; an empty rollup is `none`, never `pass`.
+summarize_checks() {
+  python3 -c '
+import json, sys
+rollup = (json.load(sys.stdin) or {}).get("statusCheckRollup") or []
+OK = ("SUCCESS", "NEUTRAL", "SKIPPED")
+failing, pending = [], []
+for c in rollup:
+    kind = str(c.get("__typename", ""))
+    if kind == "StatusContext" or ("state" in c and "status" not in c):
+        name = c.get("context") or c.get("name") or "?"
+        state = str(c.get("state") or "").upper()
+        if state == "SUCCESS":
+            continue
+        (pending if state in ("PENDING", "EXPECTED") else failing).append(name)
+    elif kind == "CheckRun" or "status" in c or "conclusion" in c:
+        name = c.get("name") or "?"
+        if str(c.get("status") or "COMPLETED").upper() != "COMPLETED":
+            pending.append(name)
+        elif str(c.get("conclusion") or "").upper() not in OK:
+            failing.append(name)
+    else:
+        failing.append(c.get("name") or c.get("context") or "?")
+state = ("none" if not rollup else "fail" if failing
+         else "pending" if pending else "pass")
+print(f"checks_state={state}")
+print(f"checks_total={len(rollup)}")
+print("failing_checks=" + ",".join(failing))
+print("pending_checks=" + ",".join(pending))
+'
+}
+
+# checks <N> — the merge gate. Re-reads the rollup from the remote at the
+# moment of merging (the one `scope` read may be minutes stale) and exits 0
+# only on `pass`. Branch protection is not relied on: a repo without it would
+# otherwise merge over a red or still-running build.
+cmd_checks() {
+  local n="${1#\#}" meta out state
+  need_gh || return 1
+  meta="$(gh pr view "$n" --json statusCheckRollup 2>/dev/null)" || {
+    echo "error: could not read PR $n's checks from the remote" >&2
+    return 1
+  }
+  out="$(printf '%s' "$meta" | summarize_checks)" || return 1
+  printf '%s\n' "$out"
+  state="$(printf '%s\n' "$out" | sed -n 's/^checks_state=//p')"
+  case "$state" in
+    pass)    return 0 ;;
+    fail)    echo "  do not merge: a check is failing" >&2; return 4 ;;
+    pending) echo "  do not merge: a check is still running" >&2; return 5 ;;
+    *)       echo "  do not merge: no checks reported — nothing verified this PR" >&2; return 6 ;;
+  esac
 }
 
 # verdict <report-file> — map auditor severities to a merge decision.
@@ -132,6 +196,9 @@ main() {
     scope)
       [ $# -ge 1 ] || { echo "error: scope needs a PR number" >&2; return 2; }
       cmd_scope "$1" ;;
+    checks)
+      [ $# -ge 1 ] || { echo "error: checks needs a PR number" >&2; return 2; }
+      cmd_checks "$1" ;;
     verdict)
       [ $# -ge 1 ] || { echo "error: verdict needs a report file" >&2; return 2; }
       cmd_verdict "$1" ;;

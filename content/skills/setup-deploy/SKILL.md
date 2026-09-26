@@ -43,7 +43,9 @@ The setup is a conversation, not a form. Walk the user through:
 
 2. **Environments** (only if not declared, or user asks to add one)
    - "What environments do you deploy to? (e.g. `dev staging prod`, or `prod only`, or your own names)"
-   - For each env: "Does `<env>` require approval before deploy? [yes/no]"
+   - For each env: its **class** (`dev` / `staging` / `prod`, in `.claude/environments.json`).
+     Approval is decided by class, not asked per environment: every `prod`-class deploy
+     runs the approval gate, and staging/prod require a build that passed `/test`.
 
 3. **Build command** (`build/stages/20-build.sh`, if still TODO)
    - "How do you build this project?" Suggest based on project type:
@@ -53,11 +55,25 @@ The setup is a conversation, not a form. Walk the user through:
      - python lib: `python -m build`
      - go: `go build -o build/<name> ./cmd/<name>`
    - Confirm or override.
+   - **Declare what it produces.** Add the artifact line after the build
+     command — `echo "dist" >> "$BUILD_ARTIFACTS"` (a file or directory),
+     or `echo "image=<id>" >> "$BUILD_ARTIFACTS"` for a container — so
+     `/build` can fingerprint it and the deploy gate can refuse a changed
+     one (`pipeline-rules.md` → "The chain"). Make sure the output path is
+     in `.gitignore`: a build that dirties the tree fails.
 
 4. **Test command source** (for populating `tests/suites/pre-deploy.md`)
    - "Do you already have tests in this project? Where do they live?"
    - If yes: "What command runs your full test suite?" → create a test stamp pointing at it
-   - If no: leave `pre-deploy` empty; suggest user adds tests via `/test add` (future skill) or by writing scripts to `tests/scripts/`
+   - If no: `/build`→`/test` refuses an empty gate suite, and staging/prod refuse an
+     untested build — so write at least one test now: the fastest honest one is a
+     `tests/scripts/` smoke script stamped as a test (`/test add`)
+   - "Does the app run as a server or worker you can hit end to end?" If yes, offer
+     `tests/suites/e2e.md` with a `runtimes:` list, and check each
+     `.claude/runtimes/<name>.md` has `commands.start` (serves the built app) and a
+     `health_check` (`test-rules.md` → "End-to-end").
+   - "What proves a deployed environment is up?" → a smoke stamp in
+     `tests/suites/smoke.md`. **Required before any prod release.**
 
 5. **Publish command** (`build/stages/40-publish.sh`, if still TODO)
    - container: "Which registry? (e.g. `myacr.azurecr.io`, `ghcr.io/myorg`)" → generates `docker push` line
@@ -93,13 +109,13 @@ After each user confirmation:
 2. Tell the user what was written and where.
 3. Continue to the next question.
 
-**Never run `git commit`.** Same convention as every other kit skill: leave changes staged for the human to review and commit themselves.
+**Never run `git commit`.** Same convention as every other Element skill: leave changes staged for the human to review and commit themselves. The verification step below needs a clean tree, so it comes **after** the human commits — ask them to, then run it.
 
 ### Verify at the end
 
 Once all questions are answered:
 
-1. Run `./build/deploy --env=<first-env> --intent=deploy --dry-run` to validate the wiring (stages discover correctly, env folder exists, no syntax errors).
+1. Run `./build/build` then `./build/test` (commit first — both refuse a dirty tree), then `./build/deploy --env=<first-env> --intent=deploy --dry-run` to validate the wiring (stages discover correctly, env folder exists, no syntax errors, the verified-build gate finds the run).
 2. Surface the dry-run output to the user.
 3. If anything errors, flag the specific file + line that needs attention. Don't try to fix silently.
 
@@ -139,12 +155,12 @@ When the skill finishes, render a summary like this:
 
 ### Dry-run result
 
-`./build/deploy --env=dev --intent=deploy --dry-run` → ✓ all stages discovered
+`./build/build && ./build/test`, then `./build/deploy --env=<a dev-class env> --intent=deploy --dry-run` → ✓ all stages discovered
 
 ### Next steps
 
 1. Review the diff: `git diff --staged`
-2. Run a real dev deploy: `./build/deploy --env=dev --intent=deploy`
+2. Run a real deploy to a dev-class environment: `./build/deploy --env=<that env> --intent=deploy`
 3. Add project-specific tests under `tests/stamps/` and add their names to `tests/suites/pre-deploy.md`
 4. Commit when satisfied: `git commit -m "feat: configure deploy pipeline"`
 ```
@@ -152,7 +168,8 @@ When the skill finishes, render a summary like this:
 ## What this skill does NOT do
 
 - **Doesn't run actual deploys.** Run them after setup with `./build/deploy --env=<env> --intent=deploy` or `/deploy <env>`.
-- **Doesn't decide approval policy for you.** Asks per-env; respects the answer.
+- **Doesn't invent approval policy.** Approval follows the environment's class
+  (`environment-rules.md`); the skill makes sure each environment's class is right.
 - **Doesn't auto-commit.** Stages changes; the human commits.
 - **Doesn't fetch secrets.** References them by env var name (`$ASC_KEY_ID`, etc.); user wires the source (CI variable group, 1Password, secret manager).
 - **Doesn't replace `/ios-release`.** For iOS-specific TestFlight uploads, the env's `deploy.sh` can delegate: `exec ./bin/release-testflight.sh` or invoke the existing skill.

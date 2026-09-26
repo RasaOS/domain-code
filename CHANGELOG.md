@@ -24,6 +24,372 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.58.0 — 2026-09-26
+
+**Hardening the build → test → deploy chain.** Three independent audits, run
+against real installs, found the failures below: an adversarial one, a
+production-practice one, and a new-consumer one. Two of them bypassed every
+gate. Every finding was reproduced before it was fixed, and each fix has a
+regression case. ⚠ **BREAKING** for staging and prod deploys.
+
+To migrate:
+1. Run `/build` and `/test` again. Records from v0.57.0 carry no source fingerprint, so the gate no longer accepts them.
+2. Before your next prod release, deploy that build to a staging-class environment. If you declare no staging environment, you get a warning instead.
+3. If `20-build.sh` declares no outputs, add `echo <output> >> "$BUILD_ARTIFACTS"`, or `echo source=commit >> "$BUILD_ARTIFACTS"` if your deploy builds from source. Staging now refuses a build that declares nothing.
+4. Tag images with `$BUILD_TAG` in `20-build` and push the same tag in `40-publish`.
+5. Deploy only to environment names listed in `.claude/environments.json`.
+6. Add `builds/**` and `tests/runs/**` to `exempt_meta` in `.claude/task-enforcement.json`. The file is project-owned, so the new default only reaches new installs.
+
+**Critical: two ways around every gate**
+- **`--env=./prod`.** The path resolved to `environments/prod/`, but the
+  registry lookup and the name heuristic both missed it. The environment
+  counted as `unclassified`, so class-guard, verified-build, approval and the
+  smoke requirement all passed or only warned, and an untested dirty change
+  reached prod. Now:
+  - An environment name must match `[A-Za-z0-9][A-Za-z0-9._-]*`. This is
+    checked in the driver, in `class-guard`, and in `build --env`.
+  - A name the registry does not list is refused.
+- **An unreadable registry.** One trailing comma in `environments.json`, and
+  every lookup fell back to the name heuristic. An environment named `eu` with
+  `class: prod` became unclassified, and prod shipped with zero staging
+  deploys. Now an unreadable registry is refused everywhere; the pipeline
+  never guesses a class.
+
+**The chain keys on the source, not the commit.**
+- Every record carries `source:`, a fingerprint of HEAD's committed tree
+  with the bookkeeping directories left out.
+- Before this, committing the records, or `/release`'s merge commit, moved
+  HEAD, and the next deploy was refused. Now both leave the fingerprint
+  unchanged, and any change to shipped source still invalidates it.
+
+**What the gates now enforce**
+- **Newest test run wins.** An earlier pass never outvotes a later failure. A
+  run killed part-way writes an `aborted` record, which counts as not passed.
+- **Record ordering.** Ids always carry a two-digit sequence (`-01`, `-02`).
+  An unsuffixed first id sorted after its own `-2`, so "newest" picked the
+  oldest record.
+- **Staging before prod.** The new `gates/promoted-build.sh` gives prod only
+  a build that has a successful, non-dry-run deploy to a staging-class
+  environment. `/release` now stages the release commit before promoting it,
+  and deploy records name `build`, `test` and `artifacts_digest`.
+- **Artifacts re-checked after every stage.** They were checked once at the
+  gate, so a later stage or a background process could rewrite them and ship
+  untested files. A deploy of a verified build also holds `builds/.lock`.
+- **Declared outputs are required.** A build that declares none is refused
+  at staging and prod, unless it declares `source=commit` on purpose.
+- **Fingerprint hardening.**
+  - A symlink inside an artifact must point inside that artifact; one to
+    `../vendor` let untested code ship.
+  - FIFOs and devices are refused; they used to hang every phase.
+  - Unreadable directories fail loudly, and file modes and empty directories
+    now count.
+  - A path containing `=` is a path; only `label=value` shapes are labels.
+- **Dirty checks cover the whole repository.** This includes shared folders
+  in a monorepo, and edits hidden with `--skip-worktree` or
+  `--assume-unchanged`. `git-clean.sh` also anchors its bookkeeping
+  exclusions to the install's path; before this, a subfolder install failed
+  its own gate.
+- **Exact stage routing.** `--skip-tests` skips exactly `NN-test`; it used to
+  skip `55-attest`. A verified build skips exactly `NN-build`.
+- **`BUILD_TAG` is unique per build**, so two builds of one commit can't
+  share an image tag. `build --env` sources that environment's `env.sh`, as a
+  deploy does.
+
+**Running things**
+- **Per-test timeouts.** The stamp's `timeout_seconds` applies, default 900.
+  An overrunning test is killed with its whole process group. This is polled,
+  because stock macOS has no `timeout`.
+- **Locks.** One build, one test run, and one deploy per environment at a
+  time. A lock left by a process that is gone is taken over atomically.
+- **e2e safeguards.**
+  - `depends_on` checks run before a runtime starts.
+  - A runtime whose health check already passes is refused; a stale server
+    on the port used to pass the whole e2e suite.
+  - A runtime that dies during the suite fails it.
+  - `commands.stop` runs at teardown (for `docker compose up -d`).
+  - Runtime names are validated.
+- **Post-deploy.** `60-verify` retries smoke while the service warms up
+  (`VERIFY_ATTEMPTS`, `VERIFY_DELAY`). If smoke still fails, it runs the
+  environment's `rollback.sh` with the last verified deploy's build and tag,
+  excluding dry-runs and the failing build.
+- **Migrations.** The new `stages/45-migrate.sh` runs
+  `environments/<env>/migrate.sh` after publish and before the code deploys.
+- **The ship log fails closed at prod.** A production deploy that cannot be
+  recorded is refused instead of shipped unrecorded.
+- **Approval kind is recorded truthfully**: `invocation`, `tty`, `forced`,
+  `ci`, `token`, or `none`. It used to record `invocation` for everything.
+- **Stale output is cleared.** `./build/build` removes the previous build's
+  declared outputs (git-ignored paths only) before building.
+- **Empty stage list.** An empty `stages/` is refused rather than crashing
+  bash 3.2.
+
+**Consumers and docs**
+- **`/release` reaches prod.** It uses `FORCE_APPROVAL=1
+  DEPLOY_APPROVAL=invocation`, because invocation is its consent and agents
+  have no terminal. It also stages first, checks cleanliness with
+  `git-clean`, and no longer describes the one-shot flow.
+- **Templates reach existing installs.** The `_template-*` test and runtime
+  templates are now `file-replace`, so `/sync` delivers them. `bin/init`
+  honours `overrides[]` for seed files.
+- **Migration steps at the point of decision.** `sync.sh plan` prints a
+  breaking release's "To migrate" steps.
+- **`20-build.sh` and `40-publish.sh` stubs** document `$BUILD_ARTIFACTS` and
+  `$BUILD_TAG`.
+- **Task enforcement.** The template exempts `builds/**` and `tests/runs/**`,
+  and audits `migrate.sh` and `rollback.sh` alongside `deploy.sh`.
+- **Stale statements fixed**, including:
+  - `--intent` being "derived until v0.45";
+  - pipeline run order and folder tree;
+  - `pipeline-config.toml` keys nothing reads (now marked advisory);
+  - the AKS example's double approval prompt;
+  - `/setup-deploy`'s commit and approval contradictions;
+  - `/mission`'s preview deploy, which now builds and tests first and picks
+    environments by class;
+  - stamp filenames;
+  - the `smoke.md` shape;
+  - the git-clean descriptions;
+  - `/auto-test`, `/auto-develop`, `/runtime`, and README `web-deploy`.
+
+**Known and not in this release**
+- **CI.** There is no CI workflow template or `./build/ci` entry point. Until
+  there is, run the three phases in one CI job or carry the records with the
+  artifacts.
+- **Lockfile and toolchain enforcement.**
+- **Test results.** Per-test results, JUnit output, flaky-test retry, and
+  parallel tests.
+- **Image tags.** Nothing re-resolves an image tag to its digest at the gate.
+- **`pipeline-config.toml` hooks** (TASK-030).
+- **Canary or progressive rollout.** This belongs to the platform.
+- **TASK-027** (60-verify) is implemented but still sits in `tasks/backlog/`.
+
+`bin/test-pipeline` now runs 82 cases in real installs, on Linux and on
+macOS bash 3.2 in CI.
+
+---
+
+## v0.57.0 — 2026-09-26
+
+**Build → test → deploy: three phases, each recorded, each checked by the
+next.** ⚠ **BREAKING for staging and prod deploys.** After `/sync`, a staging
+or production deploy is refused until `/build` then `/test` have passed for
+the commit being shipped, and a production release also needs
+`tests/suites/smoke.md`. Dev deploys only warn and keep working as before.
+
+To migrate:
+1. Add `echo <output> >> "$BUILD_ARTIFACTS"` to `build/stages/20-build.sh`.
+2. Gitignore the build output.
+3. Write `tests/suites/smoke.md`.
+4. Run `/build`, then `/test`.
+
+**Why.** `./build/deploy` built, tested and deployed in one run, so the three
+steps could not happen separately. That caused five problems:
+- A deploy rebuilt the artifact instead of shipping the one that was tested.
+- `/build` detected its own compile command, which said nothing about what
+  `20-build.sh` would ship.
+- Nothing linked a deploy to a tested build.
+- End-to-end tests could not run at all:
+  - The shipped e2e template (`kind: e2e`, `verification.script`) used a
+    format `30-test.sh` never read, so every stamp made from it was
+    unrunnable.
+  - Nothing started the built app, waited until it was healthy, and stopped
+    it afterwards.
+- "Deploy succeeded" meant only that a shell process exited 0.
+
+**The chain**
+
+| Phase | Entry point | Skill | Writes | Refuses |
+|---|---|---|---|---|
+| Build | `./build/build` | `/build` | `builds/records/BLD-*.md` | no commits; a dirty tree; a build that dirties the tree; a declared artifact that is missing |
+| Test | `./build/test` | `/test` | `tests/runs/TST-*.md` | no build of HEAD; a dirty tree; artifacts changed since the build |
+| Deploy | `./build/deploy` | `/deploy`, `/release` | `deploys/records/DEP-*.md` | (staging and prod) no passing test of HEAD; artifacts changed since the test; a build made for another environment; (prod) no `smoke.md` |
+
+**Build.**
+- `./build/build` runs `20-build.sh`, the one build definition.
+- It fingerprints every artifact the stage declares through `$BUILD_ARTIFACTS`.
+  An artifact is a file, a directory, or a `label=value` entry such as a
+  container image id.
+- `--env` records an environment-specific build, and the deploy gate will not
+  ship it anywhere else.
+
+**Test.**
+- The gate suite runs strict: a suite that runs nothing fails at every class.
+- Then `tests/suites/e2e.md` runs. For each name in its `runtimes:` list,
+  `./build/test`:
+  1. starts `commands.start` from the runtime stamp in its own process group;
+  2. polls `health_check` (`url` + `expect_status`, or `command`) until it is
+     healthy or `timeout_seconds` passes;
+  3. runs the suite;
+  4. stops every runtime and any test still running. This happens on pass,
+     fail, error, Ctrl-C and kill. A kill mid-test now stops the runtimes in
+     under 5s rather than when the hung test finally exits: bash was deferring
+     the trap until its foreground child finished.
+- An e2e test that declares a runtime the suite does not start is named before
+  anything starts.
+
+**Deploy.**
+- `gates/verified-build.sh` sits beside `class-guard` and `tests-required`, so
+  `--dry-run`, `--skip-gates`, `--skip-tests` and `env.sh` all still reach it.
+  It has no bypass variable.
+- On a pass the pipeline skips `20-build` and ships the tested artifacts.
+  `30-test` still runs.
+
+**Verify.**
+- The new `stages/60-verify.sh` runs `tests/suites/smoke.md` against the
+  environment that was just deployed.
+- If it fails, the deploy is recorded as `failed at 60-verify`, and the output
+  says plainly that the new build is live.
+
+**Other changes**
+- **One test format.** `test_kind: e2e` and `runtimes_required` are added to
+  the stamp schema. The four seeded test templates (e2e, flow, endpoint,
+  smoke) are rewritten onto the format `30-test.sh` reads, and each names the
+  suite it belongs in.
+- **Runtime templates** gain `commands.start` (serve the *built* app). The
+  worker template gains a `health_check.command`.
+- **`30-test.sh`** accepts `TEST_SUITE` (an explicit suite; a missing one is an
+  error, never a fallback) and `TEST_STRICT`. Both can only narrow or tighten
+  the stage.
+- **`suite-lib.sh`** gains `suite_list <file> <key>`, and `suite_tests` now
+  uses it.
+- **`git-clean.sh`** never counts `builds/` or `tests/runs/` as dirt. Without
+  this, a build record would fail the deploy it authorises.
+- **`./build/deploy`** always exports `$BUILD_ARTIFACTS`. Without it, a dev
+  deploy that rebuilds in place crashed under `set -u` on a `20-build.sh`
+  following the convention. `bin/test-pipeline` found this.
+- **Skills.**
+  - `/build` now means the pipeline build (convergence design issue 1). Its
+    old compile check remains as a clearly labelled fallback that nothing
+    downstream accepts.
+  - New `/test` runs the test phase. `/test add` keeps the promise two shipped
+    files had carried since v0.18.
+  - `/deploy`, `/release` and `/setup-deploy` walk the chain.
+  - `pipeline-rules.md` and `test-rules.md` document it; the stale
+    `./build/run-suite` reference is removed.
+- **`rasa.json` convergence.** This work hardens the inline pipeline because
+  it is the only copy consumers can receive. It is built as three record kinds
+  and one gate, so it moves to `rasa.module.{pipelines,tests}` without a
+  format change.
+- **`bin/test-pipeline`** (repo tooling, CI on Linux and macOS bash 3.2) runs
+  40 cases in a real install. They cover a web app built to `dist/`, a real
+  HTTP runtime, a real e2e test, and every refusal above.
+
+---
+
+## v0.56.0 — 2026-09-26
+
+**New skill: `/open-pr` — hand one task from build to review.** Nothing
+carried a task from "code written" to "PR open". `/auto-develop` and
+`/auto-test` end with uncommitted work, and `/push` deliberately opens no
+PR. `code-task-rules.md` §10 specifies the branch, the PR title and body,
+and `task submit` when the PR opens, but no skill carried any of it out. As
+a result, finished work sat in `active/` with no PR.
+
+- **`content/skills/open-pr/`** is a SKILL.md plus `open-pr.sh`:
+  - **Verbs:** `plan`, `branch`, `body`, `check`, `open`, `submit`.
+  - **The script owns:** reading the task through `bin/task`; the §10
+    branch (`task/TASK-NNN-slug`, or `hotfix/…` for a `priority: now`
+    defect); a body skeleton with criteria ☑/☐ carried from the task file
+    and files checked against the spec's expected list; the title
+    `TASK-NNN: <title>`; an idempotent `gh pr create`; and `task submit`.
+  - **The model owns** the commit message and the PR prose. Commit and push
+    go through `/push`'s `push.sh` unchanged.
+  - **Fail-closed.** A ready PR is refused while any criterion other than
+    the done-gate one is unticked, while a placeholder is unfilled, while
+    "How I verified" is empty, or while "Deviations: none" sits over a
+    flagged deviation. A draft opens but stays in `active/`, per §2.
+  - **The submit rides on the PR.** The `active/` → `review/` move is
+    committed onto the PR branch and pushed. Left uncommitted, the next
+    branch switch put the task in both `active/` and `review/`, and the
+    ledger refused every transition over the duplicate id.
+  - **The body file is drafted outside the repository**, and one inside
+    it is refused, because `push.sh` stages untracked files.
+  - **`/validate` short** runs on the body before opening.
+  - **Without `gh`** it exits 4 with the exact base, head and title so the
+    session's GitHub tooling can open the PR, then `submit`.
+  - **Not chained from autonomous skills.** Opening a PR from an autonomous
+    run is not an `autonomy-rules.md` exception.
+- `bin/test-open-pr` (repo tooling, CI on Linux and macOS bash 3.2) runs
+  36 cases inside a real `bin/init` install with a bare remote and a
+  stand-in `gh`.
+- Pointers from `/push`, `/auto-test`, `/validate`'s host table, and the
+  README.
+
+---
+
+## v0.55.1 — 2026-09-26
+
+**Two fail-open bugs: a merge over a red build, and a dead contribution path.**
+
+- **`/peer-review` could merge over a failing, running or absent build.**
+  `peer-review.sh` counted a check as passing whenever its `conclusion` was
+  not a known failure, and a blank conclusion was on the pass list. GitHub's
+  rollup has two shapes: a CheckRun has a blank conclusion while it runs, and
+  a legacy StatusContext (many external CIs) has `state` and no `conclusion`
+  key at all. So a still-running check, a **failed** status context, and a
+  PR with no checks all read as green. The skill also never gated on
+  `failing_checks`; it relied on branch protection to refuse.
+  - Classification is now fail-closed. Only an explicit success passes,
+    anything running is `pending`, an unrecognised entry is failing, and an
+    empty rollup is `none`, never `pass`. `scope` emits `checks_state`,
+    `failing_checks` and `pending_checks`.
+  - New `peer-review.sh checks <N>` re-reads CI at the moment of merging.
+    Exit codes: 0 pass, 4 failing, 5 pending, 6 none. `/peer-review` merges
+    only on 0. Failing rejects, pending holds, and none posts the findings
+    as a comment and leaves the merge to the user.
+  - `bin/test-peer-review` (repo tooling, wired into CI on Linux and stock
+    macOS bash 3.2) runs 14 cases. The pre-fix script fails all 14.
+- **`/contribute` stopped on every install.** It required
+  `.claude/foundation.json`, which `bin/init` has not written since the
+  canon lock. It also recorded overrides there, where nothing reads them, so
+  the next `/sync` overwrote the file the override was meant to protect.
+  - It now reads `.claude/rasa.lock.json`, with `foundation.json` as a
+    read-only fallback the way `/sync` reads it.
+  - It detects drift through `/sync`'s own `sync.sh fetch` and `sync.sh
+    plan` instead of a second hand-rolled comparison, and it records
+    overrides with `sync.sh keep`.
+  - Legacy vocabulary is fixed throughout the file. The README's seven
+    `foundation.json` references now name the real lockfile, and the
+    re-install row now says the pin is restamped, not kept.
+
+---
+
+## v0.55.0 — 2026-09-25
+
+**New skill: `/validate` — find the gaps, fill them, prove it twice.**
+`/self-heal` holds up over long runs because three mechanisms stack: a
+stopping rule (two consecutive clean passes; any gap resets the count),
+varied passes, and the harness `/goal` loop for duration. Only the first
+and last were written down. `/mission` Step 6 told Pass 2 to "repeat the
+full re-walk against the same criteria", so how independent the second
+pass was came down to luck. This release extracts the stopping rule into
+one reusable skill, writes the variation rule down, and adds a dial for
+how long it runs.
+
+- **`content/skills/validate/`** — re-reviews a finished artifact against
+  the *original ask*. Consecutive passes must use different lenses
+  (forward walk, backward from done, requirements trace, reality,
+  pre-mortem, edges, fresh-eyes subagent, stakeholder swap). Executing
+  passes must also vary their mechanics (build state, test order, entry
+  point, data, who checks). Three tiers: **short** (in-turn, 2 resets,
+  then report residual), **medium** (one fresh-eyes pass, 4 resets),
+  **long** (unbounded, run under `/goal`, stops on convergence or a
+  non-convergence blocker). Ends in a validation block that records each
+  pass as evidence.
+- **Appended to hosts:** `/instruct` (short, new Step 8; render is now
+  Step 9), `/user-story` (short), `/plan` (medium, before any hand-off;
+  fills are *proposed*, so `/plan` still edits no files), `/spec-phase`
+  (medium, cross-spec gaps before the working order), `/mvp` (medium,
+  cross-file gaps in the bundle).
+- **`/mission` Step 6** is now `/validate` at the long tier. Pass 2 must
+  use a different lens and different mechanics from Pass 1. `/self-heal`
+  and `/self-improve` inherit this. Also fixed two stale `kit/skills/`
+  paths.
+- Users can override the tier inline ("validate long", "skip
+  validation"). No manifest change: `content/skills/` is a
+  directory-mirror.
+
+---
+
 ## v0.54.0 — 2026-09-24
 
 **Preventive: no data migration, and no damaged record.** Every record this

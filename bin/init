@@ -359,7 +359,17 @@ for entry in manifest.get('seed', {}).get('files', []):
                 f.write(content)
             print(f"    \u00b7 stamp: {entry['to']}")
     elif policy in ('skip-if-exists', 'file-replace'):
-        # skip-if-exists already handled the exists case above
+        # skip-if-exists already handled the exists case above. A
+        # file-replace seed (the _template-* files) is refreshed on every
+        # install/sync — unless the consumer kept it in overrides[].
+        if policy == 'file-replace' and os.path.exists(dst):
+            try:
+                _ov = json.load(open(os.path.join(target, '.claude', 'rasa.lock.json'))).get('overrides') or []
+            except (OSError, ValueError):
+                _ov = []
+            if os.path.normpath(entry['to']) in {os.path.normpath(str(o)) for o in _ov}:
+                print(f"    · keep (overrides[]): {entry['to']}")
+                continue
         shutil.copy2(src, dst)
         print(f"    · copy: {entry['to']}")
     else:

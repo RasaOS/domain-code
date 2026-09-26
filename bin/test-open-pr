@@ -1,0 +1,232 @@
+#!/usr/bin/env bash
+# bin/test-open-pr — regression tests for /open-pr's open-pr.sh.
+# Repo tooling: lives in bin/, is not registered in rasa.json, and is never
+# installed into a consumer.
+#
+# Installs the Element into a fresh project with bin/init, gives it a local
+# bare remote, and drives the real skill there: a task through plan → branch
+# → push.sh → body → check → open → submit. A stand-in `gh` on PATH records
+# what `pr create` was asked to do; nothing touches the network.
+#
+#   plan      reads the task through bin/task; refuses a task not in active/
+#   branch    task/ and hotfix/ prefixes; keeps an existing side branch
+#   body      skeleton written OUTSIDE the repo; ☑/☐ carried from the task;
+#             files diffed against the spec's expected list
+#   check     refuses: an unmet criterion (unless --draft), unfilled
+#             placeholders, a criteria-count mismatch, an in-repo body,
+#             "Deviations: none" over a deviation, an unknown flag
+#   open      refuses dirty or unpushed work; opens via gh with the §10
+#             title; submits; a draft is not submitted; re-open reuses the PR;
+#             no gh → exit 4 and the task stays in active/
+#
+# Portable on purpose: bash 3.2, POSIX tools. Exit 0 only if every case passes.
+
+set -u
+here="$(cd "$(dirname "$0")" && pwd -P)"
+ELEMENT="$(cd "$here/.." && pwd -P)"
+
+T="$(mktemp -d "${TMPDIR:-/tmp}/test-open-pr.XXXXXX")" || exit 2
+T="$(cd "$T" && pwd -P)"
+trap 'rm -rf "$T"' EXIT
+export GIT_CONFIG_GLOBAL=/dev/null HOME="$T/home" TMPDIR="$T/tmp"
+mkdir -p "$HOME" "$TMPDIR" "$T/shim"
+unset RASA_ROOT RASA_ACTOR
+
+pass=0; fail=0
+ok()  { pass=$((pass + 1)); printf '  ok    %s\n' "$1"; }
+bad() { fail=$((fail + 1)); printf '  FAIL  %s\n        %s\n' "$1" "$2"; }
+# expect <name> <want-rc> <got-rc> [<pattern> <output>]
+expect() {
+  if [ "$3" != "$2" ]; then bad "$1" "want rc=$2, got rc=$3${5:+ — $(printf '%s' "$5" | tr '\n' '|' | cut -c1-300)}"; return; fi
+  if [ -n "${4:-}" ] && ! printf '%s\n' "${5:-}" | grep -q -- "$4"; then
+    bad "$1" "output lacks /$4/: $(printf '%s' "${5:-}" | tr '\n' '|' | cut -c1-300)"; return
+  fi
+  ok "$1"
+}
+
+# gh stand-in. `pr view <branch>` answers from $T/gh-pr-<branch-slug>;
+# `pr create` records its argv and creates that file.
+cat > "$T/shim/gh" <<EOF
+#!/usr/bin/env bash
+slug() { printf '%s' "\$1" | tr '/' '_'; }
+case "\$1 \$2" in
+  "pr view")
+    f="$T/gh-pr-\$(slug "\$3")"
+    [ -f "\$f" ] || exit 1
+    printf '{"url":"%s","state":"OPEN"}' "\$(cat "\$f")" ;;
+  "pr create")
+    printf '%s\n' "\$@" > "$T/gh-create-args"
+    head=""; prev=""
+    for a in "\$@"; do [ "\$prev" = --head ] && head="\$a"; prev="\$a"; done
+    n=\$(( \$(ls "$T" | grep -c '^gh-pr-') + 1 ))
+    echo "https://github.com/o/r/pull/\$n" > "$T/gh-pr-\$(slug "\$head")"
+    echo "https://github.com/o/r/pull/\$n" ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$T/shim/gh"
+
+# ── a project with the Element installed and a remote ──────────────────
+P="$T/proj"
+git init -q --bare -b main "$T/remote.git"
+mkdir -p "$P" && cd "$P" || exit 2
+git init -q -b main .
+git config user.email t@example.com; git config user.name tester
+git remote add origin "$T/remote.git"
+"$ELEMENT/bin/init" . </dev/null >/dev/null 2>&1 || { echo "bin/init failed"; exit 2; }
+printf '\n## Phase P1 — Test\n\nScope. Tests.\n' >> tasks/ROADMAP.md
+printf 'kit/\n' >> .gitignore
+git add -A && git commit -qm install && git push -q -u origin main 2>/dev/null
+S=".claude/skills/open-pr/open-pr.sh"
+TASK="python3 .claude/bin/task"
+
+# spec <id> <criteria-lines> — give a task real criteria and expected files.
+spec() {
+  local f; f="$($TASK show "$1" | sed -n 's/^  path: *//p')"
+  python3 - "$f" "$2" <<'PY'
+import re, sys
+p, crit = sys.argv[1], sys.argv[2]
+s = open(p).read()
+s = re.sub(r"(?ms)^## Acceptance criteria.*?(?=^## )", "## Acceptance criteria\n\n" + crit + "\n\n", s)
+s = re.sub(r"(?ms)^## Artifacts expected to change.*?(?=^## )",
+           "## Artifacts expected to change\n\n- `bin/greet` — the script\n- `docs/greet.md` — usage\n\n", s)
+open(p, "w").write(s)
+PY
+  python3 .claude/bin/check-tasks --fix >/dev/null 2>&1
+}
+
+fill() {  # fill <body-file> [deviations-text]
+  python3 - "$1" "${2:-docs/greet.md not written: usage is one line.}" <<'PY'
+import re, sys
+p, dev = sys.argv[1], sys.argv[2]
+s = open(p).read()
+s = s.replace("<!-- one to three sentences: what this PR does and why -->", "Adds bin/greet.")
+s = re.sub(r"Deviations: <!--.*?-->", "Deviations: " + dev, s)
+s = re.sub(r"(?s)<!-- the commands.*?-->", "```\n$ sh bin/greet\nhello\n```", s)
+open(p, "w").write(s)
+PY
+}
+
+$TASK new --type change --phase P1 --by tester "Add a greeting script" >/dev/null
+$TASK new --type defect --phase P1 --priority now --by tester "Greeting crashes" >/dev/null
+
+echo "plan"
+out="$($S plan TASK-001 2>&1)"; rc=$?
+expect "a backlog task: plan says start it first" 0 "$rc" "plan=refuse" "$out"
+$TASK start TASK-001 --by tester >/dev/null
+spec TASK-001 '- [x] `bin/greet` prints hello
+- [ ] `bin/greet --name X` prints hello X
+- [ ] The done-gate passes (`.claude/done-gate.md`)'
+git add -A && git commit -qm "spec TASK-001" && git push -q 2>/dev/null
+out="$($S plan TASK-001 2>&1)"; rc=$?
+expect "an active task: plan reads title and stage through bin/task" 0 "$rc" "title=Add a greeting script" "$out"
+
+echo "branch"
+out="$($S branch TASK-001 2>&1)"; rc=$?
+expect "on the trunk without --slug: usage error" 2 "$rc" "slug" "$out"
+out="$($S branch TASK-001 --slug Bad_Slug 2>&1)"; rc=$?
+expect "a non-kebab slug is refused" 2 "$rc" "kebab" "$out"
+out="$(cd bin 2>/dev/null || cd tasks; "$P/$S" branch TASK-001 --slug greeting 2>&1)"; rc=$?
+expect "a change task gets task/TASK-NNN-slug (run from a subdirectory)" 0 "$rc" "branch=task/TASK-001-greeting" "$out"
+out="$($S branch TASK-001 --slug other 2>&1)"; rc=$?
+expect "already on a side branch: it is kept" 0 "$rc" "branch=task/TASK-001-greeting" "$out"
+
+mkdir -p bin && printf '#!/bin/sh\necho hello\n' > bin/greet
+bash .claude/skills/push/push.sh run --message "TASK-001: add bin/greet" >/dev/null 2>&1
+
+echo "body"
+out="$($S body TASK-001 2>&1)"; rc=$?
+B="$(printf '%s\n' "$out" | sed -n 's/^body_file=//p')"
+case "$B" in "$P"/*|"") bad "the body file is written outside the repository" "got '$B'" ;; *) ok "the body file is written outside the repository" ;; esac
+body="$(cat "$B" 2>/dev/null)"
+expect "criteria carry ☑/☐ from the task file" 0 "$rc" "☐ \`bin/greet --name X\`" "$body"
+expect "the task is named by id and file, not stage path" 0 0 "TASK-001-add-a-greeting-script.md" "$body"
+expect "an expected-but-unchanged file is called out" 0 0 "docs/greet.md\` — \*\*expected, unchanged" "$body"
+
+echo "check"
+out="$($S check TASK-001 "$B" 2>&1)"; rc=$?
+expect "an unmet criterion refuses a ready PR" 3 "$rc" "criterion not met" "$out"
+expect "unfilled placeholders refuse" 3 "$rc" "placeholders" "$out"
+fill "$B"
+out="$($S check TASK-001 "$B" --draft 2>&1)"; rc=$?
+expect "a draft may carry an unmet criterion" 0 "$rc" "submittable" "$out"
+out="$($S check TASK-001 "$B" --ready 2>&1)"; rc=$?
+expect "an unknown flag after the body is a usage error, never 'ready'" 2 "$rc" "only --draft" "$out"
+cp "$B" "$P/in-repo.md"
+out="$($S check TASK-001 in-repo.md --draft 2>&1)"; rc=$?
+expect "a body file inside the repository is refused" 3 "$rc" "inside the repository" "$out"
+rm -f "$P/in-repo.md"
+B2="$TMPDIR/b2.md"; grep -v 'done-gate passes' "$B" > "$B2"
+out="$($S check TASK-001 "$B2" --draft 2>&1)"; rc=$?
+expect "a body listing fewer criteria than the task is refused" 3 "$rc" "lists 2 criteria; the task file has 3" "$out"
+B3="$TMPDIR/b3.md"; cp "$B" "$B3"; fill "$B3"
+python3 - "$B3" <<'PY'
+import re, sys
+p = sys.argv[1]; s = open(p).read()
+open(p, "w").write(re.sub(r"(?m)^Deviations:.*$", "Deviations: none", s))
+PY
+out="$($S check TASK-001 "$B3" --draft 2>&1)"; rc=$?
+expect "'Deviations: none' over a flagged deviation is refused" 3 "$rc" "Deviations says none" "$out"
+
+echo "open"
+f="$($TASK show TASK-001 | sed -n 's/^  path: *//p')"
+python3 - "$f" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+open(p, "w").write(s.replace("- [ ] `bin/greet --name X`", "- [x] `bin/greet --name X`"))
+PY
+python3 .claude/bin/check-tasks --fix >/dev/null 2>&1
+out="$($S open TASK-001 "$B" 2>&1)"; rc=$?
+expect "uncommitted tracked changes refuse open" 3 "$rc" "uncommitted" "$out"
+git commit -qam "tick criterion"
+out="$($S open TASK-001 "$B" 2>&1)"; rc=$?
+expect "unpushed commits refuse open" 3 "$rc" "unpushed" "$out"
+git push -q 2>/dev/null
+B="$TMPDIR/b-final.md"; "$S" body TASK-001 | sed -n 's/^body_file=//p' | xargs -I{} cp {} "$B"; fill "$B"
+out="$(PATH="/usr/bin:/bin" "$S" open TASK-001 "$B" 2>&1)"; rc=$?
+if command -v gh >/dev/null 2>&1 && [ "$(command -v gh)" != "/usr/bin/gh" ] && [ "$(command -v gh)" != "/bin/gh" ]; then :; fi
+if PATH="/usr/bin:/bin" command -v gh >/dev/null 2>&1; then
+  ok "no gh: exit 4 (skipped — a real gh is on /usr/bin)"
+else
+  expect "no gh: exit 4 with the manual instructions" 4 "$rc" "open-pr.sh submit TASK-001 --pr" "$out"
+  st="$($TASK show TASK-001 | head -1)"
+  expect "no gh: the task stays in active/" 0 0 "\[active\]" "$st"
+fi
+out="$(PATH="$T/shim:$PATH" "$S" open TASK-001 "$B" 2>&1)"; rc=$?
+expect "open creates the PR through gh" 0 "$rc" "pr=https://github.com/o/r/pull/1" "$out"
+args="$(cat "$T/gh-create-args" 2>/dev/null)"
+expect "the PR title is 'TASK-NNN: <task title>' (§10)" 0 0 "TASK-001: Add a greeting script" "$args"
+expect "the PR targets the trunk from the task branch" 0 0 "task/TASK-001-greeting" "$args"
+st="$($TASK show TASK-001 | head -1)"
+expect "open submits the task to review/" 0 0 "\[review\]" "$st"
+hist="$($TASK show TASK-001)"
+expect "the transition log records the PR URL" 0 0 "PR https://github.com/o/r/pull/1" "$hist"
+expect "the submit is committed onto the PR branch" 0 0 "TASK-001: submit for review" "$(git log -1 --format=%s)"
+expect "and pushed" 0 0 "^0$" "$(git rev-list --count '@{u}..HEAD')"
+expect "the tree is clean after open" 0 0 "^$" "$(git status --porcelain --untracked-files=no)"
+rm -f "$T/gh-create-args"
+out="$(PATH="$T/shim:$PATH" "$S" open TASK-001 "$B" 2>&1)"; rc=$?
+expect "re-running open reuses the open PR, never re-creates it" 0 "$rc" "already open" "$out"
+[ -f "$T/gh-create-args" ] && bad "re-running open called gh pr create" "args: $(cat "$T/gh-create-args")" || ok "re-running open does not call gh pr create"
+
+echo "hotfix + draft"
+git checkout -q main
+# bin/task files a priority:now defect straight into active/ — no start.
+expect "a priority:now defect is filed into active/" 0 0 "\[active\]" "$($TASK show TASK-002 | head -1)"
+spec TASK-002 '- [ ] greeting no longer crashes
+- [ ] The done-gate passes (`.claude/done-gate.md`)'
+git add -A && git commit -qm "spec TASK-002" && git push -q 2>/dev/null
+out="$($S branch TASK-002 --slug crash 2>&1)"; rc=$?
+expect "a priority:now defect gets hotfix/TASK-NNN-slug" 0 "$rc" "branch=hotfix/TASK-002-crash" "$out"
+mkdir -p bin && printf '#!/bin/sh\necho hi\n' > bin/greet
+bash .claude/skills/push/push.sh run --message "TASK-002: wip" >/dev/null 2>&1
+B="$TMPDIR/b-draft.md"; "$S" body TASK-002 | sed -n 's/^body_file=//p' | xargs -I{} cp {} "$B"; fill "$B"
+out="$(PATH="$T/shim:$PATH" "$S" open TASK-002 "$B" --draft 2>&1)"; rc=$?
+expect "a draft PR opens" 0 "$rc" "submitted=no" "$out"
+expect "gh was asked for a draft" 0 0 "--draft" "$(cat "$T/gh-create-args" 2>/dev/null)"
+st="$($TASK show TASK-002 | head -1)"
+expect "a draft leaves the task in active/" 0 0 "\[active\]" "$st"
+
+echo
+echo "$pass passed, $fail failed"
+[ "$fail" -eq 0 ]

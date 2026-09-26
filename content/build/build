@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+# build/build — the BUILD phase: build this commit once, and record it.
+#
+# Usage:
+#   ./build/build [--env=<name>]
+#
+# Runs build/stages/20-build.sh — the project's one build definition, the same
+# stage ./build/deploy runs — from a clean tree, and writes
+# builds/records/BLD-<utc>.md: the commit, the result, and the fingerprint of
+# every artifact the stage declared. build/test tests THAT record, and
+# ./build/deploy ships it instead of rebuilding.
+#
+# DECLARING ARTIFACTS. 20-build.sh appends one line per artifact to the file
+# named by $BUILD_ARTIFACTS:
+#   echo "dist" >> "$BUILD_ARTIFACTS"                        # a directory
+#   echo "build/app.tar.gz" >> "$BUILD_ARTIFACTS"            # a file
+#   echo "image=$(docker image inspect -f '{{.Id}}' app)" >> "$BUILD_ARTIFACTS"
+# A build that declares nothing is recorded with `artifacts_digest: none` and
+# is bound to its commit only — the record says so, loudly.
+#
+# --env=<name> is for a build that bakes in environment config (a web bundle
+# built per API URL). It is recorded as `built_for`, and the deploy gate
+# refuses to ship such a build anywhere else. Without it the build is
+# environment-neutral and 20-build.sh receives "build" as $1.
+#
+# Refuses (exit 3, no record): no commits; a dirty tree — a build of
+# uncommitted source is not a build of any commit.
+# Exit: 0 built · 1 build failed (record written, status failed) · 2 usage ·
+#       3 refused
+#
+# Portability: bash 3.2.
+
+set -euo pipefail
+
+BUILD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$BUILD_DIR/.." && pwd)"
+cd "$PROJECT_DIR"
+# shellcheck source=/dev/null
+. "$BUILD_DIR/gates/verify-lib.sh"
+rfm_require 1 || exit 70
+
+BUILT_FOR=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --env=*) BUILT_FOR="${1#*=}" ;;
+    --env)   BUILT_FOR="${2:-}"; shift ;;
+    -h|--help) sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "error: unknown arg: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
+if [ -n "$BUILT_FOR" ] && [[ ! "$BUILT_FOR" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  echo "error: bad --env '$BUILT_FOR' — letters, digits, . _ - only" >&2; exit 2
+fi
+
+SHA="$(vl_head)" || { echo "✗ build refused: this repository has no commits." >&2; exit 3; }
+SRC="$(vl_source)" || { echo "✗ build refused: cannot fingerprint HEAD's source." >&2; exit 3; }
+DIRTY="$(vl_source_dirty)"
+if [ -n "$DIRTY" ]; then
+  {
+    echo "✗ build refused: the tree differs from $SHA."
+    echo "$DIRTY" | sed 's/^/    /'
+    echo "  A build of uncommitted source is not a build of any commit — commit or stash first."
+  } >&2
+  exit 3
+fi
+
+# --env builds in that environment's configuration, exactly as ./build/deploy
+# would: its env.sh is sourced into this shell. (The paths are re-derived
+# afterwards — an env.sh must not be able to redirect them; see build/deploy.)
+if [ -n "$BUILT_FOR" ]; then
+  ENV_DIR="$BUILD_DIR/environments/$BUILT_FOR"
+  [ -d "$ENV_DIR" ] || { echo "✗ build refused: no environment '$BUILT_FOR' under build/environments/." >&2; exit 3; }
+  # shellcheck disable=SC1090,SC1091
+  [ -f "$ENV_DIR/env.sh" ] && . "$ENV_DIR/env.sh"
+  BUILD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  PROJECT_DIR="$(cd "$BUILD_DIR/.." && pwd)"
+  cd "$PROJECT_DIR"
+  export ENVIRONMENT="$BUILT_FOR"
+fi
+
+STAGE="$BUILD_DIR/stages/20-build.sh"
+[ -f "$STAGE" ] || { echo "✗ build refused: $STAGE is missing — run /setup-deploy." >&2; exit 3; }
+
+vl_lock builds/.lock build || exit 3
+trap vl_unlock EXIT
+
+ACTOR="$(rasa_actor)" || { echo "✗ cannot record who is building — fix RASA_ACTOR or git user.name." >&2; exit 2; }
+BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+REC="$(vl_new_record "$VL_BUILDS_DIR" BLD)" || exit 1
+ID="$(basename "$REC" .md)"
+MANIFEST="${REC%.md}.artifacts"
+LOG="${REC%.md}.log"
+: > "$MANIFEST"
+
+# Start from nothing: remove what the previous build declared, so stale files
+# left in an ignored output directory (a deleted page still in dist/) cannot
+# be fingerprinted into THIS build. Only a path that is entirely git-ignored,
+# inside the project, and not the project itself is ever removed — a declared
+# path that holds tracked files is left alone and named.
+PREV="$(ls "$VL_BUILDS_DIR"/BLD-*.artifacts 2>/dev/null | grep -v "^$MANIFEST\$" | tail -1 || true)"
+if [ -n "$PREV" ]; then
+  while IFS= read -r p; do
+    case "$p" in ''|'#'*|*=*|.|./|/*|..|../*|*/../*) continue ;; esac
+    [ -e "$p" ] || continue
+    if [ -n "$(git ls-files -- "$p" 2>/dev/null | head -1)" ]; then
+      echo "  ⚠ not clearing '$p' before the build: it holds tracked files" >&2
+      continue
+    fi
+    git check-ignore -q -- "$p" 2>/dev/null || { echo "  ⚠ not clearing '$p': it is not git-ignored" >&2; continue; }
+    rm -rf -- "$p"
+  done < "$PREV"
+fi
+
+export BUILD_ID="$ID" BUILD_ARTIFACTS="$PROJECT_DIR/$MANIFEST"
+# BUILD_TAG names THIS build's artifacts — tag images with it. It is recorded,
+# and ./build/deploy exports the same value when it ships this build, so what
+# 40-publish pushes is what 20-build made. DEPLOY_TAG (the per-environment
+# release label) is set to it here only for older stages that still use it.
+ENV_SH=".claude/skills/environment/environment.sh"
+BUILD_TAG=""
+[ -n "$BUILT_FOR" ] && [ -f "$ENV_SH" ] && BUILD_TAG="$(bash "$ENV_SH" version "$BUILT_FOR" 2>/dev/null || true)"
+BUILD_TAG="${BUILD_TAG:-$(git describe --tags --always 2>/dev/null || echo "${SHA:0:12}")}"
+# Unique per BUILD, not per commit: two builds of one commit tagged alike let
+# an untested rebuild retag the image a tested build's record still names.
+BUILD_TAG="$BUILD_TAG-$(printf '%s' "$ID" | tr 'A-Z' 'a-z')"
+case "$BUILD_TAG" in *[!A-Za-z0-9._+-]*) BUILD_TAG="${SHA:0:12}-$(printf '%s' "$ID" | tr 'A-Z' 'a-z')" ;; esac
+export BUILD_TAG
+export DEPLOY_TAG="${DEPLOY_TAG:-$BUILD_TAG}"
+STARTED="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+T0=$(date +%s)
+
+echo "════════════════════════════════════════════════════════════"
+echo "  build  $ID"
+echo "  commit $SHA ($BRANCH)"
+echo "  tag    $BUILD_TAG"
+[ -n "$BUILT_FOR" ] && echo "  for    $BUILT_FOR (environment-specific build)"
+echo "════════════════════════════════════════════════════════════"
+
+set +e
+bash "$STAGE" "${BUILT_FOR:-build}" 2>&1 | tee "$LOG"
+RC=${PIPESTATUS[0]}
+set -e
+DURATION=$(( $(date +%s) - T0 ))
+
+STATUS="success"; REASON=""; DIGEST="none"; COUNT=0; ITEMS=""
+if [ "$RC" -ne 0 ]; then
+  STATUS="failed"; REASON="20-build.sh exited $RC"
+else
+  # A build that writes into the tracked or unignored tree changed the source
+  # it was built from: the record could no longer name one commit.
+  DIRTY="$(vl_source_dirty)"
+  if [ -n "$DIRTY" ]; then
+    STATUS="failed"; REASON="the build wrote files git does not ignore — add its outputs to .gitignore"
+    echo "$DIRTY" | sed 's/^/    /' >&2
+  else
+    set +e
+    FP="$(cd "$PROJECT_DIR" && vl_fingerprint "$MANIFEST" 2>&1)"; FRC=$?
+    set -e
+    if [ "$FRC" -ne 0 ]; then
+      STATUS="failed"; REASON="$(printf '%s' "$FP" | head -1)"
+    else
+      DIGEST="$(printf '%s\n' "$FP" | sed -n 's/^digest=//p')"
+      COUNT="$(printf '%s\n' "$FP" | sed -n 's/^count=//p')"
+      ITEMS="$(printf '%s\n' "$FP" | sed -n 's/^item	//p')"
+    fi
+  fi
+fi
+
+for kv in "sha:$SHA" "branch:$BRANCH" "actor:$ACTOR" "built_for:${BUILT_FOR:-any}"; do
+  rfm_check "${kv%%:*}" "${kv#*:}" || exit 2
+done
+{
+  echo "---"
+  echo "kind: build-record"
+  echo "id: $ID"
+  echo "status: $STATUS"
+  echo "sha: $SHA"
+  echo "source: $SRC"
+  echo "branch: $BRANCH"
+  echo "built_for: ${BUILT_FOR:-any}"
+  echo "build_tag: $BUILD_TAG"
+  echo "actor: $ACTOR"
+  echo "started: $STARTED"
+  echo "duration_s: $DURATION"
+  echo "exit_code: $RC"
+  echo "artifacts: $COUNT"
+  echo "artifacts_digest: $DIGEST"
+  echo "reason: $(rfm_clean "$REASON")"
+  echo "---"
+  echo ""
+  echo "# $ID — build of \`${SHA:0:12}\`"
+  echo ""
+  echo "Log: \`$LOG\` · Manifest: \`$MANIFEST\`"
+  echo ""
+  echo "## Artifacts"
+  echo ""
+  if [ -n "$ITEMS" ]; then
+    printf '%s\n' "$ITEMS" | while IFS="$(printf '\t')" read -r d e; do
+      echo "- \`$e\` — \`${d:0:16}\`"
+    done
+  else
+    echo "_None declared — this build is bound to its commit only._"
+  fi
+} | rfm_write_atomic "$REC" || exit 1
+
+echo ""
+if [ "$STATUS" = "success" ]; then
+  echo "✓ build $ID — ${DURATION}s, $COUNT artifact(s), fingerprint ${DIGEST:0:16}"
+  [ "$DIGEST" = "none" ] && echo "  ⚠ no artifacts declared — deploy will be bound to the commit, not to a built artifact (see \$BUILD_ARTIFACTS in build/build)"
+  echo "  next: ./build/test"
+  exit 0
+fi
+echo "✗ build $ID failed — $REASON" >&2
+exit 1

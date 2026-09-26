@@ -66,24 +66,53 @@ produce the error; say it yourself, immediately.
 `unclassified` → proceed, and tell them once that the environment has no
 declared class, so it is unguarded. Point at `environment.sh classes`.
 
-### 3 — Run the pipeline
+### 3 — Make sure this commit was built and tested
+
+At `staging` class the pipeline refuses a deploy unless `/test` passed
+a `/build` of HEAD whose artifacts are unchanged (`gates/verified-build.sh`,
+no bypass). Check before spending the user's time:
+
+```bash
+ls tests/runs/TST-*.md 2>/dev/null | tail -1   # then read its sha: and status:
+```
+
+No passing run for HEAD → run `/build` then `/test` first (or ask, if
+the user only asked to deploy). At `dev` class the gate only warns, and
+when no verified build of this source exists, the pipeline rebuilds in
+place as it always has (with one, it ships that build like staging does).
+
+### 3b — Run the pipeline
+
+What it refuses, and the fix — say it plainly, never reach around it:
+
+| Refusal | Fix |
+|---|---|
+| bad environment name / not in the registry / registry cannot be read | use the registry's name exactly; fix `.claude/environments.json` |
+| `verified-build` — no passing test, the newest run failed, artifacts changed, declared no artifacts | `/build` then `/test` (declare outputs in `20-build.sh`) |
+| another run holds the lock | wait for it; a lock from a dead run on this host is taken over automatically |
+| `artifacts changed during stage …` | a stage rewrote the tested outputs — fix that stage; nothing was shipped past it |
 
 ```bash
 ./build/deploy --env=<env> --intent=deploy
 ```
 
-`--intent=deploy` is not optional in what you pass. It is currently
-derivable for backwards compatibility and becomes required in v0.45.0;
-passing it explicitly is the behaviour this skill models.
+`--intent=deploy` is required; without it the pipeline exits 2.
 
 Useful flags, pass through only when the user asked for them:
 
 | Flag | Effect |
 |---|---|
-| `--dry-run` | Skips every stage. Runs the class guard and the tests-required gate, but **not** the stage-level gates — `10-preflight` is a stage, so clean-tree and the production approval do not run. A dry-run exit 0 is not a verification. |
+| `--dry-run` | Skips every stage. Runs the class guard, tests-required, verified-build and promoted-build gates, but **not** the stage-level gates — `10-preflight` is a stage, so clean-tree and the production approval do not run. It still prints `✓ … complete` and closes its ship-log record `success` with note `dry-run`. A dry-run exit 0 is not a verification. |
 | `--skip-tests` | Skips stages whose name contains `test`, below `prod` class. **Refused at `prod` class** (exit 2). |
 | `--skip-gates` | Skips the OPTIONAL gates (clean tree, tag match) on non-prod only. Never skips the class guard. |
 | `--tag=<tag>` | Overrides the computed `v<semver>-<sha>-<env>` tag. |
+
+With a verified build the pipeline prints `▷ 20-build (reusing BLD-…,
+tested by TST-…)` — it ships the tested artifacts rather than
+rebuilding — and stage `60-verify` runs `tests/suites/smoke.md` against
+the environment after it lands. A `60-verify` failure fails the deploy
+**with the new build live**: say that plainly and point at the
+environment's rollback.
 
 ### 4 — Stream and report
 
@@ -104,6 +133,8 @@ report the stage that failed and the actual error — the pipeline prints
 
 ## Related
 
+- `/build` → `/test` → `/deploy` — the three phases; each writes the
+  record the next one checks.
 - `/release` — production, tagged. The other direction.
 - `/environment` — declare environments and their classes; set the
   session's current environment.

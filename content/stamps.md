@@ -308,8 +308,9 @@ PR the moment two long-lived branches exist, which is why
 exempts `tasks/**` but `classify_path` defaults to `code`, so a top-level
 `runs/` would have every run-record write **denied** in every consumer — and
 that config is `skip-if-exists`, so the fix would never reach an existing
-install. `build/gates/git-clean.sh` likewise excludes only `deploys/`,
-`build/deploy-log.md` and `tasks/`, so a top-level `runs/` would fail
+install. `build/gates/git-clean.sh` likewise excludes only the records it
+knows (`deploys/`, `builds/`, `tests/runs/`, `build/deploy-log.md`, and
+`tasks/` below prod), so a top-level `runs/` would fail
 `/mission`'s own preview deploy on the record the mission just wrote. Under
 `tasks/runs/` both are zero-change. Not `deploys/records/` either — that
 directory is globbed `???-*.md` and would pull `RUN-` files into the ship-log

@@ -128,6 +128,26 @@ jobs:
           PATH="$shim:$PATH" bash bin/test-readers
           PATH="$shim:$PATH" bash bin/check-reader-parity
 
+      # /peer-review's CI gate: a running, failed-status-context or absent
+      # build must never read as green in the skill that holds merge
+      # authority. A stand-in gh serves each rollup; no network.
+      - name: Peer-review CI gate
+        run: bash bin/test-peer-review
+
+      # /open-pr driven inside a real bin/init install with a local bare
+      # remote and a stand-in gh: branch naming, the fail-closed body check,
+      # the §10 title, submit committed onto the PR branch, drafts.
+      - name: Open-PR hand-off
+        run: bash bin/test-open-pr
+
+      # The build → test → deploy chain in a real install: a web app built to
+      # dist/, an e2e phase that starts a real HTTP runtime, health-checks it
+      # and always stops it (killed mid-test included), the verified-build
+      # gate refusing untested/stale/tampered builds at staging and prod, and
+      # 60-verify failing a deploy whose smoke check fails.
+      - name: Build, test, deploy chain
+        run: bash bin/test-pipeline
+
   macos:
     name: runs on stock macOS bash
     runs-on: macos-latest
@@ -164,6 +184,15 @@ jobs:
           /bin/bash bin/test-writers
           /bin/bash bin/test-readers
           /bin/bash bin/check-reader-parity
+
+      - name: Peer-review CI gate (bash 3.2)
+        run: /bin/bash bin/test-peer-review
+
+      - name: Open-PR hand-off (bash 3.2)
+        run: /bin/bash bin/test-open-pr
+
+      - name: Build, test, deploy chain (bash 3.2)
+        run: /bin/bash bin/test-pipeline
 
       # The approval gate must (a) auto-approve under FORCE_APPROVAL=1 and
       # (b) fail CLOSED with no controlling terminal. A CI runner has no

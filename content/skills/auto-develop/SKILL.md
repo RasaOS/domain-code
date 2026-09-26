@@ -44,7 +44,9 @@ excuse for sloppy work — `craft-rules.md` applies in full.
   handling. Autonomy decides *what* to write; the craft rules
   still decide *how well*.
 - **Run the verification.** After implementing, run the project's
-  build / verification (per `CLAUDE.md` or `/build`). A run that
+  build / verification (per `CLAUDE.md`, or `/build`'s compile check —
+  a pipeline `/build` records a build and refuses an uncommitted
+  tree, so it belongs after the commit, not here). A run that
   ends with a failing build is not done — fix it, or if it can't
   be fixed, that's a hard blocker: stop and report.
   **Show the result, do not summarize it.** The verbatim command,
