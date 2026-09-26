@@ -71,7 +71,9 @@ rule so it is reviewable; the per-skill SKILL.md cites this rule.
   deploy command, branch-protection refusal).
 - **`/peer-review` — accept = approve + merge.** A `/peer-review`
   run that accepts a PR posts an approving review AND merges via
-  `gh pr merge --squash --delete-branch`. The user's
+  `gh pr merge --<method> --delete-branch --match-head-commit <sha>`,
+  with the method the PR's merge manifest names (`--squash` without
+  one). The user's
   `/peer-review` invocation IS the merge authorization for an
   accepted PR. The skill still respects branch protection — if
   the remote refuses the merge, the approval stays and the PR
@@ -94,6 +96,27 @@ rule so it is reviewable; the per-skill SKILL.md cites this rule.
   with a real PR record, merge via `gh pr merge --squash`. Any
   non-spec dirty file falls back to "leave uncommitted" — same as
   the pre-v0.32.0 behavior. See `autonomy-rules.md` "Exception 2".
+
+- **`/auto-merge` — enabling is consent, per PR and per project.**
+  A `/auto-merge run` merges an open PR to the trunk unattended,
+  only through `/peer-review`'s accept path above, and only when
+  every one of these holds:
+  - the project turned it on (`.claude/auto-merge.json`
+    `enabled: true`, committed through a PR);
+  - the PR carries the opt-in label and its merge manifest says
+    `merge: auto`;
+  - no hold label is set;
+  - CI is green;
+  - the PR is mergeable;
+  - every PR its manifest names in `after` has merged.
+
+  `auto-merge.sh plan` decides eligibility by program, not by
+  reading. After the merge it may run the manifest's
+  `on_merge: deploy:<env>` for a dev- or staging-class environment
+  only. Production and `release:<version>` are queued for a person
+  and go through `/release`, whose carve-out is unchanged. See
+  `autonomy-rules.md` "Exception 4" and
+  `kit/skills/auto-merge/SKILL.md`.
 
 The list is closed. Adding a new merge-bearing user-invoked
 skill requires adding it here, in this rule, as a named

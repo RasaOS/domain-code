@@ -155,6 +155,11 @@ jobs:
       - name: Task ledger reconcile and guards
         run: bash bin/test-reconcile
 
+      # The merge manifest every PR body carries, and /auto-merge's
+      # eligibility rules, lock and post-merge actions (prod is never run).
+      - name: Merge manifest and auto-merge
+        run: bash bin/test-auto-merge
+
   macos:
     name: runs on stock macOS bash
     runs-on: macos-latest
@@ -203,6 +208,9 @@ jobs:
 
       - name: Task ledger reconcile and guards (bash 3.2)
         run: /bin/bash bin/test-reconcile
+
+      - name: Merge manifest and auto-merge (bash 3.2)
+        run: /bin/bash bin/test-auto-merge
 
       # The approval gate must (a) auto-approve under FORCE_APPROVAL=1 and
       # (b) fail CLOSED with no controlling terminal. A CI runner has no

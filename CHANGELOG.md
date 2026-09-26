@@ -24,6 +24,109 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.60.0 — 2026-09-26
+
+**Every PR says what it is and what happens once it merges, and opted-in PRs
+merge themselves: `/auto-merge` and the merge manifest.** ⚠ After `/sync`, a
+new CI check (`pr-manifest`) fails any ready PR whose body has no complete
+merge manifest.
+
+To migrate:
+1. Re-run the Element's `bin/init` (or `/sync`). It seeds `.github/pull_request_template.md`, `.github/workflows/pr-manifest.yml` and `.claude/auto-merge.json`. The two `.github/` files are skipped if the project already has them; to get the manifest in that case, merge the template's manifest block into your own template by hand.
+2. Commit `.claude/`, which the `pr-manifest` check runs from.
+3. Add a manifest to any open PR you want to stay green. `.claude/skills/auto-merge/pr-manifest.sh block` prints one.
+4. `/auto-merge` is off until you run `auto-merge.sh on`, land that change through a PR, and schedule it.
+
+**The PR template.** A reviewer or merger could not tell from a PR what it was
+part of, how it should merge, or what to do once it was in. Every PR body now
+starts with a machine-read **merge manifest**:
+
+| Key | Values |
+|---|---|
+| `kind` | `task` · `chore` · `release` · `hotfix` |
+| `tasks` | the ledger ids the PR carries |
+| `phase` | the roadmap phase, or `none` |
+| `release` | the release it is targeted at, or `none` |
+| `merge` | `auto` · `manual` |
+| `method` | `squash` · `merge` · `rebase` |
+| `after` | PRs that must merge first |
+| `on_merge` | `hold` · `deploy:<env>` · `release:<version>` |
+| `migrations` | `none`, or what runs and whether it reverses |
+| `rollback` | how to undo it |
+
+The human sections follow: **What & why**, **Part of**, **How I verified**,
+**Risk & rollback** and **After merge**.
+
+**New: `pr-manifest.sh`** (`content/skills/auto-merge/`) is the one parser,
+used by CI, `/open-pr`, `/peer-review` and `/auto-merge`. `check` refuses:
+- a missing, unfilled (`<…>`), unknown or duplicated key;
+- a missing or empty section;
+- two manifest blocks;
+- `on_merge: release:<v>` without a matching `release`;
+- migrations with `rollback: revert`.
+
+`block` prints a valid manifest for skills that open non-task PRs.
+
+**`/open-pr` fills it from the ledger.** `body` writes the manifest and the
+sections in the template's shape:
+- the task, its phase (via `bin/task`) and its target release (via
+  `release.sh find`);
+- `hotfix` for a `priority: now` defect;
+- placeholders for migrations when `migrations/` changed;
+- "After merge" written from `on_merge`.
+
+New flags: `--merge`, `--on-merge`, `--after` and `--release`. `check` now
+also runs `pr-manifest.sh check` and refuses a manifest that does not list the
+task. `open` adds the `auto-merge` label when the manifest says `merge: auto`.
+"What changed" is now "What & why".
+
+**New: `/auto-merge`.** When enabled, a scheduled run (`/loop 30m /auto-merge
+run` or an hourly Claude routine) merges every eligible open PR through
+`/peer-review`.
+
+- **Eligibility is decided by program.** `auto-merge.sh plan` applies the rules
+  in order and names the first rule a PR fails:
+  1. the opt-in label is present;
+  2. no hold label;
+  3. not a draft;
+  4. targets the trunk;
+  5. valid manifest;
+  6. `merge: auto`;
+  7. every `after` PR has merged;
+  8. mergeable;
+  9. CI green.
+
+  Enabling is per project: `.claude/auto-merge.json` `enabled`, off by
+  default and committed through a PR. Opting in is per PR, and takes both the
+  label and `merge: auto`.
+- **Every merge is a `/peer-review`.** It uses the manifest's method and
+  `--match-head-commit`, so a push after the review blocks the merge.
+- **Post-merge stays out of production.** `auto-merge.sh after <N> --execute`
+  runs `on_merge: deploy:<env>` (build → test → deploy on the trunk, after
+  checking the merge commit is in) only for a dev- or staging-class
+  environment. Prod, unclassified and unknown environments, and every
+  `release:<version>`, are queued for a person. The outcome is commented on
+  the PR.
+- **One run at a time.** A run lock, taken over after two hours, and a run log
+  in the git directory. `max_per_run` caps merges per run, default 5.
+
+**Rules.** `git-flow-rules.md` Rule 2 gains the `/auto-merge` carve-out, and
+its `/peer-review` carve-out now merges with the manifest's method.
+`autonomy-rules.md` gains Exception 4. `/peer-review` checks the manifest
+during scope, merges with its method, and reports the `on_merge` next action.
+`/mission`, `/auto-task` and `/reconcile` put a manifest in the PRs they open.
+
+**Also**
+- `peer-review.sh classify` is the CI classifier on stdin. `/auto-merge`'s
+  plan and the merge gate therefore cannot disagree about what "green" means.
+- **`bin/test-auto-merge`** runs 81 cases in a real install with a stand-in
+  `gh`: every manifest rule, every eligibility rule, the switch and the lock,
+  and each post-merge action. A mutation that lets a prod deploy through fails
+  it. `bin/test-open-pr` gains 18 manifest cases and `bin/test-peer-review` 2
+  classify cases. All run in CI on Linux and on macOS bash 3.2.
+
+---
+
 ## v0.59.0 — 2026-09-26
 
 **The task ledger stays true: `/reconcile`, and task enforcement that

@@ -18,16 +18,19 @@
 #   peer-review.sh checks <N> [--wait <secs>]
 #                                     re-read CI right before a merge -> pass | not;
 #                                     --wait polls while checks are pending
+#   peer-review.sh classify           a rollup on stdin ({"statusCheckRollup": [...]})
+#                                     -> the same classification and exit codes as
+#                                     `checks`, offline (/auto-merge's plan reads it)
 #   peer-review.sh verdict <report>   read an auditor report -> accept | reject
 #
 # Exit: 0 ok · 1 error · 2 usage · 3 reject (verdict only)
-#       checks only: 0 pass · 4 failing · 5 pending · 6 no checks reported
+#       checks and classify: 0 pass · 4 failing · 5 pending · 6 no checks reported
 #
 # Portability: bash 3.2 (stock macOS). Requires `gh` for `scope` and `checks`.
 
 set -euo pipefail
 
-usage() { sed -n '3,24p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,27p' "$0" | sed 's/^# \{0,1\}//'; }
 
 need_gh() {
   command -v gh >/dev/null 2>&1 || {
@@ -165,6 +168,19 @@ cmd_checks() {
   esac
 }
 
+# classify — `checks` without the fetch: the rollup comes on stdin. One
+# classifier, so /auto-merge's plan and this skill's merge gate can never
+# disagree about what "green" means.
+cmd_classify() {
+  local out state
+  out="$(summarize_checks)" || { echo "error: could not read a rollup on stdin" >&2; return 1; }
+  printf '%s\n' "$out"
+  state="$(printf '%s\n' "$out" | sed -n 's/^checks_state=//p')"
+  case "$state" in
+    pass) return 0 ;; fail) return 4 ;; pending) return 5 ;; *) return 6 ;;
+  esac
+}
+
 # verdict <report-file> — map auditor severities to a merge decision.
 #
 # CRITICAL blocks. HIGH does NOT: auditor.md defines HIGH as "action this
@@ -214,6 +230,7 @@ main() {
     checks)
       [ $# -ge 1 ] || { echo "error: checks needs a PR number" >&2; return 2; }
       cmd_checks "$@" ;;
+    classify) cmd_classify ;;
     verdict)
       [ $# -ge 1 ] || { echo "error: verdict needs a report file" >&2; return 2; }
       cmd_verdict "$1" ;;

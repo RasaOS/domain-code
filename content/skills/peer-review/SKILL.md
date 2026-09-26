@@ -82,7 +82,11 @@ disqualifier:
 
 1. **Scope sanity.** Does the PR title + body claim what the diff
    actually does? Scope creep ("added X" but diff also reworks
-   Y) is a reject unless the body names Y.
+   Y) is a reject unless the body names Y. Does the body carry a
+   complete merge manifest (`.claude/skills/auto-merge/pr-manifest.sh
+   check --pr <N>`)? A missing or incomplete one is a non-blocking
+   note: the merger then has nothing telling it the method or what
+   follows the merge.
 2. **Gated files.** Does the diff touch any file the project
    marks as gated (per `code-task-rules.md` §9 or
    `CLAUDE.md`)? If yes and the PR body doesn't acknowledge it,
@@ -204,9 +208,20 @@ diff" was satisfied, in the authoring session, by memory of having written it.
         `pass` → continue; failing → the review becomes a reject; still
         pending → HELD, report, and re-run later.
 
-     Then `gh pr review <N> --approve --body "<...>"` and `gh pr merge <N>
-     --squash --delete-branch`. The task reaches `completed/` in the same
-     merge that ships its code.
+     Then `gh pr review <N> --approve --body "<...>"` and merge with
+     the method the PR's merge manifest names, pinned to the head CI
+     just passed on:
+
+     ```bash
+     method="$(bash .claude/skills/auto-merge/pr-manifest.sh get method --pr <N> 2>/dev/null || echo squash)"
+     gh pr merge <N> --"$method" --delete-branch --match-head-commit "$(gh pr view <N> --json headRefOid -q .headRefOid)"
+     ```
+
+     With no valid manifest, merge with `--squash`, and name the missing
+     manifest in the report as a non-blocking note. `--match-head-commit`
+     makes GitHub refuse the merge if anything was pushed after the
+     checks were read. The task reaches `completed/` in the same merge
+     that ships its code.
    - **Reject** → `gh pr review <N> --request-changes --body
      "<numbered blocking issues, each with file:line and the rule>"`.
      A reject hands the PR back to the authoring agent, which is
@@ -221,7 +236,15 @@ diff" was satisfied, in the authoring session, by memory of having written it.
    merges without a ledger move — say so in the report; `/reconcile`
    picks it up.
 
-9. **Render the review report** — template below. It records
+9. **Say what happens after the merge** (accept path only). Read
+   `pr-manifest.sh get on_merge --pr <N>` and put it in the report as
+   the next action: `hold` means nothing runs; `deploy:<env>` names the
+   deploy command; `release:<v>` means run `/release`. `/peer-review`
+   does not carry it out. When `/auto-merge` invoked this review, it
+   does (`auto-merge.sh after <N> --execute`); otherwise it is the
+   user's.
+
+10. **Render the review report** — template below. It records
    `review_mode: delegated-subagent` and the PR number, so a review
    that was skipped is visible afterwards.
 
@@ -260,7 +283,8 @@ One chat message at the end. Shape:
 ## What I did
 
 - Posted review: <accept | request-changes> with body covering <rules>.
-- Merge: <squashed and deleted branch | blocked by <reason> | N/A — rejected>.
+- Merge: <squashed / merged / rebased and deleted branch | blocked by <reason> | N/A — rejected>.
+- After merge (manifest `on_merge`): <hold | deploy:<env> — <command> | release:<v> — run /release | no manifest>.
 
 ## Hard gates hit *(if any)*
 

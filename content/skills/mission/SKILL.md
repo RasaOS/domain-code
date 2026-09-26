@@ -207,7 +207,9 @@ turns ran out. Step 6 is where that honesty is enforced.
    the mission summary: the goal and its recipe, the tasks done
    with their commits, the verification result (both passes), how
    to validate and the command to run the tests, every flagged
-   assumption, and what finishes each task once the user marks
+   assumption, a merge manifest (`pr-manifest.sh block --kind task
+   --tasks "<ids>" --merge manual --on-merge hold`, per
+   `auto-merge/SKILL.md`: a mission PR is never `merge: auto`), and what finishes each task once the user marks
    the PR ready and merges it — `.claude/bin/task submit <id>`,
    then `.claude/bin/task pass <id> --by <who> --note "<evidence>"`
    (recorded as `gate: <evidence>`),

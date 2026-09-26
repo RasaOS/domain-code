@@ -111,8 +111,11 @@ Follow `validate/SKILL.md` at the **short** tier: re-run `scan` — every
 certain row must now be `ok`, and every approved judgment row applied as
 approved. Then `.claude/bin/check-tasks` (must pass), commit
 `tasks/` (`Ledger: reconcile <date> — <n> transitions`), push, and open the
-PR (`gh pr create`, or the session's GitHub tooling). The body is the
-evidence table: each task, from → to, and why.
+PR (`gh pr create`, or the session's GitHub tooling). The body opens
+with a merge manifest (`.claude/skills/auto-merge/pr-manifest.sh block
+--kind chore --merge manual --on-merge hold`; list the passed tasks in
+`--tasks`), then the evidence table: each task, from → to, and why, and
+then the merger's sections that `pr-manifest.sh check` requires.
 
 ## The enforcement that keeps it clean
 

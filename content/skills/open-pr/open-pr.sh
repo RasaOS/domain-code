@@ -12,7 +12,10 @@
 # Usage:
 #   open-pr.sh plan   <TASK-ID>                 what a run would do; no writes
 #   open-pr.sh branch <TASK-ID> --slug <slug>   get onto the task's branch
-#   open-pr.sh body   <TASK-ID>                 print the PR body skeleton
+#   open-pr.sh body   <TASK-ID> [--merge auto|manual] [--on-merge X]
+#                     [--after "41 42"] [--release vX.Y.Z]
+#                                               write the PR body skeleton:
+#                                               the merge manifest + sections
 #   open-pr.sh check  <TASK-ID> <body-file> [--draft]
 #                                               is the filled body submittable?
 #   open-pr.sh open   <TASK-ID> <body-file> [--draft]
@@ -39,12 +42,14 @@ _rfm="$(cd "$here/../../lib/domain-code" 2>/dev/null && pwd)/frontmatter.sh"
 . "$_rfm"
 rfm_require 1 || exit 70
 
-usage() { sed -n '3,27p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,30p' "$0" | sed 's/^# \{0,1\}//'; }
 die() { echo "open-pr: $*" >&2; exit 1; }
 refuse() { echo "open-pr: refused — $*" >&2; exit 3; }
 
 TASK_BIN="$here/../../bin/task"
 ENFORCE="$here/../task-enforce/task-enforce.sh"
+MANIFEST="$here/../auto-merge/pr-manifest.sh"
+RELEASE_SH="$here/../release/release.sh"
 
 task_cli() { python3 "$TASK_BIN" "$@"; }
 
@@ -53,7 +58,7 @@ actor() {
   else echo unknown; fi
 }
 
-# task_field <id> <field> — stage | title | path | type | priority, from
+# task_field <id> <field> — stage | title | path | type | priority | phase, from
 # `task show`. bin/task is the one reader of the ledger; this never opens a
 # task's frontmatter itself.
 task_field() {
@@ -168,67 +173,56 @@ cmd_branch() {
   echo "branch=$target"
 }
 
-# The body skeleton: the task path, its criteria with ☑/☐ carried over from
-# the task file, the files changed against the spec's expected list, and the
-# two sections the author must write. Written to a temp file OUTSIDE the
-# repository and its path printed: push.sh stages untracked files, so a body
-# drafted in the worktree would be committed onto the PR it describes.
+# The body skeleton, in the shape .github/pull_request_template.md and
+# pr-manifest.sh share: the merge manifest filled from the ledger (the task,
+# its phase, the release it is targeted at), then the sections a merger reads
+# — what and why, what it is part of, the criteria with ☑/☐ carried over from
+# the task file, the files changed against the spec's expected list, how it
+# was verified, risk and rollback, and what to do after the merge. Written to
+# a temp file OUTSIDE the repository and its path printed: push.sh stages
+# untracked files, so a body drafted in the worktree would be committed onto
+# the PR it describes.
 cmd_body() {
-  local id="$1" path trunk out
+  local id="$1" merge=manual on_merge=hold after="" release="" path trunk out
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --merge)    merge="${2:-}";    shift 2 || exit 2 ;;
+      --on-merge) on_merge="${2:-}"; shift 2 || exit 2 ;;
+      --after)    after="${2:-}";    shift 2 || exit 2 ;;
+      --release)  release="${2:-}";  shift 2 || exit 2 ;;
+      *) echo "error: unknown flag: $1" >&2; exit 2 ;;
+    esac
+  done
   require_task "$id"
-  out="$(mktemp "${TMPDIR:-/tmp}/pr-body-$id.XXXXXX")" || die "could not create a temp file"
   path="$(task_field "$id" path)"
   trunk="$(trunk_branch)"
   local base
   base="$(git merge-base "origin/$trunk" HEAD 2>/dev/null || git merge-base "$trunk" HEAD 2>/dev/null || true)"
   local changed=""
   [ -n "$base" ] && changed="$(git diff --name-only "$base" HEAD 2>/dev/null || true)"
-  python3 - "$path" "$id" "$changed" > "$out" <<'PY'
-import os, re, sys
-path, tid, changed = sys.argv[1], sys.argv[2], [c for c in sys.argv[3].splitlines() if c]
-text = open(path, encoding="utf-8").read()
 
-def section(name):
-    m = re.search(r"(?ims)^##\s+" + name + r"[^\n]*\n(.*?)(?=^##\s|\Z)", text)
-    return m.group(1) if m else ""
+  # The manifest's ledger half. The release is the one tasks/RELEASES.md
+  # targets or bundles the task into; --release overrides it, and an
+  # `--on-merge release:<v>` names it when nothing else does.
+  local kind=task phase block
+  [ "$(branch_prefix "$id")" = "hotfix" ] && kind=hotfix
+  phase="$(task_field "$id" phase)"; [ -n "$phase" ] || phase=none
+  if [ -z "$release" ]; then
+    release="$(bash "$RELEASE_SH" find "$id" 2>/dev/null | sed -n '1s/[[:space:]].*//p' || true)"
+    case "$release" in v[0-9]*) ;; *) release=none ;; esac
+  fi
+  case "$on_merge" in
+    release:*) [ "$release" != "none" ] || release="${on_merge#release:}" ;;
+  esac
+  block="$(bash "$MANIFEST" block --kind "$kind" --tasks "$id" --phase "$phase" \
+    --release "$release" --merge "$merge" --method squash --after "$after" \
+    --on-merge "$on_merge")" \
+    || die "the manifest flags are invalid — see the error above"
 
-crit = re.findall(r"(?m)^\s*-\s+\[( |x|X)\]\s+(.+?)\s*$", section("acceptance criteria"))
-arts = section("artifacts expected to change")
-expected = sorted(set(t for t in re.findall(r"`([^`\s]+)`", arts) if "/" in t or "." in t))
-
-# Named by id and file name, not by stage path: `task submit` moves the
-# file from active/ to review/, and a path in the PR body would go stale.
-print("**Task:** `%s` · `%s`" % (tid, os.path.basename(path)))
-print()
-print("## What changed")
-print()
-print("<!-- one to three sentences: what this PR does and why -->")
-print()
-print("## Acceptance criteria")
-print()
-for mark, line in crit:
-    print("- %s %s" % ("☑" if mark.lower() == "x" else "☐", line))
-if not crit:
-    print("<!-- the task file has no acceptance criteria — it is a stub, not a spec -->")
-print()
-print("## Files changed")
-print()
-for c in changed:
-    hit = any(e == c or c.endswith(e) or e.endswith(c) or c.startswith(e.rstrip("/") + "/") for e in expected)
-    print("- `%s`%s" % (c, "" if hit else " — **not in the expected list**"))
-missed = [e for e in expected if not any(e == c or c.endswith(e) or e.endswith(c) or c.startswith(e.rstrip("/") + "/") for c in changed)]
-for e in missed:
-    print("- `%s` — **expected, unchanged**" % e)
-if not changed:
-    print("<!-- nothing differs from the trunk yet — commit and push first -->")
-print()
-print("Deviations: <!-- explain every bold line above, or write: none -->")
-print()
-print("## How I verified")
-print()
-print("<!-- the commands you ran and their real output: the unfiltered headless")
-print("     test run (counts, time), the build. Never just \"tests pass\". -->")
-PY
+  out="$(mktemp "${TMPDIR:-/tmp}/pr-body-$id.XXXXXX")" || die "could not create a temp file"
+  python3 "$here/body.py" "$path" "$id" "$changed" "$block" "$phase" "$release" "$on_merge" "$after" "$merge" "$(task_field "$id" title)" > "$out" \
+    || die "could not write the body skeleton"
   echo "body_file=$out"
 }
 
@@ -242,11 +236,16 @@ cmd_check() {
   case "$body" in
     "$(pwd -P)"/*) refuse "the body file is inside the repository ($body) — push.sh would commit it onto the PR. Use the path \`body\` printed." ;;
   esac
-  local path
+  local path mout mrc=0 mtasks=""
   path="$(task_field "$id" path)"
-  python3 - "$path" "$body" "$draft" <<'PY'
+  # The merge manifest and the merger's sections, by the one checker CI and
+  # /auto-merge also run.
+  mout="$(bash "$MANIFEST" check "$body" 2>&1)" || mrc=$?
+  [ "$mrc" -eq 0 ] && mtasks="$(bash "$MANIFEST" get tasks "$body" 2>/dev/null || true)"
+  python3 - "$path" "$body" "$draft" "$id" "$mrc" "$mout" "$mtasks" <<'PY'
 import os, re, sys
 path, body_path, draft = sys.argv[1], sys.argv[2], sys.argv[3] == "--draft"
+tid, mrc, mout, mtasks = sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7].split()
 task = open(path, encoding="utf-8").read()
 body = open(body_path, encoding="utf-8").read()
 problems = []
@@ -276,6 +275,15 @@ if not v or len(re.sub(r"(?s)<!--.*?-->", "", v.group(1)).strip()) < 20:
 if re.search(r"(?i)\*\*(not in the expected list|expected, unchanged)\*\*", body) \
         and re.search(r"(?im)^deviations:\s*(none)?\s*$", body):
     problems.append("files deviate from the expected list but Deviations says none")
+
+if mrc != "0":
+    for line in mout.splitlines():
+        if line.strip().startswith("- "):
+            problems.append("manifest: " + line.strip()[2:])
+        elif line.strip() and "is not complete" not in line:
+            problems.append("manifest: " + line.strip().replace("invalid: ", "", 1))
+elif tid not in mtasks:
+    problems.append("the merge manifest does not list %s in `tasks:`" % tid)
 
 if problems:
     print("check: NOT submittable")
@@ -335,6 +343,9 @@ cmd_open() {
       echo "open-pr: no gh — open the PR with the session's GitHub tooling:" >&2
       echo "  base=$trunk head=$branch title=\"$id: $(task_field "$id" title)\"${draft:+ draft}" >&2
       echo "  body: $body" >&2
+      if [ "$(bash "$MANIFEST" get merge "$body" 2>/dev/null || true)" = "auto" ]; then
+        echo "  label: auto-merge (the manifest says merge: auto)" >&2
+      fi
       echo "  then: open-pr.sh submit $id --pr <url>${draft:+   (skip while it is a draft)}" >&2
       exit 4
     }
@@ -348,6 +359,7 @@ cmd_open() {
     fi
     echo "pr=$url"
   fi
+  label_auto "$body" "$url"
 
   if [ "$draft" = "--draft" ]; then
     echo "submitted=no — a draft stays in active/ (code-task-rules §2); submit when it is marked ready"
@@ -355,6 +367,25 @@ cmd_open() {
     echo "submitted=already ($id is in review/)"
   else
     do_submit "$id" "$url"
+  fi
+}
+
+# label_auto <body-file> <pr-url> — a manifest saying `merge: auto` is half
+# of /auto-merge's two-key opt-in; the label is the other half. Add it (and
+# create it on first use). A failure is reported, never fatal: without the
+# label the PR simply is not merged unattended.
+label_auto() {
+  local body="$1" url="$2" label="auto-merge" cfg=".claude/auto-merge.json"
+  [ "$(bash "$MANIFEST" get merge "$body" 2>/dev/null || true)" = "auto" ] || return 0
+  if [ -f "$cfg" ]; then
+    label="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("label") or "auto-merge")' "$cfg" 2>/dev/null || echo auto-merge)"
+  fi
+  gh label create "$label" --color 0E8A16 \
+    --description "/auto-merge may merge this PR once CI is green" >/dev/null 2>&1 || true
+  if gh pr edit "$url" --add-label "$label" >/dev/null 2>&1; then
+    echo "label=$label (merge: auto — /auto-merge may merge it once CI is green)"
+  else
+    echo "open-pr: could not add the '$label' label — add it by hand, or /auto-merge will skip this PR" >&2
   fi
 }
 
@@ -401,7 +432,7 @@ main() {
   case "$action" in
     plan)   [ $# -ge 1 ] || { usage >&2; exit 2; }; cmd_plan "$1" ;;
     branch) [ $# -ge 1 ] || { usage >&2; exit 2; }; cmd_branch "$@" ;;
-    body)   [ $# -ge 1 ] || { usage >&2; exit 2; }; cmd_body "$1" ;;
+    body)   [ $# -ge 1 ] || { usage >&2; exit 2; }; cmd_body "$@" ;;
     check)  [ $# -ge 2 ] || { usage >&2; exit 2; }; draft_arg "${3:-}"; cmd_check "$1" "$2" "${3:-}" ;;
     open)   [ $# -ge 2 ] || { usage >&2; exit 2; }; draft_arg "${3:-}"; cmd_open "$1" "$2" "${3:-}" ;;
     submit) [ $# -ge 1 ] || { usage >&2; exit 2; }; cmd_submit "$@" ;;

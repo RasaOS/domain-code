@@ -38,7 +38,11 @@ PR body all say the same thing.
   while any acceptance criterion other than the done-gate one is
   unticked in the task file, while a placeholder is unfilled, while
   "How I verified" is empty, or while files deviate from the spec's
-  expected list and "Deviations" says none. The fix is to finish the
+  expected list and "Deviations" says none. It also refuses while the
+  merge manifest is missing, malformed or does not list the task, or
+  while a merger's section (What & why, Part of, How I verified,
+  Risk & rollback, After merge) is empty. It runs the same
+  `pr-manifest.sh check` that CI and `/auto-merge` run. The fix is to finish the
   work or open a **draft** — never to edit the check away.
 - **A draft stays in `active/`.** Per `code-task-rules.md` §2,
   `review/` means "the PR is open and ready". `--draft` opens the PR
@@ -57,7 +61,7 @@ PR body all say the same thing.
 ```text
 bash .claude/skills/open-pr/open-pr.sh plan   <TASK-ID>
 bash .claude/skills/open-pr/open-pr.sh branch <TASK-ID> --slug <kebab-slug>
-bash .claude/skills/open-pr/open-pr.sh body   <TASK-ID>
+bash .claude/skills/open-pr/open-pr.sh body   <TASK-ID> [--merge auto|manual] [--on-merge hold|deploy:<env>|release:<v>] [--after "#41 #42"] [--release vX.Y.Z]
 bash .claude/skills/open-pr/open-pr.sh check  <TASK-ID> <body-file> [--draft]
 bash .claude/skills/open-pr/open-pr.sh open   <TASK-ID> <body-file> [--draft]
 bash .claude/skills/open-pr/open-pr.sh submit <TASK-ID> --pr <url>
@@ -116,21 +120,43 @@ Surface anything `push.sh` reports it skipped.
 
 ### Step 5 — Draft the body
 
+Decide the three things only the author knows, then write the skeleton:
+
+- **`--merge`**: `manual` (the default) or `auto`. With `auto`, `/auto-merge`
+  may merge the PR unattended once CI is green. Use it only when the user
+  asked for it, or the project's `CLAUDE.md` says task PRs auto-merge.
+- **`--on-merge`**: what happens once the PR is in. `hold` (the default)
+  ships the work with its release. `deploy:<env>` deploys the trunk to
+  that environment. `release:<version>` means this merge completes a
+  release, which a person then cuts with `/release`.
+- **`--after`**: the PRs that must merge first, if any.
+
 ```bash
-bash .claude/skills/open-pr/open-pr.sh body <TASK-ID>
+bash .claude/skills/open-pr/open-pr.sh body <TASK-ID> [--merge auto] [--on-merge deploy:staging] [--after "#41"]
 ```
 
 It writes a skeleton to a temp file **outside the repository** and
-prints `body_file=<path>` — edit that file, never one in the working
-tree (`push.sh` would commit it onto the PR). The skeleton already
-carries the task, its criteria with ☑/☐ from the task file, and every
-changed file checked against the spec's "Artifacts expected to
-change". Fill in:
+prints `body_file=<path>`. Edit that file, never one in the working
+tree (`push.sh` would commit it onto the PR). The skeleton follows the
+shape of `.github/pull_request_template.md`. It already holds:
 
-- **What changed** — one to three sentences.
-- **Deviations** — every bolded file line explained, or `none`.
-- **How I verified** — the commands from Step 3 and their real
+- the **merge manifest**. `kind`, `tasks`, `phase` and `release` come
+  from the ledger: the release is the one `tasks/RELEASES.md` targets
+  the task at. A change under `migrations/` turns `migrations` and
+  `rollback` into placeholders you must replace.
+- **Part of**: the task, phase, release and PRs it merges after.
+- the task's criteria, ☑/☐ from the task file.
+- every changed file, checked against the spec's "Artifacts expected to
+  change".
+- **After merge**, written from `on_merge`.
+
+Fill in:
+
+- **What & why**: one to three sentences.
+- **Deviations**: every bolded file line explained, or `none`.
+- **How I verified**: the commands from Step 3 and their real
   output. Never "tests pass".
+- **Risk & rollback**: what could break, and how to undo it.
 
 ### Step 6 — Validate the body
 
@@ -142,7 +168,7 @@ bash .claude/skills/open-pr/open-pr.sh check <TASK-ID> <body-file> [--draft]
 ```
 
 The judgment half is a second, different lens — read the diff
-(`git diff <trunk>...HEAD`) against "What changed": does the body
+(`git diff <trunk>...HEAD`) against "What & why": does the body
 describe what the diff actually does, and nothing it doesn't? Fill
 any gap in the body, then re-run `check` until it passes twice in a
 row.
@@ -156,11 +182,14 @@ bash .claude/skills/open-pr/open-pr.sh open <TASK-ID> <body-file> [--draft]
 It re-checks, refuses dirty or unpushed work, opens the PR against
 the trunk with the title `TASK-NNN: <task title>` (or reuses the one
 already open for the branch), runs `task submit`, and commits and
-pushes that ledger transition onto the branch.
+pushes that ledger transition onto the branch. When the manifest says
+`merge: auto` it also adds the `auto-merge` label, creating it on first
+use. The label is the second half of `/auto-merge`'s opt-in.
 
 **Exit 4 (no `gh`):** open the PR with the session's GitHub tooling
 (e.g. `mcp__github__create_pull_request`) using the base, head, title
-and body file it printed; then:
+and body file it printed. Add the `auto-merge` label if it names one.
+Then:
 
 ```bash
 bash .claude/skills/open-pr/open-pr.sh submit <TASK-ID> --pr <url>
@@ -185,7 +214,9 @@ The §10 hand-off table, in chat. Nothing is done yet — the task is in
 | **Tests** | full headless gate: <count> green · <time> |
 | **Build** | clean / <new warnings> |
 
-**What changed.** <one to three sentences>
+**What & why.** <one to three sentences>
+
+**Merge.** <manual | auto (labelled)> · **After merge:** <hold | deploy:<env> | release:<v>>
 
 **Reviewer next.** <what to look at first, and how to run it>
 
@@ -194,8 +225,10 @@ The §10 hand-off table, in chat. Nothing is done yet — the task is in
 
 ## What you must NOT do
 
-- **Don't merge.** Review and merge are `/peer-review`'s or a
-  person's. This skill stops at an open PR.
+- **Don't merge.** Review and merge are `/peer-review`'s, `/auto-merge`'s
+  or a person's. This skill stops at an open PR.
+- **Don't set `merge: auto` on your own initiative.** It hands the merge
+  to an unattended run. The user, or the project's `CLAUDE.md`, decides.
 - **Don't submit a draft.** A draft is `active/` work.
 - **Don't tick a criterion the run did not prove** to get past
   `check`. The body is a claim the reviewer will test.

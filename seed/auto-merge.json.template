@@ -1,0 +1,24 @@
+{
+  "_doc": "/auto-merge: merge open pull requests unattended. A PR merges only when it carries the opt-in label AND its merge manifest says `merge: auto`, CI is green, it is mergeable, every PR in its `after` list has merged, and /peer-review accepts it. Project-owned and committed; bin/init seeds it once and never overwrites it. A scheduled run reads this file from the trunk, so turning it on or off is a change to the trunk and lands through a PR. Read by .claude/skills/auto-merge/auto-merge.sh.",
+
+  "enabled": false,
+  "_enabled_doc": "false: `auto-merge.sh run` refuses. Flip with `auto-merge.sh on` / `off`, then commit the change through a PR.",
+
+  "label": "auto-merge",
+  "_label_doc": "The opt-in label. A PR without it is never merged by /auto-merge, whatever its manifest says.",
+
+  "hold_labels": ["hold", "do-not-merge", "wip", "blocked"],
+  "_hold_labels_doc": "Any one of these on a PR stops /auto-merge, even when it carries the opt-in label.",
+
+  "max_per_run": 5,
+  "_max_per_run_doc": "The most PRs one run merges. The rest wait for the next run.",
+
+  "check_wait_secs": 900,
+  "_check_wait_secs_doc": "How long a run waits for CI after /peer-review pushes the done-gate pass onto a PR branch.",
+
+  "deploy": true,
+  "_deploy_doc": "true: after a merge, run the manifest's `on_merge: deploy:<env>` when <env> resolves to dev or staging class (build, test and deploy on the trunk). A prod-class or unclassified environment, and every `release:<version>`, is queued for a person and never run. false: every post-merge action is queued.",
+
+  "interval": "30m",
+  "_interval_doc": "What `auto-merge.sh on` suggests for `/loop <interval> /auto-merge run`. A cloud routine fires at most hourly."
+}

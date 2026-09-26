@@ -296,7 +296,8 @@ Durable records — each writes to a typed location under `docs/`.
 | `/inbox` | Multi-dev messaging plus personal scratchpad |
 | `/contract` | System-contract registry — version, lock, and ledger for schemas, endpoints, and system docs |
 | `/push` | Commit and push the working tree in one step — no questions; branches off the trunk |
-| `/open-pr` | Hand a task from build to review — branch, commit, push, the §10 PR, `task submit`; refuses a PR the spec does not support |
+| `/open-pr` | Hand a task from build to review — branch, commit, push, the §10 PR with its merge manifest (tasks, phase, release, merge method, what runs on merge) filled from the ledger, `task submit`; refuses a PR the spec does not support |
+| `/auto-merge` | When enabled, merge opted-in PRs unattended (the `auto-merge` label plus `merge: auto`, CI green, mergeable, dependencies merged) through `/peer-review`, then carry out the manifest's `on_merge` for non-prod targets only; prod and releases are queued for a person. Owns the PR template and `pr-manifest.sh` |
 | `/reconcile` | Clean the task ledger against reality — merged PRs passed through the done-gate, closed PRs rejected, ready PRs submitted automatically; stale work proposed for park/close in one batch; one ledger PR |
 | `/save` | Mid-session state-save for an active thread of work |
 | `/load` | Rehydrate context from the most recent `/save` snapshot |

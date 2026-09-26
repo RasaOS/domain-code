@@ -133,6 +133,12 @@ out="$(PEER_REVIEW_POLL=1 PATH="$T/shim:$PATH" bash "$SCRIPT" checks 7 --wait 2 
 out="$(PATH="$T/shim:$PATH" bash "$SCRIPT" checks 7 --wait abc 2>/dev/null)"; rc=$?
 [ "$rc" = 2 ] && ok "--wait with a non-number is a usage error" || bad "--wait with a non-number is a usage error" "rc=$rc"
 
+echo "peer-review.sh classify — the same classifier, offline, for /auto-merge"
+out="$(printf '%s' '{"statusCheckRollup":[{"__typename":"StatusContext","context":"j","state":"FAILURE"}]}' | bash "$SCRIPT" classify 2>/dev/null)"; rc=$?
+[ "$rc" = 4 ] && printf '%s\n' "$out" | grep -qx 'failing_checks=j' && ok "classify: a failed status context is rc 4, named" || bad "classify: a failed status context is rc 4, named" "rc=$rc $out"
+out="$(printf '%s' '{}' | bash "$SCRIPT" classify 2>/dev/null)"; rc=$?
+[ "$rc" = 6 ] && ok "classify: an empty rollup is none (rc 6), never pass" || bad "classify: an empty rollup is none (rc 6), never pass" "rc=$rc"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
