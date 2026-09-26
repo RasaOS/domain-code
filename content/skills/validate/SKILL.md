@@ -1,6 +1,6 @@
 ---
 name: validate
-description: Re-review a finished artifact — a plan, a recipe, a spec, a user story, a change set — find every gap, fill it, and repeat until two consecutive passes come back clean, each pass using a different lens so the second is not the first asked twice. Three tiers set how hard it runs — short (in-turn, a few minutes), medium (bounded rounds, one fresh-eyes pass), long (unbounded, run under /goal, the /self-heal bar). Appended to the end of other skills (/plan, /instruct, /spec-phase, /mvp, /user-story, /mission) and runnable on its own. Triggered when the user wants work checked before it is called done — e.g. "/validate", "/validate medium this plan", "re-review the whole plan and fill the gaps", "double-check this spec", "validate that until it's clean".
+description: Re-review a finished artifact — a plan, a recipe, a spec, a user story, a change set — find every gap, fill it, and repeat until two consecutive passes come back clean, each pass using a different lens so the second is not the first asked twice. Three tiers set how hard it runs — short (in-turn, a few minutes), medium (bounded rounds, one fresh-eyes pass), long (unbounded, run under /goal, the /self-heal bar). Appended to the end of other skills (/plan, /instruct, /spec-phase, /mvp, /user-story, /open-pr, /mission) and runnable on its own. Triggered when the user wants work checked before it is called done — e.g. "/validate", "/validate medium this plan", "re-review the whole plan and fill the gaps", "double-check this spec", "validate that until it's clean".
 ---
 
 # /validate — find the gaps, fill them, prove it twice
@@ -301,6 +301,7 @@ and Mechanics differ; stop and report at a hard gate; stop after
 | Host | Default tier | Where it runs |
 |---|---|---|
 | `/instruct` | short | after the mock run-through, before rendering |
+| `/open-pr` | short | on the PR body against the spec, before opening |
 | `/user-story` | short | before rendering the story |
 | `/plan` | medium | when a planning decision is settled, before hand-off |
 | `/spec-phase` | medium | after every stub is expanded, before the working order |

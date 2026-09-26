@@ -134,6 +134,12 @@ jobs:
       - name: Peer-review CI gate
         run: bash bin/test-peer-review
 
+      # /open-pr driven inside a real bin/init install with a local bare
+      # remote and a stand-in gh: branch naming, the fail-closed body check,
+      # the §10 title, submit committed onto the PR branch, drafts.
+      - name: Open-PR hand-off
+        run: bash bin/test-open-pr
+
   macos:
     name: runs on stock macOS bash
     runs-on: macos-latest
@@ -173,6 +179,9 @@ jobs:
 
       - name: Peer-review CI gate (bash 3.2)
         run: /bin/bash bin/test-peer-review
+
+      - name: Open-PR hand-off (bash 3.2)
+        run: /bin/bash bin/test-open-pr
 
       # The approval gate must (a) auto-approve under FORCE_APPROVAL=1 and
       # (b) fail CLOSED with no controlling terminal. A CI runner has no

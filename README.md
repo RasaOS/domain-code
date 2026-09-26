@@ -295,6 +295,7 @@ Durable records — each writes to a typed location under `docs/`.
 | `/inbox` | Multi-dev messaging plus personal scratchpad |
 | `/contract` | System-contract registry — version, lock, and ledger for schemas, endpoints, and system docs |
 | `/push` | Commit and push the working tree in one step — no questions; branches off the trunk |
+| `/open-pr` | Hand a task from build to review — branch, commit, push, the §10 PR, `task submit`; refuses a PR the spec does not support |
 | `/save` | Mid-session state-save for an active thread of work |
 | `/load` | Rehydrate context from the most recent `/save` snapshot |
 | `/auto-save` | Toggle session-lifecycle auto-save hooks — in-session merges, pre-compaction archive |

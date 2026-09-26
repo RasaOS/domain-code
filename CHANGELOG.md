@@ -24,6 +24,47 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.56.0 — 2026-09-26
+
+**New skill: `/open-pr` — hand one task from build to review.** Nothing
+carried a task from "code written" to "PR open". `/auto-develop` and
+`/auto-test` end with uncommitted work, and `/push` deliberately opens no
+PR. `code-task-rules.md` §10 specifies the branch, the PR title and body,
+and `task submit` when the PR opens, but no skill carried any of it out. As
+a result, finished work sat in `active/` with no PR.
+
+- **`content/skills/open-pr/`** is a SKILL.md plus `open-pr.sh`:
+  - **Verbs:** `plan`, `branch`, `body`, `check`, `open`, `submit`.
+  - **The script owns:** reading the task through `bin/task`; the §10
+    branch (`task/TASK-NNN-slug`, or `hotfix/…` for a `priority: now`
+    defect); a body skeleton with criteria ☑/☐ carried from the task file
+    and files checked against the spec's expected list; the title
+    `TASK-NNN: <title>`; an idempotent `gh pr create`; and `task submit`.
+  - **The model owns** the commit message and the PR prose. Commit and push
+    go through `/push`'s `push.sh` unchanged.
+  - **Fail-closed.** A ready PR is refused while any criterion other than
+    the done-gate one is unticked, while a placeholder is unfilled, while
+    "How I verified" is empty, or while "Deviations: none" sits over a
+    flagged deviation. A draft opens but stays in `active/`, per §2.
+  - **The submit rides on the PR.** The `active/` → `review/` move is
+    committed onto the PR branch and pushed. Left uncommitted, the next
+    branch switch put the task in both `active/` and `review/`, and the
+    ledger refused every transition over the duplicate id.
+  - **The body file is drafted outside the repository**, and one inside
+    it is refused, because `push.sh` stages untracked files.
+  - **`/validate` short** runs on the body before opening.
+  - **Without `gh`** it exits 4 with the exact base, head and title so the
+    session's GitHub tooling can open the PR, then `submit`.
+  - **Not chained from autonomous skills.** Opening a PR from an autonomous
+    run is not an `autonomy-rules.md` exception.
+- `bin/test-open-pr` (repo tooling, CI on Linux and macOS bash 3.2) runs
+  36 cases inside a real `bin/init` install with a bare remote and a
+  stand-in `gh`.
+- Pointers from `/push`, `/auto-test`, `/validate`'s host table, and the
+  README.
+
+---
+
 ## v0.55.1 — 2026-09-26
 
 **Two fail-open bugs: a merge over a red build, and a dead contribution path.**

@@ -164,4 +164,5 @@ The task or feature has real tests — written in the native
 framework, stamped per `test-rules.md`, and run — uncommitted. One
 autonomy report carries the pass/fail counts, the triage of any
 failure, and every test-design decision made. The user reviews,
-acts on any code-bug findings, and commits.
+acts on any code-bug findings, and commits — or runs `/open-pr` to
+commit, open the task's PR and submit it for review in one step.
