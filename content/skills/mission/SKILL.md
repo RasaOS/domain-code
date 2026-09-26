@@ -219,14 +219,20 @@ turns ran out. Step 6 is where that honesty is enforced.
 8. **Preview deploy (opt-in only).** *Skip this step unless the
    goal explicitly asks for a preview deploy.* If it does, per
    `autonomy-rules.md` Exception 3:
-   - Read `build/pipeline-config.toml` and `build/environments/`
-     to find a non-prod env. If the goal names one ("deploy to
-     staging", "preview env"), use it. Otherwise pick the first
-     non-prod env and flag the choice as an assumption.
-   - Refuse if the only configured env is `prod`/`production`,
-     or if no `./build/deploy` script exists, or if the project
-     has no deployable UI surface. Report the refusal; do not
-     fail the mission.
+   - Pick the environment **by class**, from
+     `.claude/skills/environment/environment.sh classes`: a `dev` or
+     `staging` row. If the goal names one ("deploy to staging"), use
+     it if its class allows; otherwise prefer a `dev`-class
+     environment and flag the choice as an assumption. Never a
+     `prod`-class environment, whatever it is called.
+   - Refuse if no `dev`/`staging` environment exists, if no
+     `./build/deploy` script exists, or if the project has no
+     deployable UI surface. Report the refusal; do not fail the
+     mission.
+   - Build and test the branch head first — `./build/build &&
+     ./build/test` (the tree is clean: every task is committed). A
+     staging environment refuses an untested build; a failure here is
+     reported like a failed deploy.
    - Run `./build/deploy --env=<env> --intent=deploy`. If it succeeds, capture
      the resulting URL/host and add it to the PR body and the
      autonomy report. If it fails, capture the error and report

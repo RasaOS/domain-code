@@ -29,9 +29,19 @@ pass". A phase that ran nothing did not pass.
   An `e2e.md` that exists is never optional. A runtime that exits,
   never gets healthy, or has no start command fails the run.
 - **The runtimes always come down.** Pass, fail, error, Ctrl-C or
-  kill: `./build/test` stops every runtime it started and any test
-  still running. If a port is still held after a run, that is a
-  defect — report it, don't paper over it.
+  kill: `./build/test` runs each runtime's `commands.stop` (if it has
+  one), then stops every process it started and any test still
+  running. If a port is still held after a run, that is a defect —
+  report it, don't paper over it.
+- **Every test has a time limit.** The stamp's `timeout_seconds`, else
+  900s. A test that overruns is killed with everything it started and
+  counts as failed — a hung test can no longer hang the pipeline.
+- **The newest run decides.** The deploy gate reads the most recent
+  test run of this source: a pass followed by a failure (or a run that
+  was killed) is not verified. Re-run `/test` after a fix; never
+  point at an older pass.
+- **One run at a time.** A second `/test` while one runs is refused
+  (`tests/runs/.lock`) — e2e runtimes bind fixed ports.
 - **`/test add` edits the suites, which are the gate.** Adding a test
   to `pre-deploy.md`, `e2e.md` or `smoke.md` changes what every future
   deploy must pass. Say which suite, and why. Never remove a test from
@@ -48,16 +58,18 @@ pass". A phase that ran nothing did not pass.
 | Phase | Suite | What happens |
 |---|---|---|
 | 1 · gate | `prod-gate.md`, else `pre-deploy.md` | Run strict: listing no tests, or every test quarantined, fails. |
-| 2 · e2e | `e2e.md`, if it exists | For each name in its `runtimes:` list, start `.claude/runtimes/<name>.md`'s `commands.start` in its own process group; poll its `health_check` (`url` + `expect_status`, or `command`) until healthy or `timeout_seconds`; run the suite strict; stop everything. |
+| 2 · e2e | `e2e.md`, if it exists | For each name in its `runtimes:` list: run its `depends_on` checks; refuse if its health check already passes (another process owns the port); start `.claude/runtimes/<name>.md`'s `commands.start` in its own process group; poll its `health_check` (`url` + `expect_status`, or `command`) until healthy or `timeout_seconds`. Then run the suite strict, fail it if a runtime died meanwhile, and stop everything. |
 
-Every test sees `RASA_BUILD_ID`, `RASA_TEST_RUN`, and for each e2e
-runtime `RUNTIME_<NAME>_HEALTH_URL`. Output lands in
+Every test sees `RASA_BUILD_ID`, `RASA_TEST_RUN`, `ENVIRONMENT=test`,
+and for each e2e runtime `RUNTIME_<NAME>_HEALTH_URL`. Output lands in
 `tests/runs/TST-…/` beside the record: `gate.log`, `e2e.log`, one
 `runtime-<name>.log` per runtime.
 
 Exit codes: `0` passed · `1` failed (record written) · `2` usage ·
-`3` refused (no build of HEAD, tree differs from HEAD, artifacts
-changed since the build — no record written).
+`3` refused (no build of this source, an uncommitted change anywhere
+in the repository, another test run in progress, artifacts changed
+since the build — no record written). A run killed part-way leaves an
+`aborted` record, which the deploy gate treats as not passed.
 
 ### Reading a failure
 
@@ -70,6 +82,13 @@ changed since the build — no record written).
 - **`not healthy after Ns`** → the app is up but the health check
   never matched: wrong port or path in `health_check.url`, or
   `timeout_seconds` too short for a cold start.
+- **`dependency '<x>' is not available`** → a `depends_on` check
+  failed (the database, the queue); start it, then re-run.
+- **`health check already passes before it was started`** → something
+  else is serving that port — an old run's server, a dev server. Stop
+  it; the run refused to test it instead of the build.
+- **`timed out after Ns`** → a test hung. Raise `timeout_seconds` on
+  its stamp only if it is genuinely that slow.
 - **`no commands.start`** → the stamp only has `commands.dev`. Add
   `start:` — the command that serves the **built** app (its
   production server command: a `docker run …` of the image, the
@@ -92,7 +111,7 @@ and when it must pass.
    | a deployed environment is up and serving | `smoke` | `smoke.md` |
    | today's behavior of untested code is pinned | `characterization` | `pre-deploy.md` — use `/pin-behavior` |
 
-2. **Write the stamp** at `tests/stamps/<YYYY-MM-DD>-<name>.md`, in the
+2. **Write the stamp** at `tests/stamps/YYYYMMDD_NNN_<name>.md`, in the
    one format the pipeline reads (`test-rules.md`):
 
    ```yaml
@@ -100,9 +119,13 @@ and when it must pass.
    name: checkout-e2e
    kind: test
    test_kind: e2e
-   status: active
+   language: typescript
+   location: e2e/checkout.spec.ts
    run_command: "npx playwright test e2e/checkout.spec.ts"
    runtimes_required: [api, web]
+   timeout_seconds: 300          # optional; default 900
+   created: 2026-09-26
+   status: active
    ---
    ```
 

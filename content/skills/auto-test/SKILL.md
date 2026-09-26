@@ -6,10 +6,10 @@ description: Autonomously write and run the tests for a task or feature — deri
 # /auto-test — autonomous testing
 
 Takes a task or feature and tests it — writes the tests, runs
-them, reports. The kit has no non-autonomous `/test` skill;
-test *infrastructure* lives in `test-rules.md` and `tests/`, but
-deciding and writing the tests has been open conversation.
-`/auto-test` is the hands-off path.
+them, reports. `/test` runs the test phase against a recorded
+build and adds a single test to a suite on request; test
+*infrastructure* lives in `test-rules.md` and `tests/`.
+`/auto-test` is the hands-off path for writing a task's tests.
 
 Per CLAUDE.md ethos: a test is a contract, not a rationalization
 of whatever the code already does. `/auto-test` writes tests

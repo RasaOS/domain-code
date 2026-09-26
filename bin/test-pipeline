@@ -193,7 +193,7 @@ expect "no gate suite fails the run" 1 "no gate suite" ./build/test
 
 echo "deploy gate"
 reset; edit tests/stamps/e2e-home.md 'grep -q hello' 'grep -q nope'; q ./build/build; q ./build/test
-expect "staging is refused when the only test failed" 1 "no passing test run" ./build/deploy --env=staging --intent=deploy
+expect "staging is refused when the only test failed" 1 "did not pass" ./build/deploy --env=staging --intent=deploy
 reset; q ./build/build; q ./build/test; echo y > src/other.html; commit "new commit"
 expect "a test of an older commit does not ship the new one" 1 "no passing test run" ./build/deploy --env=staging --intent=deploy
 reset; q ./build/build; q ./build/test; echo tampered >> dist/index.html
@@ -215,6 +215,152 @@ expect "a smoke failure after deploy fails the deploy at 60-verify" 1 "FAILED ve
 rec="$(ls deploys/records/DEP-*staging*.md 2>/dev/null | tail -1)"
 if [ -n "$rec" ] && grep -q "60-verify" "$rec"; then ok "  … and the ship log records failed at 60-verify"
 else bad "  … and the ship log records failed at 60-verify" "record: ${rec:-none}"; fi
+
+echo "hardening (v0.58.0)"
+# timeouts: a hung test is killed at its limit, with what it started
+reset; stamp unit-src unit 'sleep 30 & sleep 30; true'
+edit tests/stamps/unit-src.md 'status: active' 'status: active
+timeout_seconds: 2'
+q ./build/build
+expect "a hung test is killed at its timeout_seconds and fails" 1 "timed out after 2s" ./build/test
+pgrep -f "sleep 30" >/dev/null 2>&1 && { bad "  … and everything it started is killed" "sleep 30 still running"; pkill -f "sleep 30"; } || ok "  … and everything it started is killed"
+# newest test run wins: one commit, a genuine pass then a genuine failure
+reset; stamp unit-src unit 'test -z \"$FAIL_NOW\"'; commit "fail on demand"; q ./build/build
+q ./build/test; env FAIL_NOW=1 ./build/test >/dev/null 2>&1
+expect "an earlier pass does not outvote the newest failed run" 1 "did not pass" ./build/deploy --env=staging --intent=deploy
+q ./build/test
+expect "  … and a fresh pass restores it" 0 "deploy complete" ./build/deploy --env=staging --intent=deploy
+# aborted runs refuse
+reset; q ./build/build; q ./build/test
+edit tests/stamps/e2e-home.md 'curl -sf' 'sleep 60; curl -sf'; q ./build/build
+./build/test > "$T/ab.log" 2>&1 & tp=$!
+n=0; until grep -q "healthy" "$T/ab.log" 2>/dev/null || [ "$n" -ge 60 ]; do sleep 0.5; n=$((n + 1)); done
+kill -TERM "$tp" 2>/dev/null; wait "$tp" 2>/dev/null
+expect "a killed test run leaves an aborted record the gate refuses" 1 "aborted" ./build/deploy --env=staging --intent=deploy
+pkill -f "sleep 60" 2>/dev/null || true
+# locks
+reset; q ./build/build; q ./build/test
+mkdir -p deploys/locks/staging.lock; printf 'pid=%s\nhost=%s\nactor=someone\nstarted=now\n' "$$" "$(hostname)" > deploys/locks/staging.lock/owner
+expect "a deploy is refused while another holds the environment's lock" 1 "another run holds the lock" ./build/deploy --env=staging --intent=deploy
+printf 'pid=999999\nhost=%s\nactor=someone\nstarted=then\n' "$(hostname)" > deploys/locks/staging.lock/owner
+expect "a stale lock (dead pid) is taken over" 0 "took over a stale lock" ./build/deploy --env=staging --intent=deploy
+[ -d deploys/locks/staging.lock ] && bad "  … and released after the deploy" "lock still present" || ok "  … and released after the deploy"
+mkdir -p builds/.lock; printf 'pid=%s\nhost=%s\n' "$$" "$(hostname)" > builds/.lock/owner
+expect "a build is refused while another build runs" 3 "another run holds the lock" ./build/build
+rm -rf builds/.lock
+# staging before prod
+reset; q ./build/build; q ./build/test
+expect "prod refuses a build that was never deployed to staging" 1 "has not been deployed to staging" ./build/deploy --env=prod --intent=release
+q ./build/deploy --env=staging --intent=deploy
+expect "  … and ships it once staging verified it" 0 "was verified in staging" ./build/deploy --env=prod --intent=release
+rec="$(ls deploys/records/DEP-*prod*.md | tail -1)"
+grep -q "^build: BLD-" "$rec" && ok "the deploy record names the build it shipped" || bad "the deploy record names the build it shipped" "$rec"
+# stale outputs
+reset; q ./build/build; echo stale > dist/old.html; q ./build/build
+[ -f dist/old.html ] && bad "a rebuild clears the previous build's outputs" "dist/old.html survived" || ok "a rebuild clears the previous build's outputs"
+# verify retries and rollback
+reset; stamp smoke-live smoke 'test -f live-$ENVIRONMENT/index.html && { test -f '"$T"'/warm || { touch '"$T"'/warm; false; }; }'
+commit "flaky smoke"; rm -f "$T/warm"; q ./build/build; q ./build/test
+expect "smoke is retried while the environment warms up" 0 "attempt 2/" env VERIFY_DELAY=0 ./build/deploy --env=staging --intent=deploy
+reset; q ./build/build; q ./build/test; q ./build/deploy --env=staging --intent=deploy
+printf '#!/usr/bin/env bash\necho "to=$ROLLBACK_TO_DEPLOY tag=$ROLLBACK_TO_TAG" > "%s/rolled"\n' "$T" > build/environments/staging/rollback.sh
+chmod +x build/environments/staging/rollback.sh
+edit tests/stamps/smoke-live.md 'test -f' 'test ! -f'; q ./build/build; q ./build/test
+expect "a failed verification runs rollback.sh and still fails the deploy" 1 "Rolling 'staging' back to DEP-" env VERIFY_DELAY=0 ./build/deploy --env=staging --intent=deploy
+grep -q "to=DEP-" "$T/rolled" 2>/dev/null && ok "  … naming the last verified deploy to go back to" || bad "  … naming the last verified deploy to go back to" "$(cat "$T/rolled" 2>/dev/null)"
+# migrations run before the code, and a failure stops the deploy
+reset; q ./build/build; q ./build/test
+printf '#!/usr/bin/env bash\ntouch migrated\n' > build/environments/staging/migrate.sh; chmod +x build/environments/staging/migrate.sh
+printf '#!/usr/bin/env bash\nset -e\ntest -f migrated\nrm -rf live-staging && cp -r dist live-staging\n' > build/environments/staging/deploy.sh
+printf 'migrated\n' >> .gitignore; commit "migrations"; q ./build/build; q ./build/test
+expect "45-migrate runs before 50-deploy" 0 "migrations applied" ./build/deploy --env=staging --intent=deploy
+printf '#!/usr/bin/env bash\nexit 7\n' > build/environments/staging/migrate.sh; commit "bad migration"; q ./build/build; q ./build/test; rm -rf live-staging
+expect "a failed migration stops the deploy before the code ships" 1 "failed at stage: 45-migrate" ./build/deploy --env=staging --intent=deploy
+[ -d live-staging ] && bad "  … and nothing was deployed" "live-staging exists" || ok "  … and nothing was deployed"
+# ship log fails closed at prod
+reset; q ./build/build; q ./build/test; q ./build/deploy --env=staging --intent=deploy
+cp .claude/skills/deploys/deploys.sh "$T/deploys.sh.bak"; printf '#!/usr/bin/env bash\nexit 1\n' > .claude/skills/deploys/deploys.sh
+expect "prod refuses to ship unrecorded when the ship log cannot open" 1 "refusing an unrecorded production deploy" ./build/deploy --env=prod --intent=release
+cp "$T/deploys.sh.bak" .claude/skills/deploys/deploys.sh
+# e2e dependencies and stop commands
+reset; edit .claude/runtimes/web.md 'health_check:' 'depends_on:
+  - { name: database, check: "false" }
+health_check:'; q ./build/build
+expect "a runtime whose dependency check fails is not started" 1 "dependency 'database' is not available" ./build/test
+server_down "  … and nothing was started"
+reset; edit .claude/runtimes/web.md 'health_check:' "  stop: \"touch $T/stopped\"
+health_check:"; q ./build/build
+python3 - <<'PY'
+p = '.claude/runtimes/web.md'; s = open(p).read()
+i = s.index('  stop:'); line = s[i:s.index('\n', i) + 1]
+s = s.replace(line, '', 1).replace('commands:\n', 'commands:\n' + line, 1)
+open(p, 'w').write(s)
+PY
+commit "stop command"; q ./build/build; rm -f "$T/stopped"; q ./build/test
+[ -f "$T/stopped" ] && ok "teardown runs the runtime's commands.stop" || bad "teardown runs the runtime's commands.stop" "no marker"
+
+echo "adversarial (v0.58.0)"
+# 1. an environment path alias cannot dodge the class
+reset
+expect "--env=./prod is refused as a bad name" 2 "bad environment name" ./build/deploy --env=./prod --intent=deploy
+mkdir -p build/environments/nowhere
+expect "an environment the registry does not list is refused" 2 "not in .claude/environments.json" ./build/deploy --env=nowhere --intent=deploy
+rm -rf build/environments/nowhere
+# 2. an unreadable registry refuses, never guesses
+cp .claude/environments.json "$T/envs.bak"; printf '{ "environments": { "eu": { "class": "prod" }, } }' > .claude/environments.json
+expect "a malformed registry refuses the deploy" 2 "cannot be read" ./build/deploy --env=staging --intent=deploy
+cp "$T/envs.bak" .claude/environments.json
+# 3. artifacts rewritten by a later stage stop the deploy
+reset; printf '#!/usr/bin/env bash\necho "NEVER TESTED" > dist/index.html\n' > build/stages/25-sneak.sh; commit "sneaky stage"
+q ./build/build; q ./build/test
+expect "a stage that rewrites the tested artifacts stops the deploy" 1 "artifacts changed during stage 25-sneak" ./build/deploy --env=staging --intent=deploy
+[ -d live-staging ] && bad "  … before anything ships" "live-staging exists" || ok "  … before anything ships"
+# 4. a stray server on the runtime's port is refused, not tested
+reset; q ./build/build
+( cd "$T" && mkdir -p stray && echo hello > stray/index.html && python3 -m http.server "$PORT" --bind 127.0.0.1 --directory stray >/dev/null 2>&1 ) & stray=$!
+n=0; until curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/" || [ "$n" -ge 40 ]; do sleep 0.25; n=$((n + 1)); done
+expect "a health check that passes before the runtime starts is refused" 1 "already passes before it was started" ./build/test
+kill "$stray" 2>/dev/null; pkill -f "http.server $PORT" 2>/dev/null; sleep 0.5
+# 5. a dry-run is not a staging deploy
+reset; q ./build/build; q ./build/test; q ./build/deploy --env=staging --intent=deploy --dry-run
+expect "a staging --dry-run does not satisfy staging-before-prod" 1 "has not been deployed to staging" ./build/deploy --env=prod --intent=release
+# 6. symlinks cannot smuggle untested content
+reset; edit build/stages/20-build.sh 'echo "dist" >>' 'ln -s ../src dist/assets; echo "dist" >>'
+expect "an artifact symlink pointing outside the artifact fails the build" 1 "points outside it" ./build/build
+# 8. ids order within one second
+. build/gates/verify-lib.sh
+a="$(vl_new_record "$T/ids" TST)"; b="$(vl_new_record "$T/ids" TST)"; c="$(vl_new_record "$T/ids" TST)"
+[ "$(ls "$T/ids"/TST-*.md | tail -1)" = "$c" ] && ok "records made in one second sort in creation order" || bad "records made in one second sort in creation order" "$(ls "$T/ids")"
+# 10. monorepo: an uncommitted change outside the project is dirty
+M="$T/mono"; mkdir -p "$M/app" "$M/shared" && ( cd "$M" && git init -q -b main . && git config user.email t@example.com && git config user.name tester && echo v1 > shared/lib.txt && ( cd app && "$ELEMENT/bin/init" . </dev/null >/dev/null 2>&1 ) && printf 'app/kit/\n' > .gitignore && git add -A && git commit -qm mono )
+echo v2 > "$M/shared/lib.txt"
+expect "monorepo: an uncommitted edit outside the project refuses the build" 3 "shared/lib.txt" "$M/app/build/build"
+# 13. edits hidden with --skip-worktree are still dirty
+reset; git update-index --skip-worktree src/index.html; echo hidden >> src/index.html
+expect "an edit hidden with --skip-worktree refuses the build" 3 "hidden" ./build/build
+git update-index --no-skip-worktree src/index.html
+# 14. a path containing = is a path, not a label
+reset; edit build/stages/20-build.sh 'echo "dist" >>' 'echo "dist/app-build=42.tar.gz" >>'
+expect "a missing path containing '=' fails instead of passing as a label" 1 "does not exist" ./build/build
+# source fingerprint: committing the chain's records does not invalidate it
+reset; q ./build/build; q ./build/test; git add -A builds tests/runs; git commit -qm "commit the records"
+expect "committing the records keeps the build verified (source fingerprint)" 0 "reusing BLD-" ./build/deploy --env=staging --intent=deploy
+# BUILD_TAG is unique per build
+reset; q ./build/build; t1="$(ls builds/records/BLD-*.md | tail -1)"; q ./build/build; t2="$(ls builds/records/BLD-*.md | tail -1)"
+[ "$(sed -n 's/^build_tag: //p' "$t1")" != "$(sed -n 's/^build_tag: //p' "$t2")" ] && ok "two builds of one commit get different BUILD_TAGs" || bad "two builds of one commit get different BUILD_TAGs" "same tag"
+# artifact-less builds refused at staging
+reset; edit build/stages/20-build.sh 'echo "dist" >> "$BUILD_ARTIFACTS"' 'true'; q ./build/build; q ./build/test
+expect "a build that declared no artifacts is refused at staging" 1 "declared no artifacts" ./build/deploy --env=staging --intent=deploy
+reset; edit build/stages/20-build.sh 'echo "dist" >> "$BUILD_ARTIFACTS"' 'echo "source=commit" >> "$BUILD_ARTIFACTS"'; q ./build/build; q ./build/test
+expect "  … unless it declared source=commit on purpose" 0 "deploy complete" ./build/deploy --env=staging --intent=deploy
+# --skip-tests skips only the test stage
+reset; printf '#!/usr/bin/env bash\necho ATTEST-RAN\n' > build/stages/55-attest.sh; commit attest
+expect "--skip-tests does not skip a stage merely containing 'test'" 0 "ATTEST-RAN" ./build/deploy --env=local --intent=deploy --skip-tests
+# approval kind is recorded truthfully
+reset; q ./build/build; q ./build/test; q ./build/deploy --env=staging --intent=deploy
+q ./build/deploy --env=prod --intent=release
+grep -q "^approval: forced" "$(ls deploys/records/DEP-*prod*.md | tail -1)" && ok "a FORCE_APPROVAL prod release records approval: forced" || bad "a FORCE_APPROVAL prod release records approval: forced" "$(grep approval "$(ls deploys/records/DEP-*prod*.md | tail -1)")"
+grep -q "^approval: none" "$(ls deploys/records/DEP-*staging*.md | tail -1)" && ok "a staging deploy records approval: none" || bad "a staging deploy records approval: none" "wrong"
 
 echo
 echo "$pass passed, $fail failed"

@@ -47,6 +47,17 @@ set -euo pipefail
 ENV_NAME="${1:-}"
 INTENT="${2:-}"
 
+# An environment name is a plain name. `./prod` resolved to environments/prod/
+# while the registry lookup and the name heuristic both missed it — every gate
+# fell to "unclassified" and an untested change reached production.
+case "$ENV_NAME" in
+  [A-Za-z0-9]*) ;;
+  *) echo "✗ class-guard: bad environment name '$ENV_NAME' — letters, digits, . _ - only, starting with a letter or digit." >&2; exit 2 ;;
+esac
+case "$ENV_NAME" in
+  *[!A-Za-z0-9._-]*) echo "✗ class-guard: bad environment name '$ENV_NAME' — letters, digits, . _ - only." >&2; exit 2 ;;
+esac
+
 if [ -z "$ENV_NAME" ] || [ -z "$INTENT" ]; then
   echo "usage: class-guard.sh <env> <intent>   # intent = deploy | release" >&2
   exit 2
@@ -67,9 +78,21 @@ CLASS=""
 SOURCE=""
 
 if [ -f "$ENV_SH" ]; then
-  # `class` exits 3 for unclassified and 2 for an unknown env; both leave
-  # CLASS to the fallback below rather than aborting under `set -e`.
-  CLASS="$(bash "$ENV_SH" class "$ENV_NAME" 2>/dev/null || true)"
+  # `class` exits 1 when the registry cannot be read, 2 for an environment
+  # it does not list, 3 for one it lists without a class. The first two used
+  # to fall to the name heuristic — so one trailing comma in the registry, or
+  # a name the registry has never heard of, disarmed every gate. Both now
+  # refuse. Only 3 (listed, unclassified) takes the heuristic below.
+  set +e
+  CLASS="$(bash "$ENV_SH" class "$ENV_NAME" 2>/dev/null)"; CRC=$?
+  set -e
+  case "$CRC" in
+    0|3) ;;
+    2) echo "✗ class-guard: '$ENV_NAME' is not in the environment registry (.claude/environments.json) — declare it with its class first." >&2; exit 1 ;;
+    *) echo "✗ class-guard: the environment registry (.claude/environments.json) cannot be read — fix it; refusing to guess the class." >&2
+       bash "$ENV_SH" class "$ENV_NAME" 2>&1 >/dev/null | sed 's/^/    /' >&2 || true
+       exit 1 ;;
+  esac
   SOURCE="registry"
 fi
 

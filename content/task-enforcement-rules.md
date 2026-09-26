@@ -114,14 +114,14 @@ ledger.** Not "no change of any kind is ever unaudited."
 
 ## Interaction with the deploy gates
 
-`git-clean.sh` excludes `tasks/`, `deploys/` and `build/deploy-log.md`
-for non-production classes. These are records the toolkit writes as you
-work — and the last two are written **by the deploy pipeline itself**, so
-without the exclusion the first staging deploy succeeds, writes its
-record, and the second fails the gate on the evidence of the first.
-
-For `ENV_CLASS=prod` the check is unfiltered. `BOOKKEEPING_STRICT=1`
-makes it unfiltered everywhere.
+`git-clean.sh` always excludes the records the pipeline writes itself —
+`deploys/`, `builds/`, `tests/runs/`, `build/deploy-log.md` — because
+without the exclusion the first deploy writes its record and the second
+fails the gate on the evidence of the first. `tasks/` is excluded below
+production class only: a production release should not carry
+uncommitted task churn. `BOOKKEEPING_STRICT=1` excludes nothing. The same
+record directories are `exempt_meta` in `task-enforcement.json`, so
+committing them mints no task.
 
 ## Toggle
 

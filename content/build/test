@@ -57,6 +57,7 @@ done
 refuse() { echo "✗ test refused: $*" >&2; exit 3; }
 
 SHA="$(vl_head)" || refuse "this repository has no commits."
+SRC="$(vl_source)" || refuse "cannot fingerprint HEAD's source."
 DIRTY="$(vl_source_dirty)"
 [ -z "$DIRTY" ] || refuse "the tree differs from HEAD — commit, then ./build/build again.
 $(echo "$DIRTY" | sed 's/^/    /')"
@@ -66,13 +67,16 @@ if [ -n "$WANT_BUILD" ]; then
   BREC="$VL_BUILDS_DIR/$WANT_BUILD.md"
   [ -f "$BREC" ] || refuse "no build record $WANT_BUILD."
   [ "$(vl_field "$BREC" status)" = "success" ] || refuse "$WANT_BUILD did not succeed."
-  [ "$(vl_field "$BREC" sha)" = "$SHA" ] || refuse "$WANT_BUILD built $(vl_field "$BREC" sha | cut -c1-12), not HEAD ${SHA:0:12}."
+  [ "$(vl_field "$BREC" source)" = "$SRC" ] || refuse "$WANT_BUILD built different source than HEAD (commit $(vl_field "$BREC" sha | cut -c1-12))."
 else
-  BREC="$(vl_latest "$VL_BUILDS_DIR" BLD "$SHA" success)" \
+  BREC="$(vl_latest "$VL_BUILDS_DIR" BLD "$SRC" success)" \
     || refuse "no successful build of HEAD (${SHA:0:12}) — run ./build/build first."
 fi
 BID="$(basename "$BREC" .md)"
 vl_build_still_matches "$BREC" || refuse "$BID's artifacts are not what was built — run ./build/build again."
+
+# One test run at a time: e2e runtimes bind fixed ports.
+vl_lock tests/runs/.lock test || exit 3
 
 ACTOR="$(rasa_actor)" || { echo "✗ cannot record who is testing — fix RASA_ACTOR or git user.name." >&2; exit 2; }
 REC="$(vl_new_record "$VL_RUNS_DIR" TST)" || exit 1
@@ -93,8 +97,23 @@ GATE_RESULT="not-run"; E2E_RESULT="none"; GATE_SUITE=""; REASON=""; RUNTIMES_USE
 # ─── runtime lifecycle ─────────────────────────────────────────────────────
 PIDS=""
 SUITE_PID=""
+STOPS=""          # runtimes whose stamp declares commands.stop
 teardown() {
-  local p
+  local p r stop
+  # A runtime that detaches (docker compose up -d, a daemon) outlives its
+  # process group: its own commands.stop is the only thing that brings it
+  # down. Run each, bounded, before killing the groups.
+  for r in $STOPS; do
+    stop="$(child ".claude/runtimes/$r.md" commands stop)"
+    [ -n "$stop" ] || continue
+    echo "  ■ stop $r: $stop"
+    ( bash -c "$stop" >> "$OUT/runtime-$r.log" 2>&1 ) &
+    p=$!
+    local n=0
+    while kill -0 "$p" 2>/dev/null && [ "$n" -lt 60 ]; do sleep 0.5; n=$((n + 1)); done
+    kill -KILL "$p" 2>/dev/null || true
+  done
+  STOPS=""
   if [ -n "$SUITE_PID" ]; then
     kill -TERM -- "-$SUITE_PID" 2>/dev/null || kill -TERM "$SUITE_PID" 2>/dev/null || true
     SUITE_PID=""
@@ -109,8 +128,15 @@ teardown() {
   done
   PIDS=""
 }
-trap teardown EXIT
-trap 'teardown; exit 130' INT TERM
+# A run killed part-way still leaves a record — status aborted — rather than
+# an empty reserved file that means nothing.
+abort_record() {
+  [ -n "${REC:-}" ] && [ ! -s "$REC" ] || return 0
+  printf -- '---\nkind: test-run\nid: %s\nstatus: aborted\nsha: %s\nsource: %s\nbuild: %s\nreason: interrupted by a signal\n---\n' \
+    "$TID" "$SHA" "$SRC" "$BID" | rfm_write_atomic "$REC" 2>/dev/null || true
+}
+trap 'teardown; vl_unlock' EXIT
+trap 'teardown; abort_record; vl_unlock; exit 130' INT TERM
 
 unquote() {
   case "$1" in
@@ -121,9 +147,48 @@ unquote() {
 }
 child() { unquote "$(rfm_get_child "$1" "$2" "$3" 2>/dev/null || true)"; }
 
+# depends_checks <runtime-stamp> — one `name<TAB>check` line per depends_on
+# entry that declares a check. A plain function, not a heredoc inside $( ):
+# bash 3.2 misparses the latter.
+depends_checks() {
+  python3 - "$1" <<'PY'
+import re, sys
+lines = open(sys.argv[1], encoding="utf-8", errors="replace").read().splitlines()
+if not lines or lines[0].strip("\ufeff").strip() != "---":
+    sys.exit(0)
+inside = False
+for ln in lines[1:]:
+    if ln.strip() == "---":
+        break
+    if re.match(r"^depends_on\s*:", ln):
+        inside = True
+        continue
+    if inside and re.match(r"^\S", ln):
+        break
+    if inside:
+        m = re.search(r"check:\s*(\"([^\"]*)\"|'([^']*)')", ln)
+        n = re.search(r"name:\s*([A-Za-z0-9_.-]+)", ln)
+        if m:
+            print("%s\t%s" % (n.group(1) if n else "?", m.group(2) or m.group(3)))
+PY
+}
+
 # start_runtime <name> — start it, wait for health; rc 1 with a reason on stderr.
+healthy() {  # healthy <url> <expect> <cmd> — one probe
+  if [ -n "$3" ]; then bash -c "$3" >/dev/null 2>&1
+  else [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$1" 2>/dev/null || true)" = "$2" ]
+  fi
+}
+
 start_runtime() {
   local name="$1" stamp start url expect timeout hcmd pid n var
+  case "$name" in
+    [a-z0-9]*) ;;
+    *) echo "runtime '$name': bad name — lowercase letters, digits, - and _ only" >&2; return 1 ;;
+  esac
+  case "$name" in
+    *[!a-z0-9_-]*) echo "runtime '$name': bad name — lowercase letters, digits, - and _ only" >&2; return 1 ;;
+  esac
   stamp=".claude/runtimes/$name.md"
   [ -f "$stamp" ] || { echo "runtime '$name': no stamp at $stamp" >&2; return 1; }
   start="$(child "$stamp" commands start)"
@@ -138,12 +203,40 @@ start_runtime() {
     echo "runtime '$name': health_check.url needs curl, which is not installed" >&2; return 1
   fi
 
+  # depends_on: each declared check must pass before the runtime starts —
+  # a missing database is named here, not discovered as a failing test.
+  local deps
+  deps="$(depends_checks "$stamp")"
+  if [ -n "$deps" ]; then
+    local dname dcheck
+    while IFS="$(printf '\t')" read -r dname dcheck; do
+      [ -n "$dcheck" ] || continue
+      if bash -c "$dcheck" >/dev/null 2>&1; then
+        echo "    ✓ depends_on $dname ($dcheck)"
+      else
+        echo "runtime '$name': dependency '$dname' is not available — its check failed: $dcheck" >&2
+        return 1
+      fi
+    done <<EOF_DEPS
+$deps
+EOF_DEPS
+  fi
+
+  # Something ALREADY answering the health check is not our runtime — a stale
+  # server on the port would pass every e2e test while the build under test
+  # failed to bind. Refuse rather than test the wrong thing.
+  if healthy "$url" "$expect" "$hcmd"; then
+    echo "runtime '$name': its health check already passes before it was started — another process is serving ${url:-it}. Stop it first." >&2
+    return 1
+  fi
+
   echo "  ▶ start $name: $start"
   set -m
   bash -c "$start" > "$OUT/runtime-$name.log" 2>&1 &
   pid=$!
   set +m
   PIDS="$PIDS $pid"
+  STOPS="$STOPS $name"
   if [ -n "$url" ]; then
     var="RUNTIME_$(printf '%s' "$name" | tr 'a-z-' 'A-Z_')_HEALTH_URL"
     export "$var=$url"
@@ -156,11 +249,8 @@ start_runtime() {
       tail -20 "$OUT/runtime-$name.log" | sed 's/^/      /' >&2
       return 1
     fi
-    if [ -n "$hcmd" ]; then
-      bash -c "$hcmd" >/dev/null 2>&1 && { echo "    ✓ healthy ($hcmd)"; return 0; }
-    else
-      [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$url" 2>/dev/null || true)" = "$expect" ] \
-        && { echo "    ✓ healthy ($url → $expect)"; return 0; }
+    if healthy "$url" "$expect" "$hcmd"; then
+      echo "    ✓ healthy (${hcmd:-$url → $expect})"; return 0
     fi
     sleep 0.5; n=$((n + 1))
   done
@@ -177,7 +267,7 @@ start_runtime() {
 run_suite() {
   local rc
   set -m
-  ( TEST_SUITE="$1" TEST_STRICT=1 ENV_CLASS="test" bash "$BUILD_DIR/stages/30-test.sh" test 2>&1 | tee "$OUT/$2.log"
+  ( ENVIRONMENT=test TEST_SUITE="$1" TEST_STRICT=1 ENV_CLASS="test" bash "$BUILD_DIR/stages/30-test.sh" test 2>&1 | tee "$OUT/$2.log"
     exit "${PIPESTATUS[0]}" ) &
   SUITE_PID=$!
   set +m
@@ -206,6 +296,7 @@ if [ "$GATE_RESULT" = "passed" ] && [ -f tests/suites/e2e.md ]; then
   set +e
   RUNTIMES="$(suite_list tests/suites/e2e.md runtimes)"; LRC=$?
   set -e
+  case "$RUNTIMES" in *[*?[]*) LRC=3 ;; esac   # never glob-expand a runtime name
   if [ "$LRC" -ne 0 ]; then
     E2E_RESULT="error"; REASON="tests/suites/e2e.md has a runtimes: list this parser cannot read"
   else
@@ -236,6 +327,13 @@ if [ "$GATE_RESULT" = "passed" ] && [ -f tests/suites/e2e.md ]; then
     if [ "$E2E_RESULT" = "passed" ]; then
       run_suite e2e e2e || { E2E_RESULT="failed"; REASON="e2e suite failed"; }
     fi
+    # Every runtime must still be up when the suite ends: one that died
+    # mid-run means the later tests hit something else, or nothing.
+    if [ "$E2E_RESULT" = "passed" ]; then
+      for p in $PIDS; do
+        kill -0 "$p" 2>/dev/null || { E2E_RESULT="error"; REASON="a runtime exited during the e2e suite — see tests/runs/$TID/runtime-*.log"; }
+      done
+    fi
   fi
   teardown
   [ -z "$RUNTIMES_USED" ] || echo "  ■ stopped:$RUNTIMES_USED"
@@ -254,6 +352,7 @@ rfm_check actor "$ACTOR" || exit 2
   echo "id: $TID"
   echo "status: $STATUS"
   echo "sha: $SHA"
+  echo "source: $SRC"
   echo "build: $BID"
   echo "artifacts_digest: $(vl_field "$BREC" artifacts_digest)"
   echo "gate_suite: ${GATE_SUITE:-none}"

@@ -11,7 +11,9 @@
     "exempt_meta": [
       ".claude/**",
       "tasks/**",
-      "deploys/**"
+      "deploys/**",
+      "builds/**",
+      "tests/runs/**"
     ],
 
     "exempt_docs": [
@@ -27,7 +29,9 @@
       ".claude/environments.json",
       ".claude/env-transport.md",
       "build/environments/*/env.sh",
-      "build/environments/*/deploy.sh"
+      "build/environments/*/deploy.sh",
+      "build/environments/*/migrate.sh",
+      "build/environments/*/rollback.sh"
     ],
 
     "_audit_anyway_doc": "These ship NON-EMPTY on purpose. The exemptions exist so touching a README is not a task — not so the files that define what production IS can be edited untracked. .claude/environments.json holds each environment's class; an agent flipping \"class\": \"prod\" to \"staging\" there would let the next /deploy reach production through a gate working exactly as designed, with no task, no ledger row, and nothing for the commit-time reconciler to catch. Add paths, do not remove these without deciding you are fine with that."

@@ -9,6 +9,13 @@ The first of three phases: **`/build` → `/test` → `/deploy`**
 (or `/release`). Each writes a record the next one checks, so a
 deploy can only ship what was built from a commit and then tested.
 
+**Why it exists.** A deploy used to rebuild the app from scratch, so
+what reached production was a *different* build from the one that was
+tested. `/build` builds **once** and writes down exactly what it made:
+the source it built (a fingerprint of the committed tree), a unique
+`BUILD_TAG`, and a checksum of every output. `/test` tests that build,
+and `/deploy` ships that same build — never a new one.
+
 Per CLAUDE.md: honest reporting. Surface the actual output, not a
 paraphrase. Don't claim "build clean" if there are warnings.
 
@@ -31,21 +38,39 @@ the unconfigured stub. Never report a compile check as "built".
 ./build/build --env=<env>     # a build that bakes in one environment's config
 ```
 
-It refuses (exit 3) a repository with no commits and a tree that
-differs from HEAD — commit or stash first; never work around it.
-Use `--env` only when the build really is environment-specific
-(e.g. a web bundle with the API URL compiled in): the record then
-says `built_for: <env>` and the deploy gate refuses to ship it
-anywhere else.
+It refuses (exit 3) a repository with no commits, **any** uncommitted
+change in the repository — in a monorepo that includes shared folders
+outside this project, and edits hidden with `--skip-worktree` — and a
+second build while one is running (`builds/.lock`). Commit or stash
+first; never work around it.
+
+Before running `20-build.sh` it removes the outputs the previous build
+declared (only git-ignored paths inside the project), so a stale file
+left in `dist/` cannot be fingerprinted into this build.
+
+Use `--env` only when the build really is environment-specific (e.g. a
+web bundle with the API URL compiled in): it loads that environment's
+`env.sh`, exactly as a deploy would, the record says `built_for: <env>`,
+and the deploy gate refuses to ship it anywhere else. An
+environment-neutral build (the default) must not depend on `env.sh`
+variables.
 
 ### Step 2 — Check what it declared
 
 `20-build.sh` declares its outputs by appending to
-`$BUILD_ARTIFACTS` (`echo dist >> "$BUILD_ARTIFACTS"`, or
-`image=<id>` for a container). A build that declares nothing is
-bound to its commit only — `build/build` says so. When that
-happens on a project that does produce an artifact, say so and
-offer the one-line fix to `20-build.sh`.
+`$BUILD_ARTIFACTS` — `echo dist >> "$BUILD_ARTIFACTS"` for a file or
+directory, `image=<id>` for a container. Tag images with `$BUILD_TAG`
+(unique per build); `40-publish` pushes the same tag.
+
+- **Declared nothing** → staging and production refuse the build: nothing
+  would prove what ships is what was tested. Offer the one-line fix. A
+  deploy that genuinely builds from source itself declares that on
+  purpose: `echo source=commit >> "$BUILD_ARTIFACTS"`.
+- **A symlink inside an output** must point inside that same output
+  (where its target is fingerprinted); one pointing anywhere else fails
+  the build. So does anything that is not a file, directory or symlink.
+- **A path containing `=`** is a path; only `label=value` shapes like
+  `image=sha256:…` are labels.
 
 A build that writes files git does not ignore **fails**: the
 source it was built from changed. The fix is `.gitignore`, not
@@ -53,8 +78,8 @@ deleting the files.
 
 ### Step 3 — Report
 
-Build id, commit, duration, artifacts and fingerprint, and the
-next step: `/test`.
+Build id, commit, `BUILD_TAG`, duration, artifacts and fingerprint,
+and the next step: `/test`.
 
 ## Compile check (no pipeline)
 

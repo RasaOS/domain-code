@@ -49,11 +49,12 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-case "$BUILT_FOR" in
-  */*|.*) echo "error: bad --env '$BUILT_FOR'" >&2; exit 2 ;;
-esac
+if [ -n "$BUILT_FOR" ] && [[ ! "$BUILT_FOR" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  echo "error: bad --env '$BUILT_FOR' — letters, digits, . _ - only" >&2; exit 2
+fi
 
 SHA="$(vl_head)" || { echo "✗ build refused: this repository has no commits." >&2; exit 3; }
+SRC="$(vl_source)" || { echo "✗ build refused: cannot fingerprint HEAD's source." >&2; exit 3; }
 DIRTY="$(vl_source_dirty)"
 if [ -n "$DIRTY" ]; then
   {
@@ -64,8 +65,25 @@ if [ -n "$DIRTY" ]; then
   exit 3
 fi
 
+# --env builds in that environment's configuration, exactly as ./build/deploy
+# would: its env.sh is sourced into this shell. (The paths are re-derived
+# afterwards — an env.sh must not be able to redirect them; see build/deploy.)
+if [ -n "$BUILT_FOR" ]; then
+  ENV_DIR="$BUILD_DIR/environments/$BUILT_FOR"
+  [ -d "$ENV_DIR" ] || { echo "✗ build refused: no environment '$BUILT_FOR' under build/environments/." >&2; exit 3; }
+  # shellcheck disable=SC1090,SC1091
+  [ -f "$ENV_DIR/env.sh" ] && . "$ENV_DIR/env.sh"
+  BUILD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  PROJECT_DIR="$(cd "$BUILD_DIR/.." && pwd)"
+  cd "$PROJECT_DIR"
+  export ENVIRONMENT="$BUILT_FOR"
+fi
+
 STAGE="$BUILD_DIR/stages/20-build.sh"
 [ -f "$STAGE" ] || { echo "✗ build refused: $STAGE is missing — run /setup-deploy." >&2; exit 3; }
+
+vl_lock builds/.lock build || exit 3
+trap vl_unlock EXIT
 
 ACTOR="$(rasa_actor)" || { echo "✗ cannot record who is building — fix RASA_ACTOR or git user.name." >&2; exit 2; }
 BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
@@ -75,14 +93,47 @@ MANIFEST="${REC%.md}.artifacts"
 LOG="${REC%.md}.log"
 : > "$MANIFEST"
 
+# Start from nothing: remove what the previous build declared, so stale files
+# left in an ignored output directory (a deleted page still in dist/) cannot
+# be fingerprinted into THIS build. Only a path that is entirely git-ignored,
+# inside the project, and not the project itself is ever removed — a declared
+# path that holds tracked files is left alone and named.
+PREV="$(ls "$VL_BUILDS_DIR"/BLD-*.artifacts 2>/dev/null | grep -v "^$MANIFEST\$" | tail -1 || true)"
+if [ -n "$PREV" ]; then
+  while IFS= read -r p; do
+    case "$p" in ''|'#'*|*=*|.|./|/*|..|../*|*/../*) continue ;; esac
+    [ -e "$p" ] || continue
+    if [ -n "$(git ls-files -- "$p" 2>/dev/null | head -1)" ]; then
+      echo "  ⚠ not clearing '$p' before the build: it holds tracked files" >&2
+      continue
+    fi
+    git check-ignore -q -- "$p" 2>/dev/null || { echo "  ⚠ not clearing '$p': it is not git-ignored" >&2; continue; }
+    rm -rf -- "$p"
+  done < "$PREV"
+fi
+
 export BUILD_ID="$ID" BUILD_ARTIFACTS="$PROJECT_DIR/$MANIFEST"
-export DEPLOY_TAG="${DEPLOY_TAG:-$(git describe --tags --always 2>/dev/null || echo "$SHA")}"
+# BUILD_TAG names THIS build's artifacts — tag images with it. It is recorded,
+# and ./build/deploy exports the same value when it ships this build, so what
+# 40-publish pushes is what 20-build made. DEPLOY_TAG (the per-environment
+# release label) is set to it here only for older stages that still use it.
+ENV_SH=".claude/skills/environment/environment.sh"
+BUILD_TAG=""
+[ -n "$BUILT_FOR" ] && [ -f "$ENV_SH" ] && BUILD_TAG="$(bash "$ENV_SH" version "$BUILT_FOR" 2>/dev/null || true)"
+BUILD_TAG="${BUILD_TAG:-$(git describe --tags --always 2>/dev/null || echo "${SHA:0:12}")}"
+# Unique per BUILD, not per commit: two builds of one commit tagged alike let
+# an untested rebuild retag the image a tested build's record still names.
+BUILD_TAG="$BUILD_TAG-$(printf '%s' "$ID" | tr 'A-Z' 'a-z')"
+case "$BUILD_TAG" in *[!A-Za-z0-9._+-]*) BUILD_TAG="${SHA:0:12}-$(printf '%s' "$ID" | tr 'A-Z' 'a-z')" ;; esac
+export BUILD_TAG
+export DEPLOY_TAG="${DEPLOY_TAG:-$BUILD_TAG}"
 STARTED="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 T0=$(date +%s)
 
 echo "════════════════════════════════════════════════════════════"
 echo "  build  $ID"
 echo "  commit $SHA ($BRANCH)"
+echo "  tag    $BUILD_TAG"
 [ -n "$BUILT_FOR" ] && echo "  for    $BUILT_FOR (environment-specific build)"
 echo "════════════════════════════════════════════════════════════"
 
@@ -125,8 +176,10 @@ done
   echo "id: $ID"
   echo "status: $STATUS"
   echo "sha: $SHA"
+  echo "source: $SRC"
   echo "branch: $BRANCH"
   echo "built_for: ${BUILT_FOR:-any}"
+  echo "build_tag: $BUILD_TAG"
   echo "actor: $ACTOR"
   echo "started: $STARTED"
   echo "duration_s: $DURATION"

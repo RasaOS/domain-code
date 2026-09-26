@@ -24,14 +24,158 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.58.0 — 2026-09-26
+
+**Hardening the build → test → deploy chain.** Three independent audits, run
+against real installs, found the failures below: an adversarial one, a
+production-practice one, and a new-consumer one. Two of them bypassed every
+gate. Every finding was reproduced before it was fixed, and each fix has a
+regression case. ⚠ **BREAKING** for staging and prod deploys.
+
+To migrate:
+1. Run `/build` and `/test` again. Records from v0.57.0 carry no source fingerprint, so the gate no longer accepts them.
+2. Before your next prod release, deploy that build to a staging-class environment. If you declare no staging environment, you get a warning instead.
+3. If `20-build.sh` declares no outputs, add `echo <output> >> "$BUILD_ARTIFACTS"`, or `echo source=commit >> "$BUILD_ARTIFACTS"` if your deploy builds from source. Staging now refuses a build that declares nothing.
+4. Tag images with `$BUILD_TAG` in `20-build` and push the same tag in `40-publish`.
+5. Deploy only to environment names listed in `.claude/environments.json`.
+6. Add `builds/**` and `tests/runs/**` to `exempt_meta` in `.claude/task-enforcement.json`. The file is project-owned, so the new default only reaches new installs.
+
+**Critical: two ways around every gate**
+- **`--env=./prod`.** The path resolved to `environments/prod/`, but the
+  registry lookup and the name heuristic both missed it. The environment
+  counted as `unclassified`, so class-guard, verified-build, approval and the
+  smoke requirement all passed or only warned, and an untested dirty change
+  reached prod. Now:
+  - An environment name must match `[A-Za-z0-9][A-Za-z0-9._-]*`. This is
+    checked in the driver, in `class-guard`, and in `build --env`.
+  - A name the registry does not list is refused.
+- **An unreadable registry.** One trailing comma in `environments.json`, and
+  every lookup fell back to the name heuristic. An environment named `eu` with
+  `class: prod` became unclassified, and prod shipped with zero staging
+  deploys. Now an unreadable registry is refused everywhere; the pipeline
+  never guesses a class.
+
+**The chain keys on the source, not the commit.**
+- Every record carries `source:`, a fingerprint of HEAD's committed tree
+  with the bookkeeping directories left out.
+- Before this, committing the records, or `/release`'s merge commit, moved
+  HEAD, and the next deploy was refused. Now both leave the fingerprint
+  unchanged, and any change to shipped source still invalidates it.
+
+**What the gates now enforce**
+- **Newest test run wins.** An earlier pass never outvotes a later failure. A
+  run killed part-way writes an `aborted` record, which counts as not passed.
+- **Record ordering.** Ids always carry a two-digit sequence (`-01`, `-02`).
+  An unsuffixed first id sorted after its own `-2`, so "newest" picked the
+  oldest record.
+- **Staging before prod.** The new `gates/promoted-build.sh` gives prod only
+  a build that has a successful, non-dry-run deploy to a staging-class
+  environment. `/release` now stages the release commit before promoting it,
+  and deploy records name `build`, `test` and `artifacts_digest`.
+- **Artifacts re-checked after every stage.** They were checked once at the
+  gate, so a later stage or a background process could rewrite them and ship
+  untested files. A deploy of a verified build also holds `builds/.lock`.
+- **Declared outputs are required.** A build that declares none is refused
+  at staging and prod, unless it declares `source=commit` on purpose.
+- **Fingerprint hardening.**
+  - A symlink inside an artifact must point inside that artifact; one to
+    `../vendor` let untested code ship.
+  - FIFOs and devices are refused; they used to hang every phase.
+  - Unreadable directories fail loudly, and file modes and empty directories
+    now count.
+  - A path containing `=` is a path; only `label=value` shapes are labels.
+- **Dirty checks cover the whole repository.** This includes shared folders
+  in a monorepo, and edits hidden with `--skip-worktree` or
+  `--assume-unchanged`. `git-clean.sh` also anchors its bookkeeping
+  exclusions to the install's path; before this, a subfolder install failed
+  its own gate.
+- **Exact stage routing.** `--skip-tests` skips exactly `NN-test`; it used to
+  skip `55-attest`. A verified build skips exactly `NN-build`.
+- **`BUILD_TAG` is unique per build**, so two builds of one commit can't
+  share an image tag. `build --env` sources that environment's `env.sh`, as a
+  deploy does.
+
+**Running things**
+- **Per-test timeouts.** The stamp's `timeout_seconds` applies, default 900.
+  An overrunning test is killed with its whole process group. This is polled,
+  because stock macOS has no `timeout`.
+- **Locks.** One build, one test run, and one deploy per environment at a
+  time. A lock left by a process that is gone is taken over atomically.
+- **e2e safeguards.**
+  - `depends_on` checks run before a runtime starts.
+  - A runtime whose health check already passes is refused; a stale server
+    on the port used to pass the whole e2e suite.
+  - A runtime that dies during the suite fails it.
+  - `commands.stop` runs at teardown (for `docker compose up -d`).
+  - Runtime names are validated.
+- **Post-deploy.** `60-verify` retries smoke while the service warms up
+  (`VERIFY_ATTEMPTS`, `VERIFY_DELAY`). If smoke still fails, it runs the
+  environment's `rollback.sh` with the last verified deploy's build and tag,
+  excluding dry-runs and the failing build.
+- **Migrations.** The new `stages/45-migrate.sh` runs
+  `environments/<env>/migrate.sh` after publish and before the code deploys.
+- **The ship log fails closed at prod.** A production deploy that cannot be
+  recorded is refused instead of shipped unrecorded.
+- **Approval kind is recorded truthfully**: `invocation`, `tty`, `forced`,
+  `ci`, `token`, or `none`. It used to record `invocation` for everything.
+- **Stale output is cleared.** `./build/build` removes the previous build's
+  declared outputs (git-ignored paths only) before building.
+- **Empty stage list.** An empty `stages/` is refused rather than crashing
+  bash 3.2.
+
+**Consumers and docs**
+- **`/release` reaches prod.** It uses `FORCE_APPROVAL=1
+  DEPLOY_APPROVAL=invocation`, because invocation is its consent and agents
+  have no terminal. It also stages first, checks cleanliness with
+  `git-clean`, and no longer describes the one-shot flow.
+- **Templates reach existing installs.** The `_template-*` test and runtime
+  templates are now `file-replace`, so `/sync` delivers them. `bin/init`
+  honours `overrides[]` for seed files.
+- **Migration steps at the point of decision.** `sync.sh plan` prints a
+  breaking release's "To migrate" steps.
+- **`20-build.sh` and `40-publish.sh` stubs** document `$BUILD_ARTIFACTS` and
+  `$BUILD_TAG`.
+- **Task enforcement.** The template exempts `builds/**` and `tests/runs/**`,
+  and audits `migrate.sh` and `rollback.sh` alongside `deploy.sh`.
+- **Stale statements fixed**, including:
+  - `--intent` being "derived until v0.45";
+  - pipeline run order and folder tree;
+  - `pipeline-config.toml` keys nothing reads (now marked advisory);
+  - the AKS example's double approval prompt;
+  - `/setup-deploy`'s commit and approval contradictions;
+  - `/mission`'s preview deploy, which now builds and tests first and picks
+    environments by class;
+  - stamp filenames;
+  - the `smoke.md` shape;
+  - the git-clean descriptions;
+  - `/auto-test`, `/auto-develop`, `/runtime`, and README `web-deploy`.
+
+**Known and not in this release**
+- **CI.** There is no CI workflow template or `./build/ci` entry point. Until
+  there is, run the three phases in one CI job or carry the records with the
+  artifacts.
+- **Lockfile and toolchain enforcement.**
+- **Test results.** Per-test results, JUnit output, flaky-test retry, and
+  parallel tests.
+- **Image tags.** Nothing re-resolves an image tag to its digest at the gate.
+- **`pipeline-config.toml` hooks** (TASK-030).
+- **Canary or progressive rollout.** This belongs to the platform.
+- **TASK-027** (60-verify) is implemented but still sits in `tasks/backlog/`.
+
+`bin/test-pipeline` now runs 82 cases in real installs, on Linux and on
+macOS bash 3.2 in CI.
+
+---
+
 ## v0.57.0 — 2026-09-26
 
 **Build → test → deploy: three phases, each recorded, each checked by the
 next.** ⚠ **BREAKING for staging and prod deploys.** After `/sync`, a staging
 or production deploy is refused until `/build` then `/test` have passed for
 the commit being shipped, and a production release also needs
-`tests/suites/smoke.md`. Dev deploys only warn and keep working as before. To
-migrate:
+`tests/suites/smoke.md`. Dev deploys only warn and keep working as before.
+
+To migrate:
 1. Add `echo <output> >> "$BUILD_ARTIFACTS"` to `build/stages/20-build.sh`.
 2. Gitignore the build output.
 3. Write `tests/suites/smoke.md`.

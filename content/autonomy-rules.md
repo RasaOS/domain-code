@@ -182,9 +182,13 @@ against a project-configured non-prod environment, but:
 - **Opt-in.** The goal must explicitly request a preview deploy.
   If the goal does not mention deployment, `/mission` does not
   deploy. Silence is "do not deploy".
-- **Never prod.** The selected env must be one of the project's
-  non-prod envs configured in `build/environments/`. The names
-  `prod` and `production` are forbidden, period.
+- **Never prod.** The selected env must be `dev`- or
+  `staging`-class in the environment registry — decided by class,
+  never by name (`class-guard.sh` refuses a prod-class target for
+  `--intent=deploy` in any case).
+- **Build and test first.** `./build/build && ./build/test` on the
+  branch head, then deploy — a staging environment refuses a build
+  `/test` did not pass.
 - **Never via `/release`.** The release skill remains the gate
   for prod. This preview path is a separate, narrower channel.
 - **Never tags.** No `git tag -a v…-…-…` happens. Tags belong to

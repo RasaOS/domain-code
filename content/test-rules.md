@@ -85,6 +85,7 @@ Auth failures are user-facing and prod-impacting. Member of `pre-deploy` suite.
 | `created` | yes | date (YYYY-MM-DD) | When the stamp was created |
 | `status` | yes | enum | active / quarantined / retired |
 | `tags` | no | array | Free-form classification |
+| `timeout_seconds` | no | integer | Kill the test — and every process it started — after this long; it counts as failed. Default 900 (`TEST_TIMEOUT_DEFAULT`). A hung test used to hang the pipeline forever. |
 | `runtimes_required` | e2e: yes | array | Runtime names (`.claude/runtimes/<name>.md`) the test needs running. Every one must be in `e2e.md`'s `runtimes:` list. |
 
 ### Stamp: `test-suite`
@@ -227,15 +228,22 @@ tests:
 
 For each runtime, in order, `./build/test`:
 
+0. runs each `depends_on` entry's `check` (e.g. `pg_isready`) — a
+   dependency that is not there fails the run, named, before anything
+   starts; and refuses if the runtime's health check **already** passes —
+   another process is serving that port, and the e2e tests would test it
+   instead of the build;
 1. starts `commands.start` from `.claude/runtimes/<name>.md` in its own
    process group, logging to `tests/runs/TST-…/runtime-<name>.log`;
 2. polls `health_check` — `url` until it answers `expect_status`
    (default 200), or `command` until it exits 0 — for up to
    `timeout_seconds` (default 30). A runtime that exits first, or never
    gets healthy, fails the run;
-3. after every runtime is healthy, runs the suite; then **stops every
-   runtime and any test still running — on pass, fail, error, Ctrl-C or
-   kill.**
+3. after every runtime is healthy, runs the suite — and fails it if any
+   runtime died while it ran; then **stops everything — on pass, fail,
+   error, Ctrl-C or kill**: first each runtime's `commands.stop` if its
+   stamp declares one (the only way down for something that detaches,
+   like `docker compose up -d`), then the process groups.
 
 `commands.start` must serve the **built** app — its production server
 command (a `docker run …` of the image, the compiled binary, `gunicorn
@@ -243,9 +251,23 @@ app:app`, `java -jar …`) — not the dev server: the e2e phase tests
 the build. A stamp with only `commands.dev` fails, naming the field.
 
 Tests read `RUNTIME_<NAME>_HEALTH_URL` (name upper-cased, `-` → `_`),
-`RASA_BUILD_ID` and `RASA_TEST_RUN` from the environment.
+`RASA_BUILD_ID`, `RASA_TEST_RUN` and `ENVIRONMENT=test` from the
+environment. Runtime names are lowercase letters, digits, `-`, `_`.
 
 ### After deploy: `smoke.md`
+
+```yaml
+---
+name: smoke
+kind: test-suite
+suite_kind: smoke
+tests:
+  - health-endpoint
+---
+```
+
+Smoke tests run against a **deployed** environment — read-only,
+idempotent, fast (they run against production).
 
 `build/stages/60-verify.sh` runs `smoke.md` against the environment just
 deployed; smoke tests read `ENVIRONMENT`, `DEPLOY_TO` and `DEPLOY_TAG` to

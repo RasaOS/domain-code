@@ -183,7 +183,7 @@ The kit uses **filename prefixes** to mark platform scope:
 |---|---|---|
 | no prefix | Universal — every project | `task-rules.md`, `skills/audit/` |
 | `ios-*` | iOS-specific | `ios-task-rules.md`, `skills/ios-release/` |
-| `web-*` | Web-specific | `web-task-rules.md`, `skills/web-deploy/` |
+| `web-*` | Web-specific | `web-task-rules.md`, `web-conventions.md` |
 | `python-*` | Python-specific (future) | `python-task-rules.md` |
 | `android-*` | Android-specific (future) | `android-task-rules.md` |
 

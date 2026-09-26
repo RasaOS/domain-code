@@ -78,23 +78,31 @@ ls tests/runs/TST-*.md 2>/dev/null | tail -1   # then read its sha: and status:
 
 No passing run for HEAD → run `/build` then `/test` first (or ask, if
 the user only asked to deploy). At `dev` class the gate only warns, and
-the pipeline rebuilds in place as it always has.
+when no verified build of this source exists, the pipeline rebuilds in
+place as it always has (with one, it ships that build like staging does).
 
 ### 3b — Run the pipeline
+
+What it refuses, and the fix — say it plainly, never reach around it:
+
+| Refusal | Fix |
+|---|---|
+| bad environment name / not in the registry / registry cannot be read | use the registry's name exactly; fix `.claude/environments.json` |
+| `verified-build` — no passing test, the newest run failed, artifacts changed, declared no artifacts | `/build` then `/test` (declare outputs in `20-build.sh`) |
+| another run holds the lock | wait for it; a lock from a dead run on this host is taken over automatically |
+| `artifacts changed during stage …` | a stage rewrote the tested outputs — fix that stage; nothing was shipped past it |
 
 ```bash
 ./build/deploy --env=<env> --intent=deploy
 ```
 
-`--intent=deploy` is not optional in what you pass. It is currently
-derivable for backwards compatibility and becomes required in v0.45.0;
-passing it explicitly is the behaviour this skill models.
+`--intent=deploy` is required; without it the pipeline exits 2.
 
 Useful flags, pass through only when the user asked for them:
 
 | Flag | Effect |
 |---|---|
-| `--dry-run` | Skips every stage. Runs the class guard and the tests-required gate, but **not** the stage-level gates — `10-preflight` is a stage, so clean-tree and the production approval do not run. A dry-run exit 0 is not a verification. |
+| `--dry-run` | Skips every stage. Runs the class guard, tests-required, verified-build and promoted-build gates, but **not** the stage-level gates — `10-preflight` is a stage, so clean-tree and the production approval do not run. It still prints `✓ … complete` and closes its ship-log record `success` with note `dry-run`. A dry-run exit 0 is not a verification. |
 | `--skip-tests` | Skips stages whose name contains `test`, below `prod` class. **Refused at `prod` class** (exit 2). |
 | `--skip-gates` | Skips the OPTIONAL gates (clean tree, tag match) on non-prod only. Never skips the class guard. |
 | `--tag=<tag>` | Overrides the computed `v<semver>-<sha>-<env>` tag. |

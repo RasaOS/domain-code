@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a production release end-to-end — preflight, merge integration into main, tag the release commit, deploy, push the tag, append AUDIT entry. Reads the project's CLAUDE.md / DEPLOY.md / manifests to discover the actual deploy command. **Invocation is consent: this skill does not ask for confirmation at any soft gate.** It stops only at hard blockers (auth, failed tests, dirty tree, missing deploy command, etc.). Triggered when the user wants to ship — e.g. "/release", "/release patch", "/release v1.2.0", "ship it", "cut a release".
+description: Cut a production release end-to-end — preflight, merge integration into main, tag the release commit, deploy, push the tag, append AUDIT entry. Ships through the build → test → deploy chain: builds and tests the release commit (`./build/build`, `./build/test`), deploys that build to staging, then promotes the same build to production with `./build/deploy --intent=release`; falls back to a deploy command discovered from CLAUDE.md / DEPLOY.md only for a project with no pipeline. **Invocation is consent: this skill does not ask for confirmation at any soft gate.** It stops only at hard blockers (auth, failed build or tests, dirty tree, a refused gate, no pipeline and no deploy command, etc.). Triggered when the user wants to ship — e.g. "/release", "/release patch", "/release v1.2.0", "ship it", "cut a release".
 ---
 
 # /release — Cut a production release
@@ -147,28 +147,26 @@ universal flow below.
 Run in parallel:
 
 - `git rev-parse --abbrev-ref HEAD` — capture the current branch.
-- `git status --porcelain` — must be empty (no dirty files).
+- The tree must be clean **of source**: `build/gates/git-clean.sh`
+  with `ENV_CLASS=prod` (it ignores the pipeline's own records —
+  `deploys/`, `builds/`, `tests/runs/`). A bare `git status
+  --porcelain` counts those records and would stop every release.
 - `git fetch origin` — capture remote state.
 - `git log HEAD..origin/main --oneline` — if non-empty AND on
   main, the local is behind; hard-stop with "behind upstream."
 - `git describe --tags --abbrev=0` — capture the previous tag.
 - `gh pr list --state open --base main` — for visibility; not
   a stop condition.
-- The project's verification gate (test command from `CLAUDE.md`).
-  Must exit 0.
-- The project's build command (from `CLAUDE.md` / manifest).
-  Must exit 0 unless project config marks warnings as fatal.
-- Deploy command discoverable per "Discover" in the contract
-  above. Must be present.
-- `tasks/RELEASES.md` lookup — read the top "🚧 Next" entry
-  (per `release-rules.md`). Cross-check against commits since
-  the last tag:
-  - **Tasks in commits, missing from the entry** → silently
-    add them (the user skipped a `/release-add` for a manual
-    merge); not a stop condition, just a fix-up.
-  - **Tasks in the entry, missing from commits** → hard-stop
-    with the diff. The entry claims something that didn't
-    actually merge.
+- **Pipeline present?** `./build/deploy`, `./build/build` and
+  `./build/test` exist → the release goes through the chain (Step 5)
+  and there is no separate build or test to run here: Step 5 builds
+  and tests the exact commit that ships. **No pipeline** → the
+  fallback: the project's test command and build command (from
+  `CLAUDE.md`) must exit 0, and a deploy command must be
+  discoverable per "Discover" above.
+- `tasks/RELEASES.md` lookup — read the release being shipped and
+  cross-check it against commits since the last tag. **Report only;
+  this step does not write** (see "Release tracker" below).
 
 Render the pre-flight summary as a §2 Live status dashboard:
 
@@ -178,9 +176,8 @@ Render the pre-flight summary as a §2 Live status dashboard:
 │  ●  branch          <branch>                           │
 │  ●  working tree    clean                              │
 │  ●  upstream        in sync                            │
-│  ●  tests           <count>/<count> green              │
-│  ●  build           clean                              │
-│  ●  deploy command  <discovered>                       │
+│  ●  build + test    in Step 5 (chain) | <n> green      │
+│  ●  ship path       pipeline chain | fallback: <cmd>   │
 │  ●  release plan    matches                            │
 │                                                        │
 │  ✓ all checks passed — proceeding to merge             │
@@ -309,31 +306,45 @@ only if deploy succeeds.
 
 ### Step 5 — Deploy
 
-**Build and test the release commit first.** The pipeline's
-`verified-build` gate refuses a production target unless `./build/test`
-passed a `./build/build` of HEAD — the merge commit from Step 3 — and
-production also needs `tests/suites/smoke.md` for the post-deploy
-check. Run the two phases on that commit before the deploy:
+**Build, test, stage, then promote.** Production accepts only a build
+that `./build/test` passed **and** that ran — and passed its smoke
+check — in staging (`gates/verified-build.sh`, `gates/promoted-build.sh`;
+neither has a bypass). On the release commit from Step 3:
 
 ```sh
 ./build/build && ./build/test
+./build/deploy --env=<staging-env> --intent=deploy
 ```
 
-A build or test failure is a deploy failure: take the hard-stop branch
-below, with the phase that failed named. The release then ships
-**that** tested build — the pipeline skips `20-build` rather than
-rebuilding — and `60-verify` smoke-tests production after it lands; a
-failure there fails the release even though the new build is live.
+`<staging-env>`: `environment.sh classes`, the `staging` row. If the
+build and test already ran on the integration branch and Step 3's merge
+did not change the source (main had nothing the branch lacked), the
+records still match — the chain keys on the source fingerprint, not the
+commit — and the build is reused; otherwise it is rebuilt here, which is
+correct. Any failure in these three is a deploy failure: take the
+hard-stop branch below, naming the phase. A project that declares no
+staging environment skips the staging deploy (the gate warns).
+
+Then promote — the same build, to production:
+
+```sh
+FORCE_APPROVAL=1 DEPLOY_APPROVAL=invocation ./build/deploy --env=<prod-env> --intent=release
+```
+
+`FORCE_APPROVAL=1` because invocation is this skill's consent and the
+approval prompt needs a terminal an agent does not have; `DEPLOY_APPROVAL
+=invocation` records that truthfully in the ship log. The pipeline skips
+`20-build` (it ships the tested artifacts), runs `45-migrate` if the
+environment has migrations, deploys, and `60-verify` smoke-tests
+production — retrying while it warms up, rolling back through
+`rollback.sh` if it still fails. A `60-verify` failure fails the release;
+say whether the rollback put production back on a verified build.
 
 **Prefer the pipeline.** If `./build/deploy` exists, that is the deploy
 command — not something discovered from CLAUDE.md. Routing through it is
 what makes a release pass the class guard, run the production approval
 gate, and land in the ship log. A release that went around the pipeline
 is a release nobody can audit.
-
-```sh
-./build/deploy --env=<prod-env> --intent=release
-```
 
 Resolve `<prod-env>` from the registry rather than guessing:
 
@@ -546,22 +557,19 @@ release, which a partial state isn't.
 
 - **Just verifying a build** → `/build`.
 - **Running locally** → `/run`.
-- **Reverting / rolling back** → use the project's rollback
-  command directly. This skill cuts forward releases; rollback
-  is its own operation (and should append an AUDIT entry too —
-  do that by hand for now).
-- **Pre-release / staging deploy** that doesn't tag — most
-  projects have a separate `deploy:preview` or `deploy:stage`
-  flow. That's not this skill. `/mission` may run a non-prod
-  preview deploy when its goal asks for it (per
-  `autonomy-rules.md` Exception 3) — that's the preview path.
+- **Reverting / rolling back** → a failed `60-verify` rolls back
+  automatically when `build/environments/<env>/rollback.sh` exists;
+  otherwise use the environment's rollback command directly and
+  append an AUDIT entry by hand.
+- **A staging or dev deploy** that doesn't tag → `/deploy`.
 
 ## What "done" looks like for a /release session
 
 - Pre-flight passed (every check ●).
 - Integration branch merged to main (the release commit exists).
 - Annotated tag created on the release commit AND pushed.
-- Live build deployed.
+- The build that passed `./build/test` deployed to staging, then
+  promoted to production, and `60-verify` passed in both.
 - `AUDIT.md` entry appended; `RELEASES.md` entry marked ✅
   Shipped; both committed to main.
 - Closing report rendered with the tag URL, commit SHA, and the

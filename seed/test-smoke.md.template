@@ -13,7 +13,7 @@ tags: []
 
 # <Name>
 
-> Template — copy to `tests/stamps/<YYYY-MM-DD>-<name>.md`, fill the
+> Template — copy to `tests/stamps/YYYYMMDD_NNN_<name>.md`, fill the
 > fields, then add `name` to the `tests:` list of **`tests/suites/smoke.md`**.
 > One stamp format for every test: the one `build/stages/30-test.sh` reads
 > (`test-rules.md`). `/test add` walks you through it.

@@ -63,6 +63,9 @@ fi
 # from a subdirectory would report a clean tree while the rest of the repo
 # was dirty. (`:/` as a pathspec base does NOT combine with :(exclude) —
 # verified; cd is what actually works.)
+# The install's path inside the repository, from this gate's own location
+# (build/gates/ → the project), taken BEFORE moving to the top.
+PFX="$(git -C "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" rev-parse --show-prefix 2>/dev/null || true)"
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
 ENV_CLASS="${ENV_CLASS:-unclassified}"
@@ -71,8 +74,11 @@ STRICT="${BOOKKEEPING_STRICT:-${TASK_CHURN_STRICT:-0}}"
 # `:(exclude)` is a pathspec magic word, supported by git 1.9+.
 # `:/` anchors to the repo root so the result does not depend on the cwd
 # the caller happened to be in.
-PIPELINE_OWN=(':(exclude)deploys/' ':(exclude)build/deploy-log.md' ':(exclude)builds/' ':(exclude)tests/runs/')
-TASK_CHURN=(':(exclude)tasks/')
+# Anchored to the install's own path: in a monorepo the project lives at
+# app/, and its records at app/deploys/ — an exclusion of the repo root's
+# deploys/ left them counted, so a sub-directory install failed its own gate.
+PIPELINE_OWN=(":(exclude)${PFX}deploys/" ":(exclude)${PFX}build/deploy-log.md" ":(exclude)${PFX}builds/" ":(exclude)${PFX}tests/runs/")
+TASK_CHURN=(":(exclude)${PFX}tasks/")
 
 DIRTY=""
 EXCLUDED=""
@@ -80,11 +86,17 @@ if [[ "$STRICT" == "1" ]]; then
   DIRTY="$(git status --porcelain)"
 elif [[ "$ENV_CLASS" == "prod" ]]; then
   DIRTY="$(git status --porcelain -- . "${PIPELINE_OWN[@]}")"
-  EXCLUDED="$(git status --porcelain -- 'deploys/' 'build/deploy-log.md' 'builds/' 'tests/runs/')"
+  EXCLUDED="$(git status --porcelain -- "${PFX}deploys/" "${PFX}build/deploy-log.md" "${PFX}builds/" "${PFX}tests/runs/")"
 else
   DIRTY="$(git status --porcelain -- . "${PIPELINE_OWN[@]}" "${TASK_CHURN[@]}")"
-  EXCLUDED="$(git status --porcelain -- 'tasks/' 'deploys/' 'build/deploy-log.md' 'builds/' 'tests/runs/')"
+  EXCLUDED="$(git status --porcelain -- "${PFX}tasks/" "${PFX}deploys/" "${PFX}build/deploy-log.md" "${PFX}builds/" "${PFX}tests/runs/")"
 fi
+
+# Edits hidden from `git status` by --skip-worktree / --assume-unchanged are
+# still edits, and would ship as if committed.
+HIDDEN="$(git ls-files -v 2>/dev/null | awk '/^(S|[a-z]) / { print " H " substr($0, 3) }')"
+[[ -z "$HIDDEN" ]] || DIRTY="${DIRTY:+$DIRTY
+}$HIDDEN"
 
 if [[ -n "$DIRTY" ]]; then
   echo "✗ Working tree is dirty:"

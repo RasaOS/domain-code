@@ -65,6 +65,46 @@ fail_or_warn() {
   exit 0
 }
 
+# ─── Running one test, with a time limit ───────────────────────────────────
+# A test that hangs used to hang the pipeline, forever. Every test now runs
+# under a limit: the stamp's `timeout_seconds`, else TEST_TIMEOUT_DEFAULT
+# (900s). It runs in its own process group so a timeout — or a signal to this
+# stage — kills the test AND everything it started. Polled rather than
+# `timeout(1)`, which stock macOS does not ship.
+TEST_TIMEOUT_DEFAULT="${TEST_TIMEOUT_DEFAULT:-900}"
+case "$TEST_TIMEOUT_DEFAULT" in ''|*[!0-9]*|0) TEST_TIMEOUT_DEFAULT=900 ;; esac
+TEST_OUT="$(mktemp "${TMPDIR:-/tmp}/test-out.XXXXXX")"
+TEST_PID=""
+kill_test() {
+  [ -n "$TEST_PID" ] || return 0
+  kill -TERM -- "-$TEST_PID" 2>/dev/null || kill -TERM "$TEST_PID" 2>/dev/null || true
+  sleep 1
+  kill -KILL -- "-$TEST_PID" 2>/dev/null || kill -KILL "$TEST_PID" 2>/dev/null || true
+  TEST_PID=""
+}
+trap 'kill_test; rm -f "$TEST_OUT"' EXIT
+trap 'kill_test; rm -f "$TEST_OUT"; exit 130' INT TERM
+
+# run_limited <command> <seconds> — rc of the command, or 124 on timeout.
+run_limited() {
+  local cmd="$1" limit="$2" ticks=0 rc
+  set -m
+  bash -c "$cmd" > "$TEST_OUT" 2>&1 &
+  TEST_PID=$!
+  set +m
+  while kill -0 "$TEST_PID" 2>/dev/null; do
+    if [ "$ticks" -ge $((limit * 5)) ]; then
+      kill_test
+      return 124
+    fi
+    sleep 0.2
+    ticks=$((ticks + 1))
+  done
+  wait "$TEST_PID"; rc=$?
+  TEST_PID=""
+  return "$rc"
+}
+
 # ─── Pick the suite ────────────────────────────────────────────────────────
 if [ -n "${TEST_SUITE:-}" ]; then
   case "$TEST_SUITE" in
@@ -146,12 +186,20 @@ while IFS= read -r TEST_NAME; do
     FAILED=$((FAILED + 1)); continue
   fi
 
+  LIMIT="$(stamp_field "$STAMP_FILE" timeout_seconds)"
+  case "$LIMIT" in ''|*[!0-9]*|0) LIMIT="$TEST_TIMEOUT_DEFAULT" ;; esac
+
   echo "  ▷ $TEST_NAME"
   set +e
-  OUTPUT="$(bash -c "$RUN_CMD" 2>&1)"; TEST_RC=$?
+  run_limited "$RUN_CMD" "$LIMIT"; TEST_RC=$?
+  OUTPUT="$(cat "$TEST_OUT" 2>/dev/null)"
   set -e
   RAN=$((RAN + 1))
-  if [ "$TEST_RC" -eq 0 ]; then
+  if [ "$TEST_RC" -eq 124 ]; then
+    echo "    ✗ timed out after ${LIMIT}s (timeout_seconds on the stamp, default ${TEST_TIMEOUT_DEFAULT}s) — killed with everything it started"
+    printf '%s\n' "$OUTPUT" | tail -20 | sed 's/^/      /'
+    FAILED=$((FAILED + 1))
+  elif [ "$TEST_RC" -eq 0 ]; then
     echo "    ✓ pass"
   else
     # Print the output. Hiding it behind >/dev/null is how a blocked consumer
