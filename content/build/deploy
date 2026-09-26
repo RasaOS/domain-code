@@ -89,6 +89,14 @@ if [[ -z "$ENV" ]]; then
   exit 2
 fi
 
+# ─── Validate the name, then that the environment exists ───────────────────
+# A plain name only: `--env=./prod` used to resolve to environments/prod/ while
+# every class check missed it (see gates/class-guard.sh).
+if [[ ! "$ENV" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  echo "ERROR: bad environment name '$ENV' — letters, digits, . _ - only, starting with a letter or digit." >&2
+  exit 2
+fi
+
 # ─── Validate environment exists ───────────────────────────────────────────
 ENV_DIR="$BUILD_DIR/environments/$ENV"
 if [[ ! -d "$ENV_DIR" ]]; then
@@ -164,7 +172,16 @@ export DEPLOY_TIMESTAMP="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 # the environment NAME, which is how `production-us` used to take no gate.
 ENV_CLASS="unclassified"
 if [[ -f "$ENV_SH" ]]; then
-  ENV_CLASS="$(bash "$ENV_SH" class "$ENV" 2>/dev/null || true)"
+  # Same rule as class-guard: an unreadable registry (1) or an environment it
+  # does not list (2) is refused, never guessed from the name.
+  set +e
+  ENV_CLASS="$(bash "$ENV_SH" class "$ENV" 2>/dev/null)"; _crc=$?
+  set -e
+  case "$_crc" in
+    0|3) ;;
+    2) echo "ERROR: '$ENV' is not in .claude/environments.json — declare it (with its class) first." >&2; exit 2 ;;
+    *) echo "ERROR: .claude/environments.json cannot be read — fix it; the pipeline will not guess an environment's class." >&2; exit 2 ;;
+  esac
 fi
 case "$ENV_CLASS" in
   dev|staging|prod) ;;
@@ -232,6 +249,51 @@ esac
 # run it. There is no bypass variable, by design.
 "$BUILD_DIR/gates/tests-required.sh" "$ENV"
 
+# The build → test → deploy chain. Same placement as the two gates above, for
+# the same reason: --skip-tests, --skip-gates, --dry-run and env.sh all reach
+# it, and there is no bypass variable. Refuses staging and prod unless
+# ./build/test passed a build of HEAD whose artifacts are still on disk
+# unchanged; warns below staging. On a pass the pipeline ships THAT build:
+# stage 20-build is skipped, and BUILD_ID / BUILD_ARTIFACTS name the tested
+# artifacts for 40-publish and 50-deploy.
+VERIFIED_BUILD=""
+VERIFY_OUT="$("$BUILD_DIR/gates/verified-build.sh" "$ENV")" || exit 1
+VERIFIED_BUILD="$(printf '%s\n' "$VERIFY_OUT" | sed -n 's/^verified_build=//p')"
+VERIFIED_TEST="$(printf '%s\n' "$VERIFY_OUT" | sed -n 's/^verified_test=//p')"
+if [[ -n "$VERIFIED_BUILD" ]]; then
+  export BUILD_ID="$VERIFIED_BUILD"
+  export BUILD_ARTIFACTS="$PROJECT_DIR/$(printf '%s\n' "$VERIFY_OUT" | sed -n 's/^build_artifacts=//p')"
+  export VERIFIED_TEST
+  VERIFIED_DIGEST="$(printf '%s\n' "$VERIFY_OUT" | sed -n 's/^artifacts_digest=//p')"
+  BUILD_TAG="$(printf '%s\n' "$VERIFY_OUT" | sed -n 's/^build_tag=//p')"
+  export BUILD_TAG="${BUILD_TAG:-$DEPLOY_TAG}"
+else
+  # No verified build (allowed only below staging): 20-build runs in this
+  # pipeline as it always has. It still gets a $BUILD_ARTIFACTS to append to,
+  # or a build stage following the convention dies under `set -u`. What it
+  # declares here is thrown away — only ./build/build records a build.
+  TMP_ARTIFACTS="$(mktemp "${TMPDIR:-/tmp}/build-artifacts.XXXXXX")"
+  BUILD_ARTIFACTS="$TMP_ARTIFACTS"
+  export BUILD_ARTIFACTS BUILD_ID="unrecorded" BUILD_TAG="$DEPLOY_TAG"
+fi
+
+# One deploy per environment at a time. Taken after every gate (a refused run
+# holds nothing) and before the ship log opens (a refused run records nothing).
+# shellcheck source=/dev/null
+. "$BUILD_DIR/gates/verify-lib.sh"
+case "$ENV" in */*|.*) echo "ERROR: bad environment name" >&2; exit 2 ;; esac
+
+# Production gets only a build staging already ran and verified. No bypass.
+export VERIFIED_BUILD
+"$BUILD_DIR/gates/promoted-build.sh" "$ENV" || exit 1
+
+vl_lock "deploys/locks/$ENV.lock" "deploy $ENV" || exit 1
+# Shipping a verified build also holds the build lock: nothing may rebuild
+# the artifacts while they are being published and deployed.
+if [[ -n "$VERIFIED_BUILD" ]]; then
+  vl_lock builds/.lock "deploy $ENV (holding the build)" || { vl_unlock; exit 1; }
+fi
+trap 'rm -f "${TMP_ARTIFACTS:-}"; vl_unlock' EXIT
 # --skip-tests is REFUSED at prod class rather than honored. Measured before
 # this: with a deliberately failing test wired into the suite, --skip-tests at
 # prod gave exit 0, ran no tests, SHIPPED, and filed a plain ✓ in the deploys
@@ -261,11 +323,32 @@ fi
 # publishes that contract); recording an approver for a prompt that never
 # fired would be a lie in an audit trail. A human running this by hand on a
 # terminal still gets gates/approval.sh in 10-preflight.
+# How consent was given, truthfully. A caller that IS the consent (/release)
+# says so with DEPLOY_APPROVAL=invocation. Otherwise: at prod, FORCE_APPROVAL=1
+# means the approval gate was bypassed ("forced"), else a human answers it on
+# the terminal ("tty"); below prod no approval is asked ("none"). This used to
+# record "invocation" for every run, a hand-run forced prod release included.
+case "${DEPLOY_APPROVAL:-}" in
+  "") if [[ "$ENV_CLASS" == "prod" ]]; then
+        if [[ "${FORCE_APPROVAL:-0}" == "1" ]]; then APPROVAL="forced"; else APPROVAL="tty"; fi
+      else APPROVAL="none"; fi ;;
+  invocation|ci|token) APPROVAL="$DEPLOY_APPROVAL" ;;
+  *) echo "ERROR: DEPLOY_APPROVAL must be invocation, ci or token (got '$DEPLOY_APPROVAL')." >&2; exit 2 ;;
+esac
+
 DEPLOYS_SH="$PROJECT_DIR/.claude/skills/deploys/deploys.sh"
 SHIP_ID=""
 if [[ -f "$DEPLOYS_SH" ]]; then
   SHIP_ID="$(bash "$DEPLOYS_SH" open "$ENV" "$ENV_CLASS" "$INTENT" "$DEPLOY_TAG" \
-              "${DEPLOY_APPROVAL:-invocation}" 2>/dev/null || true)"
+              "$APPROVAL" "${VERIFIED_BUILD:-}" "${VERIFIED_TEST:-}" \
+              "${VERIFIED_DIGEST:-}" 2>/dev/null || true)"
+fi
+# A production deploy that could not be recorded is refused, not shipped
+# unrecorded: the ship log is how the NEXT prod release proves its build was
+# staged, and how anyone answers "what is running in prod".
+if [[ -z "$SHIP_ID" && "$ENV_CLASS" == "prod" ]]; then
+  echo "✗ ship log: could not open a deploy record (${DEPLOYS_SH}) — refusing an unrecorded production deploy." >&2
+  exit 1
 fi
 export SHIP_ID
 
@@ -281,6 +364,7 @@ echo "  Tag:  $DEPLOY_TAG"
 [[ -n "$PUBLISH_TO" ]] && echo "  Publish → $PUBLISH_TO"
 [[ -n "$DEPLOY_TO" ]]  && echo "  Target  → $DEPLOY_TO"
 echo "  User: $DEPLOY_USER"
+[[ -n "$VERIFIED_BUILD" ]] && echo "  Build: $VERIFIED_BUILD (tested by $VERIFIED_TEST)"
 echo "  Time: $DEPLOY_TIMESTAMP"
 $DRY_RUN  && echo "  Mode: DRY RUN (no execution)"
 $SKIP_TESTS && echo "  Tests: SKIPPED (refused at prod class)"
@@ -298,14 +382,29 @@ for s in "$BUILD_DIR"/stages/*.sh; do
   [[ -f "$s" ]] || continue
   STAGES+=("$s")
 done
+# No stages is not a deploy that succeeded — and on bash 3.2 an empty array
+# under `set -u` would crash the sort below instead of saying why.
+if [[ ${#STAGES[@]} -eq 0 ]]; then
+  echo "✗ no stages in $BUILD_DIR/stages/ — nothing would run. Re-run the Element's bin/init." >&2
+  ship_close "failed" 0 "no-stages"
+  exit 1
+fi
 IFS=$'\n' STAGES=($(sort <<<"${STAGES[*]}")); unset IFS
 
 for stage in "${STAGES[@]}"; do
   STAGE_NAME=$(basename "$stage" .sh)
 
-  # --skip-tests skips any stage whose name contains "test".
+  # A verified build is shipped as tested, never rebuilt: rebuilding here
+  # would deploy an artifact no test ever saw.
+  if [[ -n "$VERIFIED_BUILD" && "$STAGE_NAME" =~ ^[0-9]+-build$ ]]; then
+    echo "▷ $STAGE_NAME (reusing $VERIFIED_BUILD, tested by $VERIFIED_TEST)"
+    continue
+  fi
+
+  # --skip-tests skips the test stage — exactly `NN-test`. It used to match
+  # any name CONTAINING "test", which skipped 55-attest.
   # Refused outright at prod class above, so this only ever runs below it.
-  if [[ "$SKIP_TESTS" == "true" && "$STAGE_NAME" == *test* ]]; then
+  if [[ "$SKIP_TESTS" == "true" && "$STAGE_NAME" =~ ^[0-9]+-test$ ]]; then
     echo "▷ $STAGE_NAME (skipped: --skip-tests)"
     continue
   fi
@@ -324,6 +423,17 @@ for stage in "${STAGES[@]}"; do
     ERROR_STAGE="$STAGE_NAME"
     echo ""
     echo "✗ Stage failed: $STAGE_NAME"
+    break
+  fi
+
+  # The verified artifacts must still be exactly what was tested after EVERY
+  # stage — checked once at the gate, a later stage (or anything else) could
+  # rewrite them and ship something no test saw.
+  if [[ -n "$VERIFIED_BUILD" ]] && ! vl_build_still_matches "$VL_BUILDS_DIR/$VERIFIED_BUILD.md"; then
+    RESULT="failed"
+    ERROR_STAGE="$STAGE_NAME (artifacts changed)"
+    echo ""
+    echo "✗ $VERIFIED_BUILD's artifacts changed during stage $STAGE_NAME — refusing to go on shipping them."
     break
   fi
 done

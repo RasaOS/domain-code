@@ -219,6 +219,15 @@ if pin_ok and pinned != head:
             break
         flag = "  ⚠ BREAKING" if re.search(r"BREAKING|[Bb]reaking change|Structural change worth flagging", sec) else ""
         print("  %s%s" % (headline[:90], flag))
+        # A breaking release's migration steps, printed where the decision is
+        # made. They used to exist only in CHANGELOG.md, which nobody running
+        # /sync reads. The block is the entry's "To migrate" list.
+        if flag:
+            m = re.search(r"(?ms)^[^\n]*[Tt]o migrate[^\n]*\n((?:\d+\. [^\n]*\n(?:   [^\n]*\n)*)+)", sec)
+            if m:
+                print("      to migrate:")
+                for ln in m.group(1).rstrip().splitlines():
+                    print("        " + ln.strip())
 
 labels = [
     ("update", "update — upstream changed, your copy is untouched"),

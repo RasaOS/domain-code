@@ -3,8 +3,9 @@ id: TASK-069
 type: defect
 created: 2026-09-24
 created_by: claude
-updated: 2026-09-24
+updated: 2026-09-26
 phase: P2
+completed_by: claude
 ---
 # TASK-069: Sweep the remaining readers and writers; one actor lookup
 
@@ -47,3 +48,23 @@ phase: P2
 - Part two, the gate made hard. TASK-070 (99aeefe) rebuilt import-env's `add-profile` on the library, which removed the last reader and the gate's last three sites. `bin/check-frontmatter` now fails on any hit by default; `--advisory` lists hits without failing, and `--strict` is still accepted. CI runs the default on ubuntu (mawk) and macOS (bash 3.2).
 - Probe: with a planted `awk -v k="$1"` in shipped content the gate exits 1 and names the line; with `--advisory` it exits 0; with the line removed it exits 0 again.
 - The hits are reviewed exceptions, and each one carries a `# rfm-ok:` marker with its reason. In `bin/test-contract` and `bin/test-writers` they are the fixtures that build damaged or hostile files. The comment lines that quote the old code are not hits.
+
+Gate satisfied 2026-09-26 by claude — PR #14 merged 41f5a12; suites green (reconcile 2026-09-26)
+
+## Completion report
+
+| | |
+|---|---|
+| **Outcome** | done |
+| **Type** | change |
+| **Branch** | `integration/0.54.0` |
+| **PR** | [#14](https://github.com/RasaOS/domain-code/pull/14) — merged 2026-09-24 (`41f5a12`); this task's commit `ddfe5cb` |
+
+**Done-gate** (this repository's gate: the CI suites in `.github/workflows/checks.yml`)
+- Build / manifest: pass · `bin/check-manifest`, `bin/check-bash32`, `bin/check-invocations`, `bin/check-frontmatter`, `bin/lint` clean
+- Verification suites: pass · PR #14 recorded test-writers 88/88, test-readers 31/31, test-contract 40/40, test-root 21/21, test-release 16/16; re-run green 2026-09-26 on a branch containing `main`
+- Merged: pass · PR #14
+
+**What changed** — see PR #14 and CHANGELOG v0.54.0.
+**What to do next** — nothing for this task.
+**Things I noticed** — this task sat in `review/` for two days after its PR merged because nothing ran `pass`; reconciled by `/reconcile` (v0.59.0), which also stops it recurring.

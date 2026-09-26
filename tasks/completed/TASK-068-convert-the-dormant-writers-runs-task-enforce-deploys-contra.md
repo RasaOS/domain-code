@@ -3,8 +3,9 @@ id: TASK-068
 type: defect
 created: 2026-09-24
 created_by: claude
-updated: 2026-09-24
+updated: 2026-09-26
 phase: P2
+completed_by: claude
 ---
 # TASK-068: Convert the dormant writers: runs, task-enforce, deploys, contract
 
@@ -33,3 +34,23 @@ phase: P2
   - The comparison on fleet copies (R3's 1,550 comparisons) runs with this tool at the release-candidate step (plan 1.16).
 - Gates: check-frontmatter clean (its grep list went from 48 sites to 29), check-manifest, check-bash32 (53 files), check-invocations, schema OK, test-contract 38/38, test-root 21/21, test-release 16/16, test-writers 62/62, every script parses.
 - Left for 0.55.0: `build/deploy` discards a failed `deploys.sh open` (`2>/dev/null || true`), so a refused open (an actor with a control character, say) still deploys, without a record. Making the ledger open mandatory belongs to the deploy and release hardening.
+
+Gate satisfied 2026-09-26 by claude — PR #14 merged 41f5a12; suites green (reconcile 2026-09-26)
+
+## Completion report
+
+| | |
+|---|---|
+| **Outcome** | done |
+| **Type** | change |
+| **Branch** | `integration/0.54.0` |
+| **PR** | [#14](https://github.com/RasaOS/domain-code/pull/14) — merged 2026-09-24 (`41f5a12`); this task's commit `b220b2d` |
+
+**Done-gate** (this repository's gate: the CI suites in `.github/workflows/checks.yml`)
+- Build / manifest: pass · `bin/check-manifest`, `bin/check-bash32`, `bin/check-invocations`, `bin/check-frontmatter`, `bin/lint` clean
+- Verification suites: pass · PR #14 recorded test-writers 88/88, test-readers 31/31, test-contract 40/40, test-root 21/21, test-release 16/16; re-run green 2026-09-26 on a branch containing `main`
+- Merged: pass · PR #14
+
+**What changed** — see PR #14 and CHANGELOG v0.54.0.
+**What to do next** — nothing for this task.
+**Things I noticed** — this task sat in `review/` for two days after its PR merged because nothing ran `pass`; reconciled by `/reconcile` (v0.59.0), which also stops it recurring.

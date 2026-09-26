@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+# bin/test-reconcile — regression tests for /reconcile and the task-discipline
+# hooks. Repo tooling: lives in bin/, is not registered in rasa.json, and is
+# never installed into a consumer.
+#
+# Installs the Element into a fresh project with bin/init and drives the real
+# scripts there. A stand-in `gh` serves a PR per task id from $T/prs/<id>.json;
+# task ages are set by rewriting tasks/history.tsv dates.
+#
+#   hooks     bin/init installs the edit guard, the start guard and the
+#             session report; repairs the pre-0.59.0 broken hook; idempotent
+#   guards    the edit guard denies an unlinked edit (it never ran before);
+#             `task start` is refused while stale work is held, at the WIP
+#             limit, or with merged work unpassed; allowed when clean or
+#             when block_start is false; other Bash is let through
+#   scan      every classification — certain (pass-after-gate, reject,
+#             submit) and judgment (stale-active, stale-review, stale-
+#             blocked, stale-triage, stale-stub, no-gh merge inference)
+#   checks    --release, --ci, --session; thresholds from task-hygiene.json;
+#             a malformed config
+#   union     tasks/history.tsv merges as a union across two branches
+#
+# Portable on purpose: bash 3.2, POSIX tools, python3.
+
+set -u
+here="$(cd "$(dirname "$0")" && pwd -P)"
+ELEMENT="$(cd "$here/.." && pwd -P)"
+T="$(mktemp -d "${TMPDIR:-/tmp}/test-reconcile.XXXXXX")" || exit 2
+T="$(cd "$T" && pwd -P)"
+trap 'rm -rf "$T"' EXIT
+export GIT_CONFIG_GLOBAL=/dev/null HOME="$T/home"
+mkdir -p "$HOME" "$T/shim" "$T/prs"
+unset RASA_ROOT RASA_ACTOR
+
+pass=0; fail=0
+ok()  { pass=$((pass + 1)); printf '  ok    %s\n' "$1"; }
+bad() { fail=$((fail + 1)); printf '  FAIL  %s\n        %s\n' "$1" "$2"; }
+expect() {  # expect <name> <rc> <pattern|""> <cmd...>
+  local name="$1" want="$2" pat="$3" out rc; shift 3
+  out="$("$@" 2>&1)"; rc=$?
+  if [ "$rc" != "$want" ]; then bad "$name" "want rc=$want got $rc — $(printf '%s' "$out" | tail -4 | tr '\n' '|')"
+  elif [ -n "$pat" ] && ! printf '%s\n' "$out" | grep -q -- "$pat"; then bad "$name" "no /$pat/ in: $(printf '%s' "$out" | tail -6 | tr '\n' '|')"
+  else ok "$name"; fi
+}
+
+# gh stand-in: `pr list --search "<ID> in:title"` → $T/prs/<ID>.json or []
+cat > "$T/shim/gh" <<EOF
+#!/usr/bin/env bash
+if [ "\$1 \$2" = "pr list" ]; then
+  while [ \$# -gt 0 ]; do [ "\$1" = "--search" ] && id="\${2%% *}"; shift; done
+  cat "$T/prs/\$id.json" 2>/dev/null || echo "[]"
+  exit 0
+fi
+exit 1
+EOF
+chmod +x "$T/shim/gh"
+pr() {  # pr <id> <STATE> [draft] [updated-days-ago]
+  local d; d="$(python3 -c "import datetime,sys;print((datetime.date.today()-datetime.timedelta(days=int(sys.argv[1]))).isoformat())" "${4:-0}")"
+  printf '[{"number":%d,"state":"%s","isDraft":%s,"mergedAt":null,"title":"%s: work","headRefName":"task/%s-x","updatedAt":"%sT00:00:00Z"}]' \
+    "$(printf '%s' "${1#TASK-}" | sed 's/^0*//')" "$2" "${3:-false}" "$1" "$1" "$d" > "$T/prs/$1.json"
+}
+
+P="$T/proj"; mkdir -p "$P" && cd "$P" || exit 2
+git init -q -b main . && git config user.email t@example.com && git config user.name tester
+INIT_OUT="$("$ELEMENT/bin/init" . </dev/null 2>&1)"
+printf 'kit/\n' >> .gitignore
+printf '\n## Phase P1 — T\n\nScope.\n' >> tasks/ROADMAP.md
+TASK="python3 .claude/bin/task"
+RC=".claude/skills/reconcile/reconcile.sh"
+TE=".claude/skills/task-enforce/task-enforce.sh"
+
+# age <id> <stage> <days> — rewrite when <id> entered <stage>
+age() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import datetime, sys
+tid, stage, days = sys.argv[1], sys.argv[2], int(sys.argv[3])
+d = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+rows = open("tasks/history.tsv").read().splitlines()
+out = []
+for r in rows:
+    p = r.split("\t")
+    if len(p) >= 4 and p[1] == tid and p[3] == stage:
+        p[0] = d
+    out.append("\t".join(p))
+open("tasks/history.tsv", "w").write("\n".join(out) + "\n")
+PY
+}
+spec() {  # give a task real acceptance criteria (not a stub)
+  local f; f="$(ls tasks/*/"$1"-*.md)"
+  python3 - "$f" <<'PY'
+import re, sys
+p = sys.argv[1]; s = open(p).read()
+s = re.sub(r"(?ms)^## Acceptance criteria.*?(?=^## )", "## Acceptance criteria\n\n- [ ] it works\n\n", s)
+open(p, "w").write(s)
+PY
+  python3 .claude/bin/check-tasks --fix >/dev/null 2>&1
+}
+
+echo "hooks"
+printf '%s\n' "$INIT_OUT" | grep -q "installed PreToolUse \[Edit|Write|MultiEdit|NotebookEdit\]" && ok "bin/init installs the edit guard" || bad "bin/init installs the edit guard" "$(printf '%s' "$INIT_OUT" | grep hooks)"
+printf '%s\n' "$INIT_OUT" | grep -q "installed PreToolUse \[Bash\]" && ok "bin/init installs the task-start guard" || bad "bin/init installs the task-start guard" "missing"
+printf '%s\n' "$INIT_OUT" | grep -q "installed SessionStart" && ok "bin/init installs the session report" || bad "bin/init installs the session report" "missing"
+python3 - <<'PY'
+import json; p='.claude/settings.json'; d=json.load(open(p))
+d['hooks']['PreToolUse'].append({"matcher":"","hooks":[{"type":"command","command":"Edit|Write|MultiEdit|NotebookEdit"}]})
+json.dump(d, open(p,'w'), indent=2)
+PY
+expect "the pre-0.59.0 broken hook is removed" 0 "removed the broken PreToolUse hook" bash "$TE" hooks
+expect "re-running is a no-op" 0 "all installed" bash "$TE" hooks
+grep -q '^tasks/history.tsv merge=union' .gitattributes && ok "history.tsv merges as a union (.gitattributes)" || bad "history.tsv merges as a union" "$(cat .gitattributes 2>/dev/null)"
+git add -A && git commit -qm install
+
+echo "guards"
+out="$(printf '%s' '{"tool_name":"Write","tool_input":{"file_path":"src/app.py"}}' | bash "$TE" guard)"
+printf '%s' "$out" | grep -q '"permissionDecision": "deny"' && ok "the edit guard denies an unlinked code edit" || bad "the edit guard denies an unlinked code edit" "$out"
+git add -A && git commit -qm "auto-filed" -q
+start_hook() { printf '{"tool_name":"Bash","tool_input":{"command":"%s"}}' "$1" | bash "$TE" guard-start; }
+out="$(start_hook ".claude/bin/task start TASK-099 --by tester")"
+[ -z "$out" ] && ok "task start is allowed on a clean ledger" || bad "task start is allowed on a clean ledger" "$out"
+$TASK new --type change --phase P1 --by tester "Old work" >/dev/null
+OLD="$($TASK list 2>/dev/null | awk '/Old work/ {print $2}')"
+$TASK start "$OLD" --by tester >/dev/null; age "$OLD" active 30
+out="$(start_hook ".claude/bin/task start TASK-099 --by tester")"
+printf '%s' "$out" | grep -q "stale active work: $OLD" && ok "task start is refused while stale active work is held" || bad "task start is refused while stale active work is held" "$out"
+out="$(start_hook "grep 'task start' README.md")"
+[ -z "$out" ] && ok "a command merely mentioning 'task start' is not refused" || bad "a command merely mentioning 'task start' is not refused" "$out"
+out="$(start_hook "ls -la")"
+[ -z "$out" ] && ok "other Bash commands pass through" || bad "other Bash commands pass through" "$out"
+python3 - <<'PY'
+import json; p='.claude/task-hygiene.json'; d=json.load(open(p)); d['block_start']=False; json.dump(d,open(p,'w'),indent=2)
+PY
+out="$(start_hook ".claude/bin/task start TASK-099 --by tester")"
+[ -z "$out" ] && ok "block_start false lets it through (deliberate switch)" || bad "block_start false lets it through" "$out"
+git checkout -q -- .claude/task-hygiene.json
+$TASK park "$OLD" --by tester >/dev/null
+for i in 1 2 3; do $TASK new --type change --phase P1 --by tester "Wip $i" >/dev/null; id="$($TASK list 2>/dev/null | awk "/Wip $i/ {print \$2}")"; $TASK start "$id" --by tester >/dev/null; done
+out="$(start_hook ".claude/bin/task start TASK-099 --by tester")"
+printf '%s' "$out" | grep -q "WIP limit is 3" && ok "task start is refused at the WIP limit" || bad "task start is refused at the WIP limit" "$out"
+for id in $($TASK list 2>/dev/null | awk '/Wip / {print $2}'); do $TASK park "$id" --by tester >/dev/null; done
+
+echo "scan"
+mk() {  # mk <title> <stage> — file a task and move it to <stage>; prints its id
+  $TASK new --type change --phase P1 --by tester "$1" >/dev/null
+  local id; id="$($TASK list 2>/dev/null | TITLE="$1" awk 'index($0, ENVIRON["TITLE"]) {print $2}' | tail -1)"
+  case "$2" in
+    active)  $TASK start "$id" --by tester >/dev/null ;;
+    review)  $TASK start "$id" --by tester >/dev/null; $TASK submit "$id" --by tester >/dev/null ;;
+    blocked) $TASK start "$id" --by tester >/dev/null; $TASK block "$id" --by tester --reason "waiting on vendor" >/dev/null ;;
+  esac
+  printf '%s\n' "$id"
+}
+R_MERGED="$(mk "Merged review" review)";   pr "$R_MERGED" MERGED
+R_CLOSED="$(mk "Closed review" review)";   pr "$R_CLOSED" CLOSED
+R_IDLE="$(mk "Idle review" review)";       pr "$R_IDLE" OPEN false 30
+A_READY="$(mk "Ready active" active)";     pr "$A_READY" OPEN false
+A_DRAFT="$(mk "Draft active" active)";     pr "$A_DRAFT" OPEN true
+A_STALE="$(mk "Stale active" active)";     age "$A_STALE" active 20
+B_OLD="$(mk "Old blocked" blocked)";       age "$B_OLD" blocked 40
+S_OLD="$(mk "Old stub" backlog)";          age "$S_OLD" backlog 200
+S_SPEC="$(mk "Old spec" backlog)";         age "$S_SPEC" backlog 200; spec "$S_SPEC"
+$TASK new --type change --by tester "Old triage" >/dev/null
+TR="$($TASK list 2>/dev/null | awk '/Old triage/ {print $2}')"; age "$TR" triage 30
+git add -A && git commit -qm ledger -q
+J="$(PATH="$T/shim:$PATH" bash "$RC" scan --json)"
+cls() { printf '%s' "$J" | python3 -c 'import json,sys; t={r["id"]:r for r in json.load(sys.stdin)["tasks"]}[sys.argv[1]]; print(t["action"]+"/"+t["class"])' "$1"; }
+chk() { local got; got="$(cls "$2")"; [ "$got" = "$3" ] && ok "$1" || bad "$1" "got $got"; }
+chk "review + merged PR → pass-after-gate (certain)" "$R_MERGED" "pass-after-gate/certain"
+chk "review + PR closed unmerged → reject (certain)" "$R_CLOSED" "reject/certain"
+chk "review + open PR idle past threshold → stale-review" "$R_IDLE" "stale-review/judgment"
+chk "active + open ready PR → submit (certain)" "$A_READY" "submit/certain"
+chk "active + draft PR → ok" "$A_DRAFT" "ok/ok"
+chk "active with no branch, past threshold → stale-active" "$A_STALE" "stale-active/judgment"
+chk "blocked past threshold → stale-blocked" "$B_OLD" "stale-blocked/judgment"
+chk "an old stub → stale-stub" "$S_OLD" "stale-stub/judgment"
+chk "an old but specced backlog task → ok" "$S_SPEC" "ok/ok"
+chk "triage past threshold → stale-triage" "$TR" "stale-triage/judgment"
+git commit -q --allow-empty -m "$R_IDLE: the work"
+J="$(bash "$RC" scan --json --no-gh)"
+chk "without gh, a trunk commit titled with the id → pass-after-gate (judgment, unproven)" "$R_IDLE" "pass-after-gate/judgment"
+git commit -q --allow-empty -m "docs: mention $A_STALE in passing"
+J="$(bash "$RC" scan --json --no-gh)"
+chk "a commit merely mentioning an id is not a merge" "$A_STALE" "stale-active/judgment"
+
+echo "checks"
+expect "check --release fails while merged work is unpassed" 1 "not yet passed" env PATH="$T/shim:$PATH" bash "$RC" check --release
+expect "check --ci fails when anything is stale" 1 "task ledger out of date" env PATH="$T/shim:$PATH" bash "$RC" check --ci
+expect "check --session reports and never fails" 0 "need reconciling" bash "$RC" check --session
+python3 - <<'PY'
+import json; p='.claude/task-hygiene.json'; d=json.load(open(p)); d['release_gate']=False; json.dump(d,open(p,'w'),indent=2)
+PY
+expect "release_gate false lets a release through (deliberate switch)" 0 "" env PATH="$T/shim:$PATH" bash "$RC" check --release
+python3 - <<'PY'
+import json; p='.claude/task-hygiene.json'; d=json.load(open(p)); d['release_gate']=True; d['thresholds']['active_days']=100; json.dump(d,open(p,'w'),indent=2)
+PY
+J="$(bash "$RC" scan --json --no-gh)"
+chk "thresholds come from task-hygiene.json" "$A_STALE" "ok/ok"
+printf '{ "thresholds": { "active_days": 7, } }' > .claude/task-hygiene.json
+expect "a malformed task-hygiene.json is an error, not a silent default" 70 "not valid JSON" bash "$RC" scan --no-gh
+expect "  … while the session report still never fails" 0 "" bash "$RC" check --session
+git checkout -q -- .claude/task-hygiene.json
+
+echo "union"
+BASE="$(git rev-parse HEAD)"
+git checkout -q -b one; printf '2026-09-26\tTASK-901\t-\ttriage\ttester\tone\n' >> tasks/history.tsv; git commit -qam one
+git checkout -q -b two "$BASE"; printf '2026-09-26\tTASK-902\t-\ttriage\ttester\ttwo\n' >> tasks/history.tsv; git commit -qam two
+git checkout -q one
+if git merge -q --no-edit two >/dev/null 2>&1 && grep -q TASK-901 tasks/history.tsv && grep -q TASK-902 tasks/history.tsv; then
+  ok "two branches appending to history.tsv merge without conflict, keeping both rows"
+else
+  bad "two branches appending to history.tsv merge without conflict" "$(git status --short | head -3)"
+fi
+
+echo
+echo "$pass passed, $fail failed"
+[ "$fail" -eq 0 ]

@@ -1,0 +1,34 @@
+**Merge manifest.** It is read by `/auto-merge` and the `pr-manifest` check, so keep the fence and every key. Replace each `<…>`: CI fails while one is left.
+
+```yaml merge-manifest
+kind: <task|chore|release|hotfix>
+tasks: [<TASK-NNN>]          # the ledger ids this PR carries; [] for none
+phase: <phase id|none>       # the roadmap phase this work belongs to
+release: <vX.Y.Z|none>       # the release it is targeted at (tasks/RELEASES.md)
+merge: manual                # auto = /auto-merge may merge it (it also needs the auto-merge label)
+method: squash               # squash | merge | rebase
+after: []                    # PRs that must merge first, e.g. [#41]
+on_merge: hold               # hold | deploy:<env> | release:<version>
+migrations: none             # or: what runs, and whether it reverses
+rollback: revert             # or: the steps that undo it once it is in
+```
+
+## What & why
+
+<!-- What this PR does and why, in one to three sentences. Write it for someone who has not read the task. -->
+
+## Part of
+
+<!-- Where this PR fits: the task(s) and their file names, the phase, the release it targets and any related or dependent PRs. -->
+
+## How I verified
+
+<!-- The commands you ran and their real output: counts and time. "Tests pass" is not evidence. -->
+
+## Risk & rollback
+
+<!-- What could break, who or what it touches, and how to undo it (for example a revert, a flag flip or a down-migration). -->
+
+## After merge
+
+<!-- What the person who merges this does next: nothing (hold), deploy to <env>, or cut release <version>. Include any manual steps, such as secrets, config, announcements or a follow-up task. -->

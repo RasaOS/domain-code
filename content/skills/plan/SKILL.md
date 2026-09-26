@@ -151,6 +151,22 @@ objective):
    surface it.
 5. **Hand off** to a small `CLAUDE.md` edit.
 
+## Before any hand-off — validate the plan
+
+Every pattern above ends in a hand-off. Before it, once the user
+has settled the decision, re-review the **whole** settled plan —
+not just the last thing discussed — following
+`validate/SKILL.md` at the **medium** tier. The artifact is the
+plan as settled in this conversation; the original ask is what
+the user said they wanted to figure out at the start.
+
+This skill's rules still hold inside the validation: no file
+edits, and the user decides. Gaps are filled as **proposed**
+additions to the plan for the user to accept; a gap only the
+user can settle becomes the one focused question for the next
+turn. Render the validation block, then hand off. The user can
+say "short", "long", or "skip validation" to change it.
+
 ## When NOT to use this skill
 
 - **Filing a specific task** → use `/task`.
@@ -172,6 +188,9 @@ The user leaves with one or more of:
 - A list of tasks they want filed (handed off to `/task`)
 - A documented "we considered this and decided not to" — these
   belong in `tasks/AUDIT.md` as honest tradeoff records
+
+Whatever was settled was validated before hand-off: its
+validation block reads `clean`, or lists what is still open.
 
 If a session ends without any of those, that's fine — thinking
 is real work. Don't force a deliverable.

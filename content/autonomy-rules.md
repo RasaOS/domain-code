@@ -62,12 +62,14 @@ situation** in its report:
   `git-flow-rules.md` Rules 2, 4, and 5 these are always
   user-authorized. An autonomous skill (auto-* family + /mission)
   never merges to `main`, never pushes `main`, never tags a
-  release, never deploys to prod. Three narrow carve-outs for the
+  release, never deploys to prod. Four narrow carve-outs for the
   autonomous family, all documented in "The exceptions" below:
   (a) `/mission` may push its own `feat/` branch and open a draft
   PR; (b) `/auto-task` and `/auto-phase` may auto-merge
   spec-only PRs to `main`; (c) `/mission` may run a non-prod
-  preview deploy when the goal asks for it.
+  preview deploy when the goal asks for it; (d) `/auto-merge` may
+  merge PRs that opted in and passed `/peer-review`, then deploy them
+  to a non-prod environment.
 
   Two additional static-authorization carve-outs live in
   `git-flow-rules.md` Rule 2 for the **user-invoked
@@ -99,12 +101,12 @@ Autonomy never lowers a verification bar, never skips a test, never
 ships unreviewed work. **"Never auto-commit" still holds** as the
 default — an `auto-*` skill leaves its work in the working tree,
 uncommitted, for the user to review with `git diff` and commit.
-The three documented exceptions are below.
+The four documented exceptions are below.
 
-## The exceptions — three narrow carve-outs
+## The exceptions — four narrow carve-outs
 
 The default — "never auto-commit, never merge to `main`, never
-deploy" — holds for the `auto-*` family. Three narrowly-scoped
+deploy" — holds for the `auto-*` family. Four narrowly-scoped
 exceptions are encoded in the contract. Each is opt-in by *intent*
 (the skill triggers the carve-out only when its specific
 conditions hold), bounded (each names its scope precisely), and
@@ -182,9 +184,13 @@ against a project-configured non-prod environment, but:
 - **Opt-in.** The goal must explicitly request a preview deploy.
   If the goal does not mention deployment, `/mission` does not
   deploy. Silence is "do not deploy".
-- **Never prod.** The selected env must be one of the project's
-  non-prod envs configured in `build/environments/`. The names
-  `prod` and `production` are forbidden, period.
+- **Never prod.** The selected env must be `dev`- or
+  `staging`-class in the environment registry — decided by class,
+  never by name (`class-guard.sh` refuses a prod-class target for
+  `--intent=deploy` in any case).
+- **Build and test first.** `./build/build && ./build/test` on the
+  branch head, then deploy — a staging environment refuses a build
+  `/test` did not pass.
 - **Never via `/release`.** The release skill remains the gate
   for prod. This preview path is a separate, narrower channel.
 - **Never tags.** No `git tag -a v…-…-…` happens. Tags belong to
@@ -199,6 +205,40 @@ Rationale: a UI preview lets the user validate a `/mission` PR
 against running behavior, not just code review. The same opt-in
 gating that protects prod (route through `/release`) does not
 apply to ephemeral testing envs — those exist to be deployed to.
+
+### Exception 4 — `/auto-merge` merges opted-in PRs and deploys non-prod
+
+`/auto-merge` runs unattended, from a `/loop` or a scheduled routine.
+It is the one path by which code reaches `main` without a person
+starting the merge. That is why it has more keys than any other
+exception:
+
+- **Project opt-in.** `.claude/auto-merge.json` `enabled: true`,
+  committed to the trunk through a PR. It is off by default.
+- **Per-PR opt-in, two keys.** The PR must carry the `auto-merge`
+  label and its merge manifest must say `merge: auto`. A hold label
+  (`hold`, `do-not-merge`, `wip`, `blocked`) overrides both.
+- **Checked by a program.** `auto-merge.sh plan` applies every rule:
+  not a draft, targets the trunk, valid manifest, every `after` PR
+  merged, mergeable, and CI green under `peer-review.sh`'s fail-closed
+  classifier. It names the first rule each PR fails. The skill never
+  overrides a skip.
+- **Every merge is a `/peer-review`.** The context-isolated auditor, the
+  done-gate pass inside the PR and the CI re-read all apply. The merge
+  uses `--match-head-commit`, so a push after the review blocks it.
+- **Post-merge actions stay out of production.** `on_merge: deploy:<env>`
+  runs build → test → deploy from the trunk
+  (`./build/deploy --env=<env> --intent=deploy` last) only when `<env>`
+  resolves to dev or staging class. A prod-class, unclassified or unknown environment, and
+  every `release:<version>`, is queued for a person and commented on
+  the PR. `class-guard.sh` refuses a prod-class `--intent=deploy` in
+  any case.
+- **Never tags, never releases.** Tags and prod belong to `/release`.
+
+Rationale: the review, the checks and the done-gate are what make a
+merge safe, not the person who clicks the button. When all of them pass
+on a PR its author opted in, waiting for a click adds latency, not
+safety. Production stays a person's decision.
 
 ## The autonomy report
 

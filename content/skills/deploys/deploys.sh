@@ -33,7 +33,11 @@
 # WHERE, WHEN, and BY WHOM. Nothing that reads a secret writes here.
 #
 # Usage:
-#   deploys.sh open <env> <class> <intent> <tag> [approval]  -> prints id
+#   deploys.sh open <env> <class> <intent> <tag> [approval] [build] [test] [digest]
+#                                         -> prints id. build/test/digest name
+#                                         the BLD/TST records and artifact
+#                                         fingerprint shipped (the chain);
+#                                         written only when given.
 #   deploys.sh close <id> <status> <duration_s> [error_stage]
 #   deploys.sh index                      regenerate DEPLOYS.md
 #   deploys.sh list [--env E] [--limit N]
@@ -100,6 +104,7 @@ usage() {
 # Calls cmd_index, defined below — bash resolves functions at call time.
 cmd_open() {
   local env_name="$1" klass="$2" intent="$3" tag="$4" approval="${5:-}"
+  local build="${6:-}" test_run="${7:-}" digest="${8:-}"
   case " $VALID_INTENT " in
     *" $intent "*) ;;
     *) echo "error: intent must be one of: $VALID_INTENT" >&2; return 2 ;;
@@ -116,6 +121,9 @@ cmd_open() {
   rfm_check class "$klass"          || return 2
   rfm_check tag "$tag"              || return 2
   rfm_check approval "$approval"    || return 2
+  rfm_check build "$build"          || return 2
+  rfm_check test "$test_run"        || return 2
+  rfm_check artifacts_digest "$digest" || return 2
   local who host
   who="$(rasa_actor)" || return 2
   host="$(hostname -s 2>/dev/null || true)"; [ -n "$host" ] || host=unknown
@@ -177,6 +185,12 @@ cmd_open() {
     rfm_line error_stage ""
     rfm_line approval "$approval"
     rfm_line task_refs ""
+    # The build → test → deploy chain: which build shipped, which test run
+    # passed it. Written only when given, so a record opened without the
+    # chain keeps the exact pre-0.58.0 bytes.
+    [ -z "$build" ]    || rfm_line build "$build"
+    [ -z "$test_run" ] || rfm_line test "$test_run"
+    [ -z "$digest" ]   || rfm_line artifacts_digest "$digest"
     echo "---"
     echo ""
     echo "# $id"

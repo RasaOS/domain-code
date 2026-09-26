@@ -1,0 +1,359 @@
+#!/usr/bin/env bash
+# bin/test-auto-merge — regression tests for /auto-merge: the merge manifest
+# (pr-manifest.sh) and the unattended-merge mechanics (auto-merge.sh).
+# Repo tooling: lives in bin/, is not registered in rasa.json, and is never
+# installed into a consumer.
+#
+# Installs the Element into a fresh project with bin/init, gives it a local
+# bare remote, and drives the real scripts there. A stand-in `gh` on PATH
+# serves the open-PR list and each PR's state from files and records every
+# comment; nothing touches the network.
+#
+#   manifest  parse, get, check: every field's rule, comments stripped,
+#             placeholders, duplicates and unknown keys refused, the
+#             cross-field rules, the merger's sections, --pr through gh
+#   plan      every eligibility rule, each with the reason it names; the
+#             per-run cap; --json; --from-json with no gh
+#   run       refused while off; on/off; the lock (held, released, stale)
+#   after     hold, release and prod are never run; dev/staging deploys run
+#             build → test → deploy on the trunk carrying the merge; a failed
+#             deploy is exit 7; a dirty tree refuses; deploy: false queues
+#
+# Portable on purpose: bash 3.2, POSIX tools. Exit 0 only if every case passes.
+
+set -u
+here="$(cd "$(dirname "$0")" && pwd -P)"
+ELEMENT="$(cd "$here/.." && pwd -P)"
+
+T="$(mktemp -d "${TMPDIR:-/tmp}/test-auto-merge.XXXXXX")" || exit 2
+T="$(cd "$T" && pwd -P)"
+trap 'rm -rf "$T"' EXIT
+export GIT_CONFIG_GLOBAL=/dev/null HOME="$T/home" TMPDIR="$T/tmp"
+mkdir -p "$HOME" "$TMPDIR" "$T/shim" "$T/gh"
+unset RASA_ROOT RASA_ACTOR
+
+pass=0; fail=0
+ok()  { pass=$((pass + 1)); printf '  ok    %s\n' "$1"; }
+bad() { fail=$((fail + 1)); printf '  FAIL  %s\n        %s\n' "$1" "$2"; }
+# expect <name> <want-rc> <got-rc> [<pattern> <output>]
+expect() {
+  if [ "$3" != "$2" ]; then bad "$1" "want rc=$2, got rc=$3${5:+ — $(printf '%s' "$5" | tr '\n' '|' | cut -c1-300)}"; return; fi
+  if [ -n "${4:-}" ] && ! printf '%s\n' "${5:-}" | grep -q -- "$4"; then
+    bad "$1" "output lacks /$4/: $(printf '%s' "${5:-}" | tr '\n' '|' | cut -c1-300)"; return
+  fi
+  ok "$1"
+}
+
+# gh stand-in. `pr list` prints $T/gh/list.json; `pr view <N>` prints
+# $T/gh/pr-<N>.json (or an OPEN stub); `pr comment` appends to
+# $T/gh/comments.
+cat > "$T/shim/gh" <<EOF
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "pr list") cat "$T/gh/list.json" ;;
+  "pr view")
+    n="\${3#\\#}"
+    if [ -f "$T/gh/pr-\$n.json" ]; then cat "$T/gh/pr-\$n.json"
+    elif [ -f "$T/gh/body-\$n.md" ]; then python3 -c 'import json,sys; print(json.dumps({"body": open(sys.argv[1]).read()}))' "$T/gh/body-\$n.md" | { if [ "\${6:-}" = -q ]; then python3 -c 'import json,sys; print(json.load(sys.stdin)["body"])'; else cat; fi; }
+    else echo '{"state":"OPEN"}'; fi ;;
+  "pr comment") shift 2; printf '%s\n' "\$*" >> "$T/gh/comments" ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$T/shim/gh"
+GHPATH="$T/shim:$PATH"
+
+# ── a project with the Element installed and a remote ──────────────────
+P="$T/proj"
+git init -q --bare -b main "$T/remote.git"
+mkdir -p "$P" && cd "$P" || exit 2
+git init -q -b main .
+git config user.email t@example.com; git config user.name tester
+git remote add origin "$T/remote.git"
+"$ELEMENT/bin/init" . </dev/null >/dev/null 2>&1 || { echo "bin/init failed"; exit 2; }
+printf 'kit/\n' >> .gitignore
+git add -A && git commit -qm install && git push -q -u origin main 2>/dev/null
+git remote set-head origin main >/dev/null 2>&1
+M=".claude/skills/auto-merge/pr-manifest.sh"
+A=".claude/skills/auto-merge/auto-merge.sh"
+
+# body <manifest-overrides...> — a complete PR body; each argument is a
+# `key: value` line replacing that key.
+body() {
+  python3 - "$@" <<'PY'
+import sys
+keys = {"kind": "task", "tasks": "[TASK-001]", "phase": "P1", "release": "none",
+        "merge": "auto", "method": "squash", "after": "[]", "on_merge": "hold",
+        "migrations": "none", "rollback": "revert"}
+for a in sys.argv[1:]:
+    k, v = a.split(":", 1)
+    keys[k.strip()] = v.strip()
+print("```yaml merge-manifest")
+for k, v in keys.items():
+    if v != "DROP":
+        print("%s: %s" % (k, v))
+print("```")
+for h in ("What & why", "Part of", "How I verified", "Risk & rollback", "After merge"):
+    print("\n## %s\n\nWritten for the reviewer, with detail." % h)
+PY
+}
+
+# mkpr <n> <labels> <body-file> [draft] [base] [mergeable] [checks]
+# checks: green | pending | failing | none
+mkpr() {
+  python3 - "$@" <<'PY'
+import json, sys
+a = sys.argv[1:] + [""] * 8
+n, labels, bodyf, draft, base, mergeable, checks = a[:7]
+roll = {"green": [{"__typename": "CheckRun", "name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
+        "pending": [{"__typename": "CheckRun", "name": "ci", "status": "IN_PROGRESS"}],
+        "failing": [{"__typename": "CheckRun", "name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"}],
+        "none": []}[checks or "green"]
+print(json.dumps({"number": int(n), "title": "PR %s" % n, "url": "https://github.com/o/r/pull/%s" % n,
+                  "isDraft": draft == "draft", "baseRefName": base or "main", "headRefOid": "abc%s" % n,
+                  "labels": [{"name": l} for l in labels.split(",") if l],
+                  "mergeable": mergeable or "MERGEABLE", "body": open(bodyf).read(),
+                  "statusCheckRollup": roll}))
+PY
+}
+
+# ── pr-manifest.sh ─────────────────────────────────────────────────────
+echo "pr-manifest.sh"
+B="$TMPDIR/ok.md"; body > "$B"
+out="$(bash "$M" check "$B" 2>&1)"; rc=$?
+expect "a complete body passes" 0 "$rc" "manifest: ok" "$out"
+out="$(bash "$M" parse "$B" 2>&1)"; rc=$?
+expect "parse prints every field" 0 "$rc" "^rollback=revert$" "$out"
+body "after: [#41, #42]  # two first" > "$TMPDIR/b.md"
+out="$(bash "$M" get after "$TMPDIR/b.md" 2>&1)"; rc=$?
+expect "after: a #-list survives comment stripping; # is dropped" 0 "$rc" "^41 42$" "$out"
+out="$(body | awk '{ printf "%s\r\n", $0 }' | bash "$M" get merge - 2>&1)"; rc=$?
+expect "a CRLF body (as GitHub stores it) parses" 0 "$rc" "^auto$" "$out"
+body "kind: feature" > "$TMPDIR/b.md"
+out="$(bash "$M" check "$TMPDIR/b.md" 2>&1)"; rc=$?
+expect "an unknown kind is refused" 3 "$rc" "task | chore | release | hotfix" "$out"
+body "merge: yes" > "$TMPDIR/b.md"
+out="$(bash "$M" check "$TMPDIR/b.md" 2>&1)"; rc=$?
+expect "merge must be auto | manual" 3 "$rc" "auto | manual" "$out"
+body "method: fast-forward" > "$TMPDIR/b.md"
+out="$(bash "$M" check "$TMPDIR/b.md" 2>&1)"; rc=$?
+expect "method must be squash | merge | rebase" 3 "$rc" "squash | merge | rebase" "$out"
+body "on_merge: deploy" > "$TMPDIR/b.md"
+out="$(bash "$M" check "$TMPDIR/b.md" 2>&1)"; rc=$?
+expect "on_merge: a bare 'deploy' is refused" 3 "$rc" "deploy:<env>" "$out"
+body "on_merge: release:v1.2.0" > "$TMPDIR/b.md"
+out="$(bash "$M" check "$TMPDIR/b.md" 2>&1)"; rc=$?
+expect "on_merge: release:<v> with release: none is refused" 3 "$rc" "name the release" "$out"
+body "on_merge: release:v1.2.0" "release: v1.3.0" > "$TMPDIR/b.md"
+out="$(bash "$M" check "$TMPDIR/b.md" 2>&1)"; rc=$?
+expect "on_merge: release:<v> must agree with release:" 3 "$rc" "disagrees" "$out"
+body "on_merge: release:v1.2.0" "release: v1.2.0" "kind: release" "tasks: []" > "$TMPDIR/b.md"
+out="$(bash "$M" check "$TMPDIR/b.md" 2>&1)"; rc=$?
+expect "a release PR with no tasks and on_merge: release passes" 0 "$rc" "manifest: ok" "$out"
+body "tasks: []" > "$TMPDIR/b.md"
+out="$(bash "$M" check "$TMPDIR/b.md" 2>&1)"; rc=$?
+expect "a task PR must name its task" 3 "$rc" "names its task" "$out"
+body "tasks: [task-1]" > "$TMPDIR/b.md"
+out="$(bash "$M" check "$TMPDIR/b.md" 2>&1)"; rc=$?
+expect "a malformed task id is refused" 3 "$rc" "task ids like" "$out"
+body "migrations: adds column greeting.name (down migration drops it)" > "$TMPDIR/b.md"
+out="$(bash "$M" check "$TMPDIR/b.md" 2>&1)"; rc=$?
+expect "migrations with rollback: revert is refused" 3 "$rc" "revert. alone" "$out"
+body "phase: <P>" > "$TMPDIR/b.md"
+out="$(bash "$M" check "$TMPDIR/b.md" 2>&1)"; rc=$?
+expect "a <placeholder> is unfilled" 3 "$rc" "phase. is unfilled" "$out"
+body "rollback: DROP" > "$TMPDIR/b.md"
+out="$(bash "$M" check "$TMPDIR/b.md" 2>&1)"; rc=$?
+expect "a missing key is refused" 3 "$rc" "rollback. is missing" "$out"
+body | awk '{ print } /^phase: P1$/ { print "phase: P2" }' > "$TMPDIR/b.md"
+out="$(bash "$M" check "$TMPDIR/b.md" 2>&1)"; rc=$?
+expect "a duplicated key is refused" 3 "$rc" "appears twice" "$out"
+body | awk '{ print } /^method: squash$/ { print "on-merge: hold" }' > "$TMPDIR/b.md"
+out="$(bash "$M" check "$TMPDIR/b.md" 2>&1)"; rc=$?
+expect "an unknown key (a typo) is refused" 3 "$rc" "unknown key .on-merge." "$out"
+{ body; body; } > "$TMPDIR/b.md"
+out="$(bash "$M" check "$TMPDIR/b.md" 2>&1)"; rc=$?
+expect "two manifest blocks are refused" 3 "$rc" "exactly one" "$out"
+body | python3 -c 'import sys,re; print(re.sub(r"(?ms)^## Part of\n.*?(?=^## )", "## Part of\n\n<!-- todo -->\n\n", sys.stdin.read()))' > "$TMPDIR/b.md"
+out="$(bash "$M" check "$TMPDIR/b.md" 2>&1)"; rc=$?
+expect "a section holding only a placeholder comment is empty" 3 "$rc" "Part of. is empty" "$out"
+out="$(bash "$M" check "$TMPDIR/b.md" --manifest-only 2>&1)"; rc=$?
+expect "--manifest-only skips the sections" 0 "$rc" "manifest: ok" "$out"
+body | grep -v '^## After merge' > "$TMPDIR/b.md"
+out="$(bash "$M" check "$TMPDIR/b.md" 2>&1)"; rc=$?
+expect "a missing section is refused" 3 "$rc" "After merge. is missing" "$out"
+body > "$T/gh/body-7.md"
+out="$(PATH="$GHPATH" bash "$M" get on_merge --pr 7 2>&1)"; rc=$?
+expect "--pr reads the body through gh" 0 "$rc" "^hold$" "$out"
+out="$(bash "$M" block --kind task 2>&1)"; rc=$?
+expect "block refuses to print a block check would refuse" 3 "$rc" "names its task" "$out"
+out="$(bash "$M" block --kind chore --merge auto --after "3, #4" 2>&1)"; rc=$?
+expect "block prints a valid block" 0 "$rc" "^after: \[#3, #4\]" "$out"
+
+# ── plan ───────────────────────────────────────────────────────────────
+echo "auto-merge.sh plan"
+body > "$T/b-ok.md"
+body "merge: manual" > "$T/b-manual.md"
+printf 'no manifest here\n' > "$T/b-none.md"
+body "after: [#98]" > "$T/b-after-merged.md"
+body "after: [#99]" > "$T/b-after-open.md"
+echo '{"state":"MERGED"}' > "$T/gh/pr-98.json"
+{
+  echo "["
+  mkpr 10 auto-merge "$T/b-ok.md";                                    echo ","
+  mkpr 11 "" "$T/b-ok.md";                                            echo ","
+  mkpr 12 auto-merge,hold "$T/b-ok.md";                               echo ","
+  mkpr 13 auto-merge "$T/b-ok.md" draft;                              echo ","
+  mkpr 14 auto-merge "$T/b-ok.md" "" develop;                         echo ","
+  mkpr 15 auto-merge "$T/b-none.md";                                  echo ","
+  mkpr 16 auto-merge "$T/b-manual.md";                                echo ","
+  mkpr 17 auto-merge "$T/b-after-merged.md";                          echo ","
+  mkpr 18 auto-merge "$T/b-after-open.md";                            echo ","
+  mkpr 19 auto-merge "$T/b-ok.md" "" "" CONFLICTING;                  echo ","
+  mkpr 20 auto-merge "$T/b-ok.md" "" "" UNKNOWN;                      echo ","
+  mkpr 21 auto-merge "$T/b-ok.md" "" "" "" pending;                   echo ","
+  mkpr 22 auto-merge "$T/b-ok.md" "" "" "" failing;                   echo ","
+  mkpr 23 auto-merge "$T/b-ok.md" "" "" "" none;                      echo ","
+  mkpr 99 "" "$T/b-ok.md"
+  echo "]"
+} > "$T/gh/list.json"
+out="$(PATH="$GHPATH" bash "$A" plan 2>&1)"; rc=$?
+expect "plan runs" 0 "$rc" "auto-merge plan: 15 open" "$out"
+row() { printf '%s\n' "$out" | grep "^pr=$1 " | head -1; }
+expect "labelled, merge: auto, mergeable, green → eligible" 0 0 "state=eligible method=squash on_merge=hold" "$(row 10)"
+expect "no opt-in label → skipped" 0 0 "not opted in" "$(row 11)"
+expect "a hold label wins over the opt-in label" 0 0 "held by label: hold" "$(row 12)"
+expect "a draft is skipped" 0 0 "reason=draft" "$(row 13)"
+expect "a PR not targeting the trunk is skipped" 0 0 "targets develop" "$(row 14)"
+expect "no manifest → skipped, with the reason" 0 0 "manifest invalid: no merge manifest" "$(row 15)"
+expect "labelled but merge: manual → skipped (two keys)" 0 0 "merge: manual" "$(row 16)"
+expect "after a merged PR → eligible" 0 0 "state=eligible" "$(row 17)"
+expect "after an open PR → waits" 0 0 "waits for #99 (open)" "$(row 18)"
+expect "a merge conflict is skipped" 0 0 "merge conflict" "$(row 19)"
+expect "mergeability not yet computed is skipped" 0 0 "not computed" "$(row 20)"
+expect "running checks are skipped" 0 0 "checks still running: ci" "$(row 21)"
+expect "failing checks are skipped" 0 0 "checks failing: ci" "$(row 22)"
+expect "no checks at all is skipped, never green" 0 0 "no checks reported" "$(row 23)"
+expect "the eligible list" 0 0 "^eligible=10 17$" "$out"
+out="$(PATH="$GHPATH" bash "$A" plan --json 2>&1)"; rc=$?
+expect "--json is JSON with the eligible list" 0 "$rc" "" "$out"
+printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d["eligible"]==[10,17] else 1)' \
+  && ok "--json eligible == [10, 17]" || bad "--json eligible == [10, 17]" "$(printf '%s' "$out" | head -5)"
+sed 's/"max_per_run": 5/"max_per_run": 1/' .claude/auto-merge.json > "$TMPDIR/c" && cp "$TMPDIR/c" .claude/auto-merge.json
+out="$(PATH="$GHPATH" bash "$A" plan 2>&1)"; rc=$?
+expect "max_per_run caps one run; the rest wait" 0 "$rc" "over max_per_run (1)" "$(row 17)"
+git checkout -q -- .claude/auto-merge.json
+cp "$T/gh/list.json" "$TMPDIR/list.json"
+out="$(PATH="/usr/bin:/bin" bash "$A" plan 2>&1)"; rc=$?
+if PATH="/usr/bin:/bin" command -v gh >/dev/null 2>&1; then
+  ok "no gh: exit 4 (skipped — a real gh is on /usr/bin)"
+else
+  expect "no gh and no --from-json: exit 4, naming --from-json" 4 "$rc" "from-json" "$out"
+fi
+out="$(cd tasks && PATH="$GHPATH" bash "../$A" plan --from-json "../tmp-list.json" 2>&1)"; rc=$?
+expect "--from-json with a missing file is an error" 1 "$rc" "no such file" "$out"
+out="$(cd tasks && PATH="$GHPATH" bash "../$A" plan --from-json "$TMPDIR/list.json" 2>&1)"; rc=$?
+expect "--from-json reads the list from a file (run from a subdirectory)" 0 "$rc" "^eligible=10 17$" "$out"
+
+# ── run: the switch and the lock ───────────────────────────────────────
+echo "auto-merge.sh run"
+out="$(PATH="$GHPATH" bash "$A" run 2>&1)"; rc=$?
+expect "run refuses while enabled is false (the seed default)" 3 "$rc" "auto-merge is off" "$out"
+out="$(bash "$A" on 2>&1)"; rc=$?
+expect "on sets enabled: true" 0 "$rc" "enabled=true" "$out"
+expect "  and says to land it through a PR and schedule it" 0 0 "/loop 30m /auto-merge run" "$out"
+grep -q '"enabled": true' .claude/auto-merge.json && ok "  the file now says enabled: true" || bad "  the file now says enabled: true" "$(grep enabled .claude/auto-merge.json)"
+grep -q '"_doc"' .claude/auto-merge.json && ok "  and keeps its comments" || bad "  and keeps its comments" "the _doc keys are gone"
+out="$(PATH="$GHPATH" bash "$A" run 2>&1)"; rc=$?
+expect "run takes the lock and prints the plan" 0 "$rc" "lock=taken" "$out"
+expect "  with the eligible list" 0 0 "^eligible=10 17$" "$out"
+out="$(PATH="$GHPATH" bash "$A" run 2>&1)"; rc=$?
+expect "a second run while the lock is held is refused" 3 "$rc" "holds the lock" "$out"
+out="$(bash "$A" status 2>&1)"; rc=$?
+expect "status shows the held lock" 0 "$rc" "lock=held" "$out"
+out="$(bash "$A" finish 2>&1)"; rc=$?
+expect "finish releases the lock" 0 "$rc" "lock=released" "$out"
+out="$(PATH="$GHPATH" bash "$A" run 2>&1)"; rc=$?
+expect "run again after finish" 0 "$rc" "lock=taken" "$out"
+lockdir="$(git rev-parse --git-common-dir)/auto-merge/run.lock"
+printf 'old pid=1 since=1000\n' > "$lockdir/owner"
+out="$(PATH="$GHPATH" bash "$A" run 2>&1)"; rc=$?
+expect "a stale lock (a run that died) is taken over" 0 "$rc" "lock=taken" "$out"
+bash "$A" finish >/dev/null 2>&1
+out="$(bash "$A" status 2>&1)"; rc=$?
+expect "status shows the run log" 0 "$rc" "run-start" "$out"
+out="$(bash "$A" off 2>&1)"; rc=$?
+expect "off sets enabled: false" 0 "$rc" "enabled=false" "$out"
+git checkout -q -- .claude/auto-merge.json
+
+# ── after: what a merged PR says to do next ────────────────────────────
+echo "auto-merge.sh after"
+# Stand-in pipeline: each step records its argv; $T/fail-<step> fails it.
+for s in build test deploy; do
+  printf '#!/bin/sh\necho "%s $*" >> "%s/chain.log"\n[ -f "%s/fail-%s" ] && exit 1\nexit 0\n' "$s" "$T" "$T" "$s" > "build/$s"
+  chmod +x "build/$s"
+done
+git add -A build && git commit -qm "stub chain" && git push -q 2>/dev/null
+# The merge commit is a real commit on the remote trunk that the local
+# trunk does not have yet: `after --execute` must bring it in.
+echo "v2" > app.txt && git add app.txt && git commit -qm "merge PR" && git push -q 2>/dev/null
+OID="$(git rev-parse HEAD)"
+git reset -q --hard HEAD~1
+merged() {  # merged <n> <on_merge> [state]
+  # The release is computed before the $( ): bash 3.2 cannot parse a
+  # `case` inside a command substitution (bin/check-bash32 rule 7).
+  local rel=none
+  case "$2" in release:*) rel="${2#release:}" ;; esac
+  body "on_merge: $2" "release: $rel" \
+    | python3 -c 'import json,sys; print(json.dumps({"state": sys.argv[1], "url": "u", "mergeCommit": {"oid": sys.argv[2]}, "body": sys.stdin.read()}))' "${3:-MERGED}" "$OID" \
+    > "$T/gh/pr-$1.json"
+}
+merged 30 hold OPEN
+out="$(PATH="$GHPATH" bash "$A" after 30 2>&1)"; rc=$?
+expect "an unmerged PR: refused, nothing runs" 3 "$rc" "not merged" "$out"
+merged 31 hold
+out="$(PATH="$GHPATH" bash "$A" after 31 --execute 2>&1)"; rc=$?
+expect "hold: nothing runs" 0 "$rc" "action=hold" "$out"
+expect "  and the PR is told so" 0 0 "31 --body \*\*/auto-merge:\*\* merged. After merge (.on_merge: hold.): held" "$(cat "$T/gh/comments" 2>/dev/null)"
+merged 32 release:v1.2.0
+out="$(PATH="$GHPATH" bash "$A" after 32 --execute 2>&1)"; rc=$?
+expect "release:<v>: queued for a person, never run" 0 "$rc" "action=queue" "$out"
+expect "  naming /release" 0 0 "/release" "$out"
+merged 33 deploy:prod
+out="$(PATH="$GHPATH" bash "$A" after 33 --execute 2>&1)"; rc=$?
+expect "deploy to a prod-class env: queued, never run" 0 "$rc" "prod-class" "$out"
+merged 34 deploy:nowhere
+out="$(PATH="$GHPATH" bash "$A" after 34 2>&1)"; rc=$?
+expect "deploy to an env not in the registry: queued" 0 "$rc" "not in the environment registry" "$out"
+[ -f "$T/chain.log" ] && bad "nothing ran the chain for hold / release / prod / unknown" "$(cat "$T/chain.log")" || ok "nothing ran the chain for hold / release / prod / unknown"
+merged 35 deploy:staging
+out="$(PATH="$GHPATH" bash "$A" after 35 2>&1)"; rc=$?
+expect "deploy:staging without --execute only says what would run" 0 "$rc" "action=deploy" "$out"
+[ -f "$T/chain.log" ] && bad "  and runs nothing" "$(cat "$T/chain.log")" || ok "  and runs nothing"
+git checkout -q -b elsewhere
+out="$(PATH="$GHPATH" bash "$A" after 35 --execute 2>&1)"; rc=$?
+expect "deploy:staging --execute deploys" 0 "$rc" "result=deployed" "$out"
+expect "  build, then test, then deploy --env=staging --intent=deploy" 0 0 "build |test |deploy --env=staging --intent=deploy" "$(tr '\n' '|' < "$T/chain.log")"
+expect "  from the trunk" 0 0 "^main$" "$(git symbolic-ref --short HEAD)"
+git merge-base --is-ancestor "$OID" HEAD && ok "  which carries the merge commit" || bad "  which carries the merge commit" "HEAD $(git rev-parse --short HEAD)"
+expect "  and the PR is told" 0 0 "deployed .* to staging" "$(cat "$T/gh/comments")"
+merged 36 deploy:local
+touch "$T/fail-test"; rm -f "$T/chain.log"
+out="$(PATH="$GHPATH" bash "$A" after 36 --execute 2>&1)"; rc=$?
+expect "a failing chain is exit 7, and says the merge stands" 7 "$rc" "FAILED" "$out"
+[ "$(grep -c '^deploy' "$T/chain.log" 2>/dev/null)" = 0 ] && ok "  a failed test never deploys" || bad "  a failed test never deploys" "$(cat "$T/chain.log")"
+rm -f "$T/fail-test"
+echo dirty >> app.txt 2>/dev/null; git add app.txt 2>/dev/null
+out="$(PATH="$GHPATH" bash "$A" after 35 --execute 2>&1)"; rc=$?
+expect "a dirty tree refuses a deploy" 3 "$rc" "uncommitted" "$out"
+git reset -q --hard
+sed 's/"deploy": true/"deploy": false/' .claude/auto-merge.json > "$TMPDIR/c" && cp "$TMPDIR/c" .claude/auto-merge.json
+out="$(PATH="$GHPATH" bash "$A" after 35 2>&1)"; rc=$?
+expect "deploy: false queues even a staging deploy" 0 "$rc" "deploy: false" "$out"
+git checkout -q -- .claude/auto-merge.json
+out="$(PATH="$GHPATH" bash "$A" after 35 --now 2>&1)"; rc=$?
+expect "after: an unknown flag is a usage error" 2 "$rc" "only --execute" "$out"
+
+echo
+echo "$pass passed, $fail failed"
+[ "$fail" -eq 0 ]

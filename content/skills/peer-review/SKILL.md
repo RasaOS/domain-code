@@ -54,8 +54,12 @@ passes, Z fails because <reason>" is.
   that already holds the author's reasoning is not a second
   reader. See "Process" below.
 - **Merge mechanism.** On accept — and only once the auditor has
-  returned with no CRITICAL — `gh pr review --approve` first, then
-  `gh pr merge --squash --delete-branch`. Squash because a single
+  returned with no CRITICAL **and** `peer-review.sh checks <N>` has
+  exited 0 at the moment of merging — `gh pr review --approve`
+  first, then `gh pr merge --squash --delete-branch`. The CI gate is
+  this skill's own, not branch protection's: a repo without branch
+  protection must not merge over a red, still-running, or absent
+  build. Squash because a single
   PR == single logical change == single commit on `main`. If branch
   protection refuses the merge (required checks failing, required
   reviews short), leave the review approved and report — do not use
@@ -78,7 +82,11 @@ disqualifier:
 
 1. **Scope sanity.** Does the PR title + body claim what the diff
    actually does? Scope creep ("added X" but diff also reworks
-   Y) is a reject unless the body names Y.
+   Y) is a reject unless the body names Y. Does the body carry a
+   complete merge manifest (`.claude/skills/auto-merge/pr-manifest.sh
+   check --pr <N>`)? A missing or incomplete one is a non-blocking
+   note: the merger then has nothing telling it the method or what
+   follows the merge.
 2. **Gated files.** Does the diff touch any file the project
    marks as gated (per `code-task-rules.md` §9 or
    `CLAUDE.md`)? If yes and the PR body doesn't acknowledge it,
@@ -164,9 +172,56 @@ diff" was satisfied, in the authoring session, by memory of having written it.
    - **A hard gate (locked contract, gated file, destructive
      change) still stops the run** — neither accept nor reject.
 
-7. **Take the action.**
-   - **Accept** → `gh pr review <N> --approve --body "<...>"`,
-     then `gh pr merge <N> --squash --delete-branch`.
+7. **Gate on CI, then take the action.** Immediately before acting
+   on an accept, re-read CI from the remote — the rollup `scope`
+   read may be minutes stale:
+
+   ```bash
+   .claude/skills/peer-review/peer-review.sh checks <N>
+   ```
+
+   Exit 0 (`pass`) is the only state that may merge. The others
+   are fail-closed:
+   - **4 — failing** → reject, naming each failing check as a
+     blocking issue. A red build is a real check failing.
+   - **5 — pending** → take no action on the PR. Report which
+     checks are still running; the review is re-run once they
+     finish. Never approve a PR whose build has not finished.
+   - **6 — no checks reported** → nothing outside this session
+     verified the PR. Post the auditor's findings as a comment
+     (`gh pr review <N> --comment`), do not approve or merge, and
+     report that the merge is the user's call.
+
+   - **Accept** (auditor clean, checks `pass`) → first **pass the task
+     inside the PR**, then merge. The trunk changes only through a merged
+     PR, so a `task pass` made after the merge has nowhere to land — that
+     is how merged work piled up in `review/`. If the PR carries a task
+     (`TASK-NNN:` title) and that task is in `tasks/review/` on the PR
+     branch:
+     1. `gh pr checkout <N>`; append the task's `## Completion report`
+        from this review's evidence (step 4's check output with counts,
+        the CI checks that passed, the auditor's clean verdict, the PR
+        number); `.claude/bin/check-tasks --fix`;
+     2. `.claude/bin/task pass TASK-NNN --by <actor> --note "PR #<N>:
+        <evidence>"`; commit `TASK-NNN: pass the done-gate`; push;
+     3. `peer-review.sh checks <N> --wait 900` — the push restarted CI.
+        `pass` → continue; failing → the review becomes a reject; still
+        pending → HELD, report, and re-run later.
+
+     Then `gh pr review <N> --approve --body "<...>"` and merge with
+     the method the PR's merge manifest names, pinned to the head CI
+     just passed on:
+
+     ```bash
+     method="$(bash .claude/skills/auto-merge/pr-manifest.sh get method --pr <N> 2>/dev/null || echo squash)"
+     gh pr merge <N> --"$method" --delete-branch --match-head-commit "$(gh pr view <N> --json headRefOid -q .headRefOid)"
+     ```
+
+     With no valid manifest, merge with `--squash`, and name the missing
+     manifest in the report as a non-blocking note. `--match-head-commit`
+     makes GitHub refuse the merge if anything was pushed after the
+     checks were read. The task reaches `completed/` in the same merge
+     that ships its code.
    - **Reject** → `gh pr review <N> --request-changes --body
      "<numbered blocking issues, each with file:line and the rule>"`.
      A reject hands the PR back to the authoring agent, which is
@@ -177,8 +232,19 @@ diff" was satisfied, in the authoring session, by memory of having written it.
 
 8. **Track the merge in `RELEASES.md`** (accept path only), per
    `release-add/SKILL.md`. Idempotent; re-runs are no-ops.
+   A PR with no task, or whose task was not in `review/` on its branch,
+   merges without a ledger move — say so in the report; `/reconcile`
+   picks it up.
 
-9. **Render the review report** — template below. It records
+9. **Say what happens after the merge** (accept path only). Read
+   `pr-manifest.sh get on_merge --pr <N>` and put it in the report as
+   the next action: `hold` means nothing runs; `deploy:<env>` names the
+   deploy command; `release:<v>` means run `/release`. `/peer-review`
+   does not carry it out. When `/auto-merge` invoked this review, it
+   does (`auto-merge.sh after <N> --execute`); otherwise it is the
+   user's.
+
+10. **Render the review report** — template below. It records
    `review_mode: delegated-subagent` and the PR number, so a review
    that was skipped is visible afterwards.
 
@@ -199,7 +265,8 @@ One chat message at the end. Shape:
 ```markdown
 # 🔍 Peer review — PR #<N>: <title>
 
-> **Verdict.** <ACCEPT — merged | ACCEPT — approval posted, merge blocked by branch protection | REJECT — changes requested>
+> **Verdict.** <ACCEPT — merged | ACCEPT — approval posted, merge blocked by branch protection | REJECT — changes requested | HELD — checks pending | HELD — no checks reported, merge is the user's call>
+> **CI.** <`checks_state` from `peer-review.sh checks` — pass | fail: <names> | pending: <names> | none>
 > **Decision.** <one sentence — the single most important reason>
 
 ## Checks
@@ -216,7 +283,8 @@ One chat message at the end. Shape:
 ## What I did
 
 - Posted review: <accept | request-changes> with body covering <rules>.
-- Merge: <squashed and deleted branch | blocked by <reason> | N/A — rejected>.
+- Merge: <squashed / merged / rebased and deleted branch | blocked by <reason> | N/A — rejected>.
+- After merge (manifest `on_merge`): <hold | deploy:<env> — <command> | release:<v> — run /release | no manifest>.
 
 ## Hard gates hit *(if any)*
 

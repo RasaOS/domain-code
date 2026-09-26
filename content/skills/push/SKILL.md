@@ -107,7 +107,8 @@ and the PR is deliberately left for the user to open.
 - **Don't ask the user anything.** Not the message, not the
   branch, not "are you sure". `/push` exists to be frictionless.
 - **Don't open the PR.** `/push` leaves a PR-ready branch. Opening
-  the PR is a separate, deliberate user action.
+  the PR is a separate, deliberate user action — `/open-pr` for a
+  task's PR.
 - **Don't commit or push the trunk.** If on the trunk, the script
   branches first — never override that.
 - **Don't paraphrase the script output.** Surface it as-is.
@@ -133,6 +134,8 @@ and the PR is deliberately left for the user to open.
 - **Snapshotting thread context** (what you did, what's open) →
   use `/save`.
 - **A durable handoff for someone else** → use `/handoff`.
+- **A task's work is done and should go up for review** → use
+  `/open-pr` — branch, commit, push, the §10 PR, and `task submit`.
 - **Cutting a production release** (merge, tag, deploy) → use
   `/release`. `/push` never merges or tags.
 - **Automatic background capture** without invoking anything →

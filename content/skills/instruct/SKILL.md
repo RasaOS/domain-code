@@ -169,7 +169,18 @@ decision, an assumed environment — make the call, bake it into
 the recipe, and list it in the **Assumptions** section with the
 reason. No round-trips. The user overrides by re-running.
 
-### Step 8 — Render the recipe
+### Step 8 — Validate the recipe
+
+Re-review the whole recipe against the user's input following
+`validate/SKILL.md` at the **short** tier. The Step 6 mock
+run-through is pass 1 (the forward-walk lens), so the next pass
+uses a different lens — backward from done, or a requirements
+trace back to the input. Fill gaps in the recipe; this skill's
+no-round-trips rule still applies, so a gap that needs a
+judgment call becomes a flagged assumption, not a question.
+Render the validation block after **Gaps found**.
+
+### Step 9 — Render the recipe
 
 Render the recipe in chat using the **Output structure** below.
 That is the entire deliverable. Do not offer to execute it; do

@@ -1,0 +1,40 @@
+name: pr-manifest
+
+# Every pull request carries a merge manifest: what it is part of, how it
+# merges, what happens once it is in. This check refuses a body whose manifest
+# is missing, malformed or unfilled, or whose human sections are empty — the
+# same check /open-pr runs before it opens a PR and /auto-merge runs before it
+# merges one. Seeded by rasa.domain.code's bin/init; project-owned after that.
+#
+# Drafts are skipped: a draft is unfinished by definition. Marking it ready
+# runs the check.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  manifest:
+    name: merge manifest
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The body goes through an environment variable, never into the script
+      # text: a PR body is untrusted input.
+      - name: The PR body carries a complete merge manifest
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          s=.claude/skills/auto-merge/pr-manifest.sh
+          if [ ! -f "$s" ]; then
+            echo "::error::$s is missing — commit .claude/ (rasa.domain.code's bin/init installs it)"
+            exit 1
+          fi
+          printf '%s\n' "$PR_BODY" > "$RUNNER_TEMP/pr-body.md"
+          bash "$s" check "$RUNNER_TEMP/pr-body.md"

@@ -56,8 +56,15 @@ more. Acceptance criteria are verifiable, not aspirational.
 2. **Parse the user's description.** Extract: the role (who),
    the capability (what), the outcome (why). Anything missing →
    flag as an assumption.
-3. **Render the story** in the format below, in one chat message.
-   No file writes. No tool calls beyond reads for context.
+3. **Validate the story** following `validate/SKILL.md` at the
+   **short** tier, against the user's description: every
+   acceptance criterion traces to the want, the want to the
+   outcome, and nothing in scope goes unchecked. Fill gaps in
+   the draft; a gap that needs a judgment call becomes an
+   assumption.
+4. **Render the story** in the format below, in one chat message,
+   with the validation block after it. No file writes. No tool
+   calls beyond reads for context.
 
 ## Output format
 

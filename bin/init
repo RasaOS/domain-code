@@ -359,7 +359,17 @@ for entry in manifest.get('seed', {}).get('files', []):
                 f.write(content)
             print(f"    \u00b7 stamp: {entry['to']}")
     elif policy in ('skip-if-exists', 'file-replace'):
-        # skip-if-exists already handled the exists case above
+        # skip-if-exists already handled the exists case above. A
+        # file-replace seed (the _template-* files) is refreshed on every
+        # install/sync — unless the consumer kept it in overrides[].
+        if policy == 'file-replace' and os.path.exists(dst):
+            try:
+                _ov = json.load(open(os.path.join(target, '.claude', 'rasa.lock.json'))).get('overrides') or []
+            except (OSError, ValueError):
+                _ov = []
+            if os.path.normpath(entry['to']) in {os.path.normpath(str(o)) for o in _ov}:
+                print(f"    · keep (overrides[]): {entry['to']}")
+                continue
         shutil.copy2(src, dst)
         print(f"    · copy: {entry['to']}")
     else:
@@ -393,6 +403,29 @@ PYEOF
     echo "  task-enforcement: left OFF (existing project — turn it on deliberately)"
     echo "    enable with: .claude/skills/task-enforce/task-enforce.sh on"
   fi
+fi
+
+# ---------- Install the task-discipline hooks (every install and sync) ----------
+# Idempotent. Also REPAIRS the hook pre-0.59.0 `task-enforce on` wrote, whose
+# command was the matcher string: it ran on every tool call, failed, and the
+# guard never ran. Before 0.59.0 this script also set task enforcement
+# ENABLED for new projects without installing any hook at all. Each hook
+# checks its own switch (task-enforcement.json, task-hygiene.json), so
+# installing them never turns anything on by itself.
+TE_SH="$TARGET/.claude/skills/task-enforce/task-enforce.sh"
+if [[ -f "$TE_SH" ]] && command -v python3 >/dev/null 2>&1; then
+  ( cd "$TARGET" && RASA_ROOT="$TARGET" bash "$TE_SH" hooks ) 2>&1 | sed 's/^/  /' || true
+fi
+
+# ---------- tasks/history.tsv merges as a union ----------
+# The transition log is append-only and committed, and /open-pr and
+# /peer-review append to it on PR branches. Two PRs each moving a task would
+# conflict on every merge; a union merge keeps both rows. Added only if the
+# project has not said anything about the file already.
+GA="$TARGET/.gitattributes"
+if [[ -d "$TARGET/tasks" ]] && ! grep -qs '^tasks/history\.tsv' "$GA"; then
+  printf 'tasks/history.tsv merge=union\n' >> "$GA"
+  echo "  .gitattributes: tasks/history.tsv merge=union"
 fi
 
 # ---------- Clone the Element source into <target>/kit/<folder>/ (the /kit stash) ----------

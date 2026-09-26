@@ -458,16 +458,111 @@ import json, sys
 d = json.load(open(sys.argv[1])); d["enabled"] = (sys.argv[2] == "true")
 json.dump(d, open(sys.argv[1], "w"), indent=2); open(sys.argv[1], "a").write("\n")
 PY
-  local ih="$root/.claude/skills/install-hook/install-hook.sh"
-  if [ -f "$ih" ]; then
-    bash "$ih" add "$CC_EVENT" "$CC_MATCHER" "$CC_COMMAND" --target "$CC_TARGET" >/dev/null 2>&1 \
-      || bash "$ih" add "$CC_EVENT" "$CC_MATCHER" "$CC_COMMAND" >/dev/null 2>&1 || true
-  fi
+  cmd_hooks >/dev/null || { echo "error: could not install the hooks into $CC_TARGET" >&2; return 1; }
   echo "✓ task enforcement ON"
   echo "  A code change with no linked task is denied once, a stub is filed,"
   echo "  and the retry proceeds. Docs and .claude/** are recorded, not gated"
   echo "  — except the paths in classify.audit_anyway."
   cmd_status
+}
+
+# hooks — install (idempotently) the hooks this Element's task discipline
+# rides on, into the COMMITTED .claude/settings.json, and remove the broken
+# entry earlier versions wrote. Run by bin/init on every install and sync.
+#
+# Before 0.59.0 `on` called install-hook.sh with the matcher where the command
+# goes, so the hook installed was `command: "Edit|Write|MultiEdit|NotebookEdit"`
+# with no matcher: it ran on EVERY tool call, failed "command not found"
+# (non-blocking), and the guard never ran — anywhere. bin/init, meanwhile,
+# set enabled:true for new projects and installed no hook at all.
+#
+# Each hook checks its own switch, so installing them is always safe:
+#   PreToolUse Edit|Write|MultiEdit|NotebookEdit → guard        (task-enforcement.json enabled)
+#   PreToolUse Bash                              → guard-start  (task-hygiene.json block_start)
+#   SessionStart                                 → reconcile.sh check --session (report only)
+HOOK_START_CMD="bash .claude/skills/task-enforce/task-enforce.sh guard-start"
+HOOK_SESSION_CMD="bash .claude/skills/reconcile/reconcile.sh check --session"
+cmd_hooks() {
+  local root; root="$(repo_root)" || return 1
+  python3 - "$root/$CC_TARGET" "$CC_MATCHER" "$CC_COMMAND" "$HOOK_START_CMD" "$HOOK_SESSION_CMD" <<'PY'
+import json, os, sys
+path, edit_matcher, edit_cmd, start_cmd, session_cmd = sys.argv[1:6]
+try:
+    d = json.load(open(path)) if os.path.exists(path) else {}
+except ValueError:
+    print("error: %s is not valid JSON — fix it first" % path, file=sys.stderr)
+    sys.exit(1)
+hooks = d.setdefault("hooks", {})
+BROKEN = "Edit|Write|MultiEdit|NotebookEdit"
+changed = []
+
+def groups(event):
+    return hooks.setdefault(event, [])
+
+# Remove the broken entry (the matcher string installed as a command).
+for event in list(hooks):
+    for g in hooks[event]:
+        before = len(g.get("hooks", []))
+        g["hooks"] = [h for h in g.get("hooks", []) if h.get("command") != BROKEN]
+        if len(g["hooks"]) != before:
+            changed.append("removed the broken %s hook (command %r)" % (event, BROKEN))
+    hooks[event] = [g for g in hooks[event] if g.get("hooks")]
+
+def ensure(event, matcher, command):
+    for g in groups(event):
+        if g.get("matcher", "") == matcher and any(h.get("command") == command for h in g.get("hooks", [])):
+            return
+    for g in groups(event):
+        if g.get("matcher", "") == matcher:
+            g.setdefault("hooks", []).append({"type": "command", "command": command})
+            break
+    else:
+        groups(event).append({"matcher": matcher, "hooks": [{"type": "command", "command": command}]})
+    changed.append("installed %s [%s] -> %s" % (event, matcher or "*", command))
+
+ensure("PreToolUse", edit_matcher, edit_cmd)
+ensure("PreToolUse", "Bash", start_cmd)
+ensure("SessionStart", "", session_cmd)
+if changed:
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(d, fh, indent=2)
+        fh.write("\n")
+    os.replace(tmp, path)
+for c in changed:
+    print("hooks: " + c)
+if not changed:
+    print("hooks: all installed")
+PY
+}
+
+# guard-start — PreToolUse on Bash. Denies `task start` while the actor holds
+# stale active work or is at the WIP limit (reconcile.sh check --start), so
+# staleness cannot build up again by starting something new over it. Every
+# other Bash command is allowed at once, without starting python.
+cmd_guard_start() {
+  local payload root msg
+  payload="$(cat)"
+  case "$payload" in
+    *"task start"*|*"task\" start"*|*"bin/task"*start*) ;;
+    *) exit 0 ;;
+  esac
+  root="$(repo_root 2>/dev/null)" || exit 0
+  local rc="$root/.claude/skills/reconcile/reconcile.sh"
+  [ -f "$rc" ] || exit 0
+  # Only a real `task start` invocation — not a grep for the words.
+  printf '%s' "$payload" | python3 -c '
+import json, re, sys
+try:
+    cmd = (json.load(sys.stdin).get("tool_input") or {}).get("command") or ""
+except Exception:
+    sys.exit(1)
+sys.exit(0 if re.search(r"(^|[\s;&|(])(\S*/)?task\s+start(\s|$)", cmd) else 1)
+' 2>/dev/null || exit 0
+  if ! msg="$(bash "$rc" check --start --actor "$(actor_handle 2>/dev/null || echo unknown)" 2>&1)"; then
+    emit_deny "$msg"
+  fi
+  exit 0
 }
 
 cmd_off() {
@@ -699,6 +794,8 @@ main() {
   case "$action" in
     guard)  cmd_guard ;;
     on)     cmd_on ;;
+    hooks)  cmd_hooks ;;
+    guard-start) cmd_guard_start ;;
     off)    cmd_off ;;
     status) cmd_status ;;
     current) local r; r="$(repo_root)" || return 1; get_current "$r" || { echo "(none)"; return 0; } ;;

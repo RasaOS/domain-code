@@ -21,7 +21,7 @@ Default test suite invoked by `build/stages/30-test.sh` for every deploy. Add te
 
 1. Create a test stamp under `tests/stamps/YYYYMMDD_NNN_slug.md` (see `test-rules.md`)
 2. Add the stamp's `name` to the `tests:` list in this file's frontmatter
-3. Verify locally: `./build/stages/30-test.sh dev`
+3. Verify: `./build/build && ./build/test` — the test phase runs this suite strict (listing no tests fails)
 
 Both YAML list forms work:
 

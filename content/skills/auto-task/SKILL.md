@@ -97,7 +97,9 @@ the repo doesn't hold is a flagged assumption, surfaced loudly.
      `spec/TASK-NNN-slug` branch from a fresh `main`, commit the
      spec there (`TASK-NNN spec — <title>`), push, open a PR
      labeled `spec-only` with the autonomy report's assumptions in
-     the body, and merge via `gh pr merge --squash --delete-branch`.
+     the body and a merge manifest (`.claude/skills/auto-merge/pr-manifest.sh
+     block --kind chore --tasks TASK-NNN --merge manual --on-merge hold`)
+     so the `pr-manifest` check passes, and merge via `gh pr merge --squash --delete-branch`.
 
      **Run the gate before you push, and again before you merge.**
      The allowlist is enforced by a program, not by your reading of

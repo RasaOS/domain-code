@@ -290,6 +290,15 @@ its stubs into full specs, or `/task` to spec a single
 high-priority task early.
 ```
 
+Before handing the bundle over, validate it following
+`validate/SKILL.md` at the **medium** tier. The artifact is the
+whole bundle — MVP doc, ROADMAP, PHASES, stubs — read together;
+the original ask is what Step 1 gathered. The gaps worth hunting
+are between the files: an "In v1.0" capability no phase delivers,
+a phase with no stub, a "shippable" definition no task makes
+true. Fill them in the uncommitted bundle and render the
+validation block under the bundle summary.
+
 ### Step 5 — Iterate or close
 
 The user reviews the bundle on disk. Three branches from here:

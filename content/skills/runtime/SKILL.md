@@ -254,9 +254,9 @@ VERDICT: READY
 
 ## When NOT to use this skill
 
-- **Want to actually start the runtime** → preflight first, then
-  run the `commands.dev` from the stamp manually (no skill ships
-  for "start" yet; future `/run` skill).
+- **Want to actually start the runtime** → `/run` for local
+  development (`commands.dev`); `/test` starts `commands.start`
+  itself for the e2e phase, health-checks it, and stops it.
 - **Looking at all runtimes at once for a dashboard view** →
   `/status` (future integration).
 - **Want to inspect the cloud setup, not local runtime** →

@@ -7,6 +7,7 @@ framework: <celery | sidekiq | bull | rq | dramatiq | cron | other>
 commands:
   install: "<install deps>"
   dev: "<run worker locally — e.g. celery -A app worker --loglevel=info>"
+  start: "<run the BUILT worker — ./build/test starts this for e2e>"
   test: "<test command>"
   lint: "<lint command>"
 
@@ -30,6 +31,12 @@ env:
 depends_on: []          # the broker + anything the worker calls
   # - { name: redis,    check: "redis-cli ping" }
   # - { name: postgres, check: "pg_isready -h localhost" }
+
+# No port, so no URL: a command that exits 0 once the worker is consuming.
+# ./build/test polls it before running e2e tests (test-rules.md → End-to-end).
+health_check:
+  command: "<e.g. celery -A app inspect ping, or a check of the worker's heartbeat>"
+  timeout_seconds: 30
 
 process:
   type: long-running

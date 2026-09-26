@@ -7,6 +7,7 @@ framework: <fastapi-uvicorn | vite-react | next-js | django | rails | express | 
 commands:
   install: "<deps install — e.g. pip install -r requirements.txt, npm ci>"
   dev: "<dev server command — e.g. uvicorn app.main:app --reload, npm run dev>"
+  start: "<serve the BUILT app — e.g. uvicorn app.main:app --port 8000, npm run start; ./build/test starts this for e2e>"
   build: "<production build command, or 'n/a' if dev-only>"
   test: "<test command, or 'n/a'>"
   lint: "<lint command, or 'n/a'>"
