@@ -343,15 +343,6 @@ cmd_autosave() {
   host="$(host_tag)"
   ts="$(date '+%Y-%m-%dT%H:%M')"
 
-  # Rescue off trunk / detached HEAD onto an isolated wip branch.
-  if [ -z "$branch" ] || [ "$branch" = "$trunk" ]; then
-    local wip="wip/${host}-$(date '+%Y%m%d-%H%M')"
-    git checkout -q -b "$wip" 2>/dev/null || git checkout -q "$wip" 2>/dev/null || {
-      echo "git-guard: could not move off $trunk — autosave skipped" >&2; return 0; }
-    branch="$wip"
-    echo "git-guard: rescued work onto isolated branch $wip" >&2
-  fi
-
   git add -u 2>/dev/null || true   # tracked changes
 
   # Untracked files: add unless secret-shaped or oversized.
@@ -368,8 +359,31 @@ cmd_autosave() {
     printf '  - %s\n' "${skipped[@]}" >&2
   fi
 
+  # Nothing to save: a silent no-op that never touches the branch. This
+  # check must come BEFORE the trunk rescue below — staging is cheap and
+  # branch-independent, but switching branches is not: a checkpoint that
+  # fires on a clean trunk (PreCompact fires on every compaction, whether
+  # or not anything changed) must leave the checkout exactly where it
+  # was, not stranded on a fresh, empty wip branch that nothing will ever
+  # clean up (TASK-077 — found downstream when a daemon-scheduled
+  # checkout drifted off main with zero commits of its own to show).
   if git diff --cached --quiet 2>/dev/null; then
-    return 0   # nothing staged — silent no-op
+    return 0
+  fi
+
+  # Rescue off trunk / detached HEAD onto an isolated wip branch — only
+  # once something is actually staged to carry there. `checkout -b`
+  # leaves the index exactly as it was; nothing staged above is lost by
+  # switching branches first.
+  if [ -z "$branch" ] || [ "$branch" = "$trunk" ]; then
+    local wip="wip/${host}-$(date '+%Y%m%d-%H%M')"
+    if ! git checkout -q -b "$wip" 2>/dev/null && ! git checkout -q "$wip" 2>/dev/null; then
+      git reset -q 2>/dev/null || true   # leave the tree exactly as found
+      echo "git-guard: could not move off $trunk — autosave skipped" >&2
+      return 0
+    fi
+    branch="$wip"
+    echo "git-guard: rescued work onto isolated branch $wip" >&2
   fi
 
   if ! git commit -q -m "wip: autosave [$host] $ts" 2>/dev/null; then

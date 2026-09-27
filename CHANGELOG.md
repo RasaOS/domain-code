@@ -20,7 +20,15 @@ a consumer, and an entry without it is invisible in that report.
 
 ## Unreleased
 
-(no entries yet)
+- **Fix (TASK-077):** `git-guard`'s `autosave` no longer switches a checkout
+  off trunk when there is nothing to save. `PreCompact` fires on every
+  context compaction whether or not anything changed, and the trunk-rescue
+  checkout used to run before checking for anything staged — so a clean
+  checkpoint on trunk was silently stranded on a fresh, empty `wip/` branch
+  every time. The rescue now only runs once something is actually staged
+  to carry there; a `checkout -b` failure resets the index instead of
+  leaving it half-staged. New: `bin/test-git-guard`, wired into both CI
+  jobs.
 
 ---
 

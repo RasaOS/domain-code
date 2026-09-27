@@ -73,6 +73,7 @@ is this soft.
 - TASK-060 — The contract lock fails open on bytes it did not write (a BOM, CRLF, a deleted or garbled `is_locked` key)
 - TASK-061 — Tag v0.51.0 and v0.52.0, backfill the CHANGELOG, and validate `rasa.json` against the schema in CI
 - TASK-070 — import-env refuses secret defaults
+- TASK-077 — git-guard autosave switches off trunk even when there is nothing to save
 
 ## Phase P2 — The run record
 
