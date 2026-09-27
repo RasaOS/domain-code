@@ -13,6 +13,8 @@
 #             byte-identical, and there is never more than one **Approved.**.
 # 3. mode     every rewrite keeps the tracker's file mode.
 # 4. title    a CRLF / BOM task file's H1 is read as its title.
+# 5. big      a tracker larger than a pipe buffer: create, bundle, target,
+#             manifest, ship and check still find the release (#18).
 #
 # Usage: bin/test-release [path/to/release.sh] [--write-golden]
 # Exit 0 only if every case passes.
@@ -132,6 +134,48 @@ printf '\357\273\277---\r\nid: TASK-004\r\n---\r\n\r\n# TASK-004: Handle CRLF fi
 R bundle TASK-004 v2.0.0 >/dev/null 2>&1
 grep -q '^- TASK-004 — Handle CRLF files$' "$P/tasks/RELEASES.md" && ok "the H1 is the title, without its CR" \
   || bad "title line: $(grep 'TASK-004' "$P/tasks/RELEASES.md" | od -c | head -2)"
+
+echo "5. a tracker larger than a pipe buffer"
+# Every reader of the tracker reads to EOF. Before #18, `ledger_text |
+# grep -q` died of SIGPIPE under pipefail once the tracker outgrew one pipe
+# buffer — grep -q left at the first match, tr was killed writing the rest,
+# 141 was the pipeline's status — and create, target and bundle said "no
+# release" for a release that was there (create then wrote a duplicate).
+# Forty planned releases with a 3 KB theme each make ~130 KB below the
+# release under test, past the 64 KB pipe buffer of Linux and macOS, so the
+# failure is deterministic — and few enough headings that check stays quick.
+P="$T/big"; project "$P"
+R create v0.1.0 --theme "the oldest" >/dev/null 2>&1
+f="a theme is one line, and this one is long enough that forty of them outweigh a pipe buffer; "
+f="$f$f$f$f$f$f$f$f$f$f$f$f$f$f$f$f$f$f$f$f$f$f$f$f$f$f$f$f$f$f$f$f"
+n=40
+while [ "$n" -gt 0 ]; do
+  printf '## v0.0.%s — 📋 Planned\n\n**Theme.** %s\n**Target.** later\n\n### Targeted\n_(nothing yet)_\n\n### Bundled\n_(nothing yet)_\n\n' "$n" "$f"
+  n=$((n - 1))
+done >> "$P/tasks/RELEASES.md"
+headings() { grep -c '^## v3.0.0 ' "$P/tasks/RELEASES.md" || true; }
+rc=0; R create v3.0.0 --theme "above the bulk" >/dev/null 2>&1 || rc=$?
+[ "$rc" = 0 ] && ok "create places a release above forty others" || bad "create: rc $rc"
+rc=0; R create v3.0.0 >/dev/null 2>&1 || rc=$?
+[ "$rc" = 3 ] && [ "$(headings)" = 1 ] && ok "a second create is refused: one heading" \
+  || bad "a second create: rc $rc, headings $(headings)"
+out="$(R bundle TASK-001 v3.0.0 2>&1)"; rc=$?
+[ "$rc" = 0 ] && ok "bundle finds the release" || bad "bundle: rc $rc — $out"
+out="$(R bundle TASK-001 v3.0.0 2>&1)"
+case "$out" in *"already bundled"*) ok "a second bundle is the no-op" ;; *) bad "a second bundle: $out" ;; esac
+[ "$(approved)" = 1 ] && ok "exactly one **Approved.** line" || bad "approved lines: $(approved)"
+out="$(R target TASK-002 v3.0.0 2>&1)"; rc=$?
+[ "$rc" = 0 ] && ok "target finds the release" || bad "target: rc $rc — $out"
+R manifest v3.0.0 2>/dev/null | grep '^- TASK-001 — ' >/dev/null && ok "manifest lists what was bundled" \
+  || bad "manifest: $(R manifest v3.0.0 2>&1 | head -1)"
+R untarget TASK-002 >/dev/null 2>&1
+rc=0; R ship v3.0.0 --tag v3.0.0-abc1234-prod --sha abc1234 --date 2026-09-27 >/dev/null 2>&1 || rc=$?
+[ "$rc" = 0 ] && ok "ship on a large tracker" || bad "ship: rc $rc"
+rc=0; R check >/dev/null 2>&1 || rc=$?
+[ "$rc" = 0 ] && ok "check passes on the result" || bad "check: rc $rc — $(R check 2>&1 | tail -1)"
+{ printf '{{NEXT}}\n'; cat "$P/tasks/RELEASES.md"; } > "$P/tasks/legacy.tmp" && mv "$P/tasks/legacy.tmp" "$P/tasks/RELEASES.md"
+rc=0; R check >/dev/null 2>&1 || rc=$?
+[ "$rc" = 3 ] && ok "a large legacy tracker is still recognised" || bad "legacy tracker: rc $rc"
 
 echo
 echo "test-release: $pass passed, $fail failed"

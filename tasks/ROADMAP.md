@@ -98,6 +98,7 @@ program, and unblocks four of the others.
 - TASK-068 — Convert the dormant writers: runs, task-enforce, deploys, contract
 - TASK-069 — Sweep the remaining readers and writers; one actor lookup
 - TASK-071 — A read-only record checker: task-enforce.sh doctor
+- TASK-076 — release.sh: every reader of the tracker reads to EOF — bundle, target and create no longer die of SIGPIPE
 
 ## Phase P3 — Verification independence
 

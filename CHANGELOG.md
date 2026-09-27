@@ -20,7 +20,23 @@ a consumer, and an entry without it is invisible in that report.
 
 ## Unreleased
 
-(no entries yet)
+- **`release.sh` said "no release" for a release that was there.** `bundle`,
+  `target` and `create` asked `ledger_text | grep -q "^## $version "` under
+  `pipefail`: `grep -q` leaves at the first match, `tr` is killed writing the
+  rest of the tracker, and 141 became the answer — a race `tr` usually loses
+  on macOS from ~20 KB, deterministic past one pipe buffer. `create` then
+  wrote a duplicate heading. `section_body` piped into `subsection`'s awk had
+  the same shape one level down, so on a large tracker bundle's "already
+  bundled" and single-**Approved.** checks read false too, and `check`'s
+  legacy-tracker detection likewise. Now the heading check asks the file
+  (`ledger_has_release`), the two section readers are single awks over the
+  file — nothing feeds them, so their early `exit` hurts nobody — and what
+  reads their output reads it to the end (`grep >/dev/null`). A first cut
+  that had the readers read on instead spun bash 3.2's next process
+  substitution once `check` had leaked a few hundred of them (from ~250
+  headings); the shipped shape keeps `check` at 6 s / 23 s for 300 / 800
+  headings, as before. `bin/test-release` case 5 drives the verbs over a
+  130 KB tracker; the 0.60.0 script fails it. (#18)
 
 ---
 
