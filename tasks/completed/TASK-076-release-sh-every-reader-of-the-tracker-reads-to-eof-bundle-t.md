@@ -3,8 +3,9 @@ id: TASK-076
 type: defect
 created: 2026-09-26
 created_by: chazzcoin
-updated: 2026-09-26
+updated: 2026-09-27
 phase: P2
+completed_by: chazzcoin
 ---
 # TASK-076: release.sh: every reader of the tracker reads to EOF — bundle, target and create no longer die of SIGPIPE
 
@@ -90,3 +91,5 @@ galt main's `tasks/RELEASES.md` and `tasks/completed/TASK-467-*.md`.
   awk over the file, early `exit` kept): 300 → 6.0 s, 800 → 23.4 s;
   test-release 26/26, v0.60.0 18/8; real tracker `already bundled`; the
   same tracker with CRLF line ends: bundle and manifest correct.
+
+Gate satisfied 2026-09-27 by chazzcoin — PR #19 merged 2d4c26ca; CI green (Linux, bash 3.2 floor, stock macOS bash); test-release 26/26

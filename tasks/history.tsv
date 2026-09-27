@@ -106,3 +106,4 @@ date	id	from	to	actor	note
 2026-09-26	TASK-076	-	backlog	chazzcoin	filed
 2026-09-26	TASK-076	backlog	active	chazzcoin	the fix, its test and the changelog entry are on fix/release-sh-sigpipe
 2026-09-26	TASK-076	active	review	chazzcoin	PR #19: test-release 26/26, v0.60.0 fails case 5; real tracker old=no release, new=already bundled
+2026-09-27	TASK-076	review	completed	chazzcoin	gate: PR #19 merged 2d4c26ca; CI green (Linux, bash 3.2 floor, stock macOS bash); test-release 26/26
