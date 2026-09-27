@@ -68,6 +68,16 @@ LEDGER="$ROOT/tasks/RELEASES.md"
 # whole tracker silently reads as empty.
 ledger_text() { tr -d '\r' < "$LEDGER"; }
 
+# ledger_has_release <version> — is there a heading for it? Reads the whole
+# tracker on purpose. `ledger_text | grep -q` dies of SIGPIPE under pipefail
+# once the tracker outgrows what tr had already handed to the pipe: grep -q
+# leaves at the first match, tr is killed writing the rest, and 141 is the
+# pipeline's status — so bundle, target and create all said "no release" for
+# a release that was there (#18). The rule for every reader below is the
+# same: nothing downstream of ledger_text may exit early — `grep >/dev/null`,
+# never `grep -q`, and an awk flag, never `exit`.
+ledger_has_release() { ledger_text | grep "^## $1 " >/dev/null; }
+
 require_ledger() {
   [ -f "$LEDGER" ] && return 0
   echo "error: $LEDGER does not exist." >&2
@@ -111,12 +121,13 @@ valid_id() {
 # ------------------------------------------------------------------ read
 
 # Print the body of one release section (everything under its heading).
+# Reads to EOF — a flag, never `exit` (see ledger_has_release).
 section_body() {
   local version="$1"
   ledger_text | RV_V="## $version " awk '
     index($0, ENVIRON["RV_V"]) == 1 { inside = 1; next }
-    /^## v/          { if (inside) exit }
-    inside           { print }
+    /^## v/          { if (inside) done = 1 }
+    inside && !done  { print }
   '
 }
 
@@ -125,18 +136,16 @@ subsection() {
   local version="$1" want_sub="$2"
   section_body "$version" | RV_S="### $want_sub" awk '
     $0 == ENVIRON["RV_S"] { inside = 1; next }
-    /^### /   { if (inside) exit }
-    /^## /    { if (inside) exit }
-    inside && /^- / { print }
+    /^### /   { if (inside) done = 1 }
+    /^## /    { if (inside) done = 1 }
+    inside && !done && /^- / { print }
   '
 }
 
 cmd_manifest() {
   require_ledger || return 1
   local version="$1"
-  grep -q "^## $version " <<EOF2 || { echo "error: no release $version in $LEDGER" >&2; return 1; }
-$(ledger_text)
-EOF2
+  ledger_has_release "$version" || { echo "error: no release $version in $LEDGER" >&2; return 1; }
   subsection "$version" "Bundled"
 }
 
@@ -158,9 +167,9 @@ cmd_find() {
   local id="$1" v found=0
   while IFS= read -r v; do
     [ -n "$v" ] || continue
-    if subsection "$v" "Bundled" | grep -q "$(id_bullet_re "$id")"; then
+    if subsection "$v" "Bundled" | grep "$(id_bullet_re "$id")" >/dev/null; then
       printf '%s\tbundled\n' "$v"; found=1
-    elif subsection "$v" "Targeted" | grep -q "$(id_bullet_re "$id")"; then
+    elif subsection "$v" "Targeted" | grep "$(id_bullet_re "$id")" >/dev/null; then
       printf '%s\ttargeted\n' "$v"; found=1
     fi
   done < <(ledger_text | sed -n 's/^## \(v[0-9][^ ]*\) .*/\1/p')
@@ -191,8 +200,8 @@ cmd_check() {
   local text; text="$(ledger_text)"
 
   # Legacy tracker: the pre-v0.48.0 file, which never worked.
-  if printf '%s' "$text" | grep -q '{{NEXT}}' \
-     || printf '%s' "$text" | grep -q 'scope declared, not yet building toward it'; then
+  if printf '%s' "$text" | grep '{{NEXT}}' >/dev/null \
+     || printf '%s' "$text" | grep 'scope declared, not yet building toward it' >/dev/null; then
     echo "✗ tasks/RELEASES.md is the pre-v0.48.0 tracker (never worked; see CHANGELOG v0.48.0)." >&2
     echo "    mv tasks/RELEASES.md tasks/RELEASES.legacy.md" >&2
     echo "    then start the new one with: /release-plan v<X.Y.Z>" >&2
@@ -224,10 +233,10 @@ cmd_check() {
 
     # A shipped release must record how it shipped.
     if [ "$state" = "Shipped" ]; then
-      section_body "$v" | grep -q '^\*\*Shipped\.\*\*' || {
+      section_body "$v" | grep '^\*\*Shipped\.\*\*' >/dev/null || {
         echo "✗ $v is $GLYPH_SHIPPED but has no **Shipped.** line (date · tag · sha)" >&2
         findings=$(( findings + 1 )); }
-      section_body "$v" | grep -q '^\*\*Approved\.\*\*' || {
+      section_body "$v" | grep '^\*\*Approved\.\*\*' >/dev/null || {
         echo "✗ $v is $GLYPH_SHIPPED but has no **Approved.** line" >&2
         findings=$(( findings + 1 )); }
       # Tag presence depends on fetch state in a fresh clone — warn only.
@@ -329,7 +338,7 @@ cmd_create() {
     } > "$LEDGER"
   fi
 
-  if ledger_text | grep -q "^## $version "; then
+  if ledger_has_release "$version"; then
     echo "error: $version already has an entry" >&2; return 3
   fi
 
@@ -458,7 +467,7 @@ cmd_target() {
   valid_id "$id" || { echo "error: '$id' is not a TASK-/HOTFIX-/Phase id" >&2; return 2; }
   _line_ok "the id" "$id" || return 2
   _line_ok "the title" "$title" || return 2
-  ledger_text | grep -q "^## $version " || { echo "error: no release $version" >&2; return 1; }
+  ledger_has_release "$version" || { echo "error: no release $version" >&2; return 1; }
   [ "$(cmd_state "$version")" = "Shipped" ] && {
     echo "error: $version is already shipped — a shipped release is frozen" >&2; return 3; }
 
@@ -506,12 +515,12 @@ cmd_bundle() {
   _line_ok "the id" "$id" || return 2
   _line_ok "the title" "$title" || return 2
   _line_ok "the approver" "$approved_by" || return 2
-  ledger_text | grep -q "^## $version " || { echo "error: no release $version" >&2; return 1; }
+  ledger_has_release "$version" || { echo "error: no release $version" >&2; return 1; }
 
   # Idempotent FIRST: re-bundling what is already there is a no-op, per
   # release-add's long-standing contract — including on a shipped release,
   # where the honest answer is "yes, it is in there", not an error.
-  if subsection "$version" "Bundled" | grep -q "$(id_bullet_re "$id")"; then
+  if subsection "$version" "Bundled" | grep "$(id_bullet_re "$id")" >/dev/null; then
     echo "already bundled: $id in $version"; return 0
   fi
 
@@ -557,7 +566,7 @@ cmd_bundle() {
   # actor carrying a newline aborted half-way: work bundled, no approval.
   # rasa_actor (the shared library) refuses a control character itself.
   local need_approval=0
-  if ! section_body "$version" | grep -q '^\*\*Approved\.\*\*'; then
+  if ! section_body "$version" | grep '^\*\*Approved\.\*\*' >/dev/null; then
     need_approval=1
     [ -n "$approved_by" ] || approved_by="$(rasa_actor)" || return 2
   fi

@@ -20,7 +20,18 @@ a consumer, and an entry without it is invisible in that report.
 
 ## Unreleased
 
-(no entries yet)
+- **`release.sh` said "no release" for a release that was there.** `bundle`,
+  `target` and `create` asked `ledger_text | grep -q "^## $version "` under
+  `pipefail`: `grep -q` leaves at the first match, `tr` is killed writing the
+  rest of the tracker, and 141 became the answer — a race `tr` usually loses
+  on macOS from ~20 KB, deterministic past one pipe buffer. `create` then
+  wrote a duplicate heading. `section_body` / `subsection` had the same shape
+  one level down (an awk `exit`), so on a large tracker bundle's "already
+  bundled" and single-**Approved.** checks read false too, and `check`'s
+  legacy-tracker detection likewise. Every reader now reads to EOF
+  (`ledger_has_release`, `grep >/dev/null`, a flag instead of `exit`).
+  `bin/test-release` case 5 drives the verbs over a 100 KB tracker; the
+  0.60.0 script fails it. (#18)
 
 ---
 

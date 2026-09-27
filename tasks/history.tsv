@@ -103,3 +103,5 @@ date	id	from	to	actor	note
 2026-09-26	TASK-069	review	completed	claude	gate: PR #14 merged 41f5a12; suites green (reconcile 2026-09-26)
 2026-09-26	TASK-070	review	completed	claude	gate: PR #14 merged 41f5a12; suites green (reconcile 2026-09-26)
 2026-09-26	TASK-071	review	completed	claude	gate: PR #14 merged 41f5a12; suites green (reconcile 2026-09-26)
+2026-09-26	TASK-076	-	backlog	chazzcoin	filed
+2026-09-26	TASK-076	backlog	active	chazzcoin	the fix, its test and the changelog entry are on fix/release-sh-sigpipe
