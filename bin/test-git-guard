@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# bin/test-git-guard — regression tests for git-guard.sh's autosave (TASK-077).
+# Repo tooling: lives in bin/, is not registered in rasa.json, and is never
+# installed into a consumer.
+#
+# Builds a real repository under a temp directory, installs the shared
+# frontmatter library and git-guard.sh the way bin/init lays them out
+# (mirroring bin/test-root's own `install` helper), and drives `autosave`
+# directly — the same subcommand PreCompact and Stop call.
+#
+#   clean-trunk   autosave on trunk with nothing to save is a silent no-op:
+#                 same branch, same HEAD, no wip branch left behind.
+#   dirty-trunk   autosave on trunk with a real change still rescues it onto
+#                 an isolated wip branch and commits it there.
+#   skipped-only  an untracked file that is skipped (secret-shaped) and
+#                 nothing else pending leaves nothing staged, so it is
+#                 treated as "nothing to save" too — trunk untouched.
+#   clean-branch  autosave already off trunk, nothing to save: same branch.
+#   dirty-branch  autosave already off trunk, a real change: commits in
+#                 place, no wip branch, no rescue message.
+#
+# Usage:
+#   bin/test-git-guard
+#   TEST_GIT_GUARD_SCRIPT=<path> bin/test-git-guard
+# The variable points the harness at a different copy of git-guard.sh (a
+# pinned older release, say) — a control run against it shows which cases
+# it fails. Default: content/skills/git-guard/git-guard.sh next to this
+# checkout's bin/.
+#
+# Portable on purpose: bash 3.2, POSIX tools. Exit 0 only if every case
+# passes.
+
+set -u
+here="$(cd "$(dirname "$0")" && pwd -P)"
+LIB="$here/../content/lib/domain-code/frontmatter.sh"
+GG="${TEST_GIT_GUARD_SCRIPT:-$here/../content/skills/git-guard/git-guard.sh}"
+[ -f "$LIB" ] || { echo "test-git-guard: no library at $LIB" >&2; exit 2; }
+[ -f "$GG" ]  || { echo "test-git-guard: no script at $GG" >&2; exit 2; }
+
+T="$(mktemp -d "${TMPDIR:-/tmp}/test-git-guard.XXXXXX")" || exit 2
+T="$(cd "$T" && pwd -P)"
+trap 'rm -rf "$T"' EXIT
+export GIT_CONFIG_GLOBAL=/dev/null GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t \
+       GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+unset RASA_ROOT GIT_GUARD_PUSH
+
+pass=0; fail=0
+ok()  { pass=$((pass + 1)); printf '  ✓ %s\n' "$1"; }
+bad() { fail=$((fail + 1)); printf '  ✗ %s\n' "$1"; shift; [ "$#" -eq 0 ] || printf '      %s\n' "$@"; }
+
+# install <dir> — the shared library and git-guard.sh, laid out like
+# bin/init does, plus the lockfile rasa_root needs to resolve at all
+# (without one, autosave's first line silently no-ops on EVERY case,
+# which would pass this whole suite for the wrong reason).
+install() {
+  mkdir -p "$1/.claude/lib/domain-code" "$1/.claude/skills/git-guard"
+  cp "$LIB" "$1/.claude/lib/domain-code/frontmatter.sh"
+  cp "$GG" "$1/.claude/skills/git-guard/git-guard.sh"
+  echo '{"lock_version": 1}' > "$1/.claude/rasa.lock.json"
+}
+
+autosave() { ( cd "$1" && bash .claude/skills/git-guard/git-guard.sh autosave ) 2>&1; }
+branch()   { git -C "$1" symbolic-ref --short -q HEAD 2>/dev/null; }
+head_sha() { git -C "$1" rev-parse HEAD 2>/dev/null; }
+wip_count() { git -C "$1" for-each-ref --format='%(refname)' 'refs/heads/wip/*' | wc -l | tr -d ' '; }
+
+echo "1. clean trunk — nothing to save is a silent no-op"
+mkdir -p "$T/a"; git -C "$T/a" init -q -b main; install "$T/a"
+git -C "$T/a" add -A >/dev/null; git -C "$T/a" commit -qm init
+before_sha="$(head_sha "$T/a")"
+out="$(autosave "$T/a")"; rc=$?
+[ "$rc" -eq 0 ] && ok "exit 0" || bad "exit 0" "got rc $rc"
+[ "$(branch "$T/a")" = main ] && ok "still on main" || bad "still on main" "on $(branch "$T/a")"
+[ "$(head_sha "$T/a")" = "$before_sha" ] && ok "HEAD unchanged" || bad "HEAD unchanged"
+[ "$(wip_count "$T/a")" = 0 ] && ok "no wip branch was created" || bad "no wip branch was created" "$(git -C "$T/a" for-each-ref --format='%(refname)' 'refs/heads/wip/*')"
+[ -z "$out" ] && ok "silent (nothing printed)" || bad "silent (nothing printed)" "$out"
+
+echo "2. dirty trunk — a real change is still rescued onto a wip branch"
+mkdir -p "$T/b"; git -C "$T/b" init -q -b main; install "$T/b"
+git -C "$T/b" add -A >/dev/null; git -C "$T/b" commit -qm init
+echo changed >> "$T/b/.claude/rasa.lock.json"
+out="$(autosave "$T/b")"; rc=$?
+br="$(branch "$T/b")"
+[ "$rc" -eq 0 ] && ok "exit 0" || bad "exit 0" "got rc $rc"
+case "$br" in wip/*) ok "moved to an isolated wip branch ($br)" ;; *) bad "moved to an isolated wip branch" "stayed on $br" ;; esac
+[ -z "$(git -C "$T/b" status --porcelain)" ] && ok "tree clean after (the change was committed)" || bad "tree clean after"
+git -C "$T/b" log -1 --format=%s | grep -q '^wip: autosave \[' && ok "commit message is the autosave stamp" || bad "commit message is the autosave stamp"
+if printf '%s\n' "$out" | grep -q "rescued work onto isolated branch $br"; then
+  ok "prints the rescue message"
+else
+  bad "prints the rescue message" "$out"
+fi
+
+echo "3. a skipped-only untracked file leaves nothing staged — trunk untouched"
+mkdir -p "$T/c"; git -C "$T/c" init -q -b main; install "$T/c"
+git -C "$T/c" add -A >/dev/null; git -C "$T/c" commit -qm init
+printf 'AKIAABCDEFGHIJKLMNOP\n' > "$T/c/aws-creds.env"   # secret-shaped: skipped, not staged
+before_sha="$(head_sha "$T/c")"
+out="$(autosave "$T/c")"; rc=$?
+[ "$rc" -eq 0 ] && ok "exit 0" || bad "exit 0" "got rc $rc"
+[ "$(branch "$T/c")" = main ] && ok "still on main (a skip is not a save)" || bad "still on main" "on $(branch "$T/c")"
+[ "$(head_sha "$T/c")" = "$before_sha" ] && ok "HEAD unchanged" || bad "HEAD unchanged"
+[ "$(wip_count "$T/c")" = 0 ] && ok "no wip branch was created" || bad "no wip branch was created"
+printf '%s\n' "$out" | grep -q "NOT autosaved" && ok "the skip is still reported" || bad "the skip is still reported" "$out"
+[ -f "$T/c/aws-creds.env" ] && ok "the file itself is untouched" || bad "the file itself is untouched"
+
+echo "4. already off trunk, nothing to save — same branch"
+mkdir -p "$T/d"; git -C "$T/d" init -q -b main; install "$T/d"
+git -C "$T/d" add -A >/dev/null; git -C "$T/d" commit -qm init
+git -C "$T/d" checkout -q -b feature/x
+before_sha="$(head_sha "$T/d")"
+out="$(autosave "$T/d")"; rc=$?
+[ "$rc" -eq 0 ] && ok "exit 0" || bad "exit 0" "got rc $rc"
+[ "$(branch "$T/d")" = feature/x ] && ok "still on feature/x" || bad "still on feature/x" "on $(branch "$T/d")"
+[ "$(head_sha "$T/d")" = "$before_sha" ] && ok "HEAD unchanged" || bad "HEAD unchanged"
+[ -z "$out" ] && ok "silent (nothing printed)" || bad "silent (nothing printed)" "$out"
+
+echo "5. already off trunk, a real change — commits in place, no rescue"
+mkdir -p "$T/e"; git -C "$T/e" init -q -b main; install "$T/e"
+git -C "$T/e" add -A >/dev/null; git -C "$T/e" commit -qm init
+git -C "$T/e" checkout -q -b feature/y
+echo changed >> "$T/e/.claude/rasa.lock.json"
+out="$(autosave "$T/e")"; rc=$?
+[ "$rc" -eq 0 ] && ok "exit 0" || bad "exit 0" "got rc $rc"
+[ "$(branch "$T/e")" = feature/y ] && ok "still on feature/y (no rescue needed)" || bad "still on feature/y" "on $(branch "$T/e")"
+[ "$(wip_count "$T/e")" = 0 ] && ok "no wip branch was created" || bad "no wip branch was created"
+printf '%s\n' "$out" | grep -q "rescued work" && bad "does not print a rescue message" "$out" || ok "does not print a rescue message"
+printf '%s\n' "$out" | grep -q '^git-guard: autosaved' || bad "does print the plain autosaved message" "$out"
+
+echo
+if [ "$fail" -eq 0 ]; then
+  echo "test-git-guard: $pass passed, 0 failed"
+  exit 0
+else
+  echo "test-git-guard: $pass passed, $fail FAILED"
+  exit 1
+fi

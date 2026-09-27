@@ -128,6 +128,13 @@ jobs:
           PATH="$shim:$PATH" bash bin/test-readers
           PATH="$shim:$PATH" bash bin/check-reader-parity
 
+      # git-guard's autosave (PreCompact, Stop): a checkpoint with nothing
+      # to save must be a true no-op — same branch, same HEAD, no wip
+      # branch left behind — and one with a real change must still land
+      # on an isolated wip branch when fired on trunk (TASK-077).
+      - name: git-guard autosave
+        run: bash bin/test-git-guard
+
       # /peer-review's CI gate: a running, failed-status-context or absent
       # build must never read as green in the skill that holds merge
       # authority. A stand-in gh serves each rollup; no network.
@@ -196,6 +203,9 @@ jobs:
           /bin/bash bin/test-writers
           /bin/bash bin/test-readers
           /bin/bash bin/check-reader-parity
+
+      - name: git-guard autosave (bash 3.2)
+        run: /bin/bash bin/test-git-guard
 
       - name: Peer-review CI gate (bash 3.2)
         run: /bin/bash bin/test-peer-review
