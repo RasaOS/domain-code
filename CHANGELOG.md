@@ -20,6 +20,15 @@ a consumer, and an entry without it is invisible in that report.
 
 ## Unreleased
 
+(no entries yet)
+
+---
+
+## v0.60.1 — 2026-09-27
+
+**`release.sh` finds a release that is there: the tracker's readers open the
+file themselves.**
+
 - **`release.sh` said "no release" for a release that was there.** `bundle`,
   `target` and `create` asked `ledger_text | grep -q "^## $version "` under
   `pipefail`: `grep -q` leaves at the first match, `tr` is killed writing the
