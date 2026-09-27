@@ -68,15 +68,17 @@ LEDGER="$ROOT/tasks/RELEASES.md"
 # whole tracker silently reads as empty.
 ledger_text() { tr -d '\r' < "$LEDGER"; }
 
-# ledger_has_release <version> — is there a heading for it? Reads the whole
-# tracker on purpose. `ledger_text | grep -q` dies of SIGPIPE under pipefail
-# once the tracker outgrows what tr had already handed to the pipe: grep -q
-# leaves at the first match, tr is killed writing the rest, and 141 is the
-# pipeline's status — so bundle, target and create all said "no release" for
-# a release that was there (#18). The rule for every reader below is the
-# same: nothing downstream of ledger_text may exit early — `grep >/dev/null`,
-# never `grep -q`, and an awk flag, never `exit`.
-ledger_has_release() { ledger_text | grep "^## $1 " >/dev/null; }
+# ledger_has_release <version> — is there a heading for it? Asked of the file
+# itself, never of `ledger_text | grep -q`: under pipefail that pipeline dies
+# of SIGPIPE once the tracker outgrows what tr had already handed to the pipe
+# — grep -q leaves at the first match, tr is killed writing the rest, and 141
+# is the pipeline's status — so bundle, target and create all said "no
+# release" for a release that was there (#18). A CR before the newline does
+# not disturb this anchor. The rule for the readers below is the same: a
+# reader that stops early opens the tracker itself, so there is no producer
+# to kill, and whatever reads a reader's output reads it to the end —
+# `grep >/dev/null`, never `grep -q`.
+ledger_has_release() { grep -q "^## $1 " "$LEDGER"; }
 
 require_ledger() {
   [ -f "$LEDGER" ] && return 0
@@ -121,25 +123,35 @@ valid_id() {
 # ------------------------------------------------------------------ read
 
 # Print the body of one release section (everything under its heading).
-# Reads to EOF — a flag, never `exit` (see ledger_has_release).
+# One awk over the file: it may stop at the next heading because nothing
+# feeds it (see ledger_has_release), and it drops a CR itself, as ledger_text
+# would have.
 section_body() {
   local version="$1"
-  ledger_text | RV_V="## $version " awk '
+  RV_V="## $version " awk '
+    { sub(/\r$/, "") }
     index($0, ENVIRON["RV_V"]) == 1 { inside = 1; next }
-    /^## v/          { if (inside) done = 1 }
-    inside && !done  { print }
-  '
+    /^## v/          { if (inside) exit }
+    inside           { print }
+  ' "$LEDGER"
 }
 
-# Print the bullets under one subsection of one release.
+# Print the bullets under one subsection of one release. One awk over the
+# file, for the same reason: section_body piped into a second awk that left
+# early was the shape that killed section_body's reader — and, on bash 3.2,
+# the shape that had that reader read on instead spun the next process
+# substitution once check had leaked a few hundred of them (#18).
 subsection() {
   local version="$1" want_sub="$2"
-  section_body "$version" | RV_S="### $want_sub" awk '
-    $0 == ENVIRON["RV_S"] { inside = 1; next }
-    /^### /   { if (inside) done = 1 }
-    /^## /    { if (inside) done = 1 }
-    inside && !done && /^- / { print }
-  '
+  RV_V="## $version " RV_S="### $want_sub" awk '
+    { sub(/\r$/, "") }
+    index($0, ENVIRON["RV_V"]) == 1 { inver = 1; next }
+    !inver                { next }
+    /^## /                { exit }
+    $0 == ENVIRON["RV_S"] { insub = 1; next }
+    /^### /               { if (insub) exit }
+    insub && /^- /        { print }
+  ' "$LEDGER"
 }
 
 cmd_manifest() {

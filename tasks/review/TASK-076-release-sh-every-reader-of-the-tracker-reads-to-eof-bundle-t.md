@@ -35,11 +35,12 @@ the same pattern on a builtin.
 
 ## Scope
 
-- `content/skills/release/release.sh`: `ledger_has_release` (reads to EOF)
-  used by manifest, create, target and bundle; every `| grep -q` on a
-  tracker stream becomes `| grep … >/dev/null`; `section_body` and
-  `subsection` keep reading on a flag instead of `exit`. No output changes:
-  the golden history stays byte-identical.
+- `content/skills/release/release.sh`: `ledger_has_release` greps the file
+  itself, for manifest, create, target and bundle; `section_body` and
+  `subsection` are single awks over the file (they drop a CR themselves), so
+  their early `exit` has no producer to kill; every `| grep -q` on a reader's
+  output becomes `| grep … >/dev/null`. No output changes: the golden history
+  stays byte-identical.
 - `bin/test-release` case 5: a tracker larger than a pipe buffer (forty
   planned releases with a 3 KB theme, ~130 KB) driven through create (and
   its duplicate refusal), bundle (and its no-op with one **Approved.**),
@@ -48,10 +49,9 @@ the same pattern on a builtin.
 - `CHANGELOG.md` under Unreleased. No version bump here — the release
   commit does that.
 
-Out of scope: `check` at hundreds of headings is slow (each heading costs
-several subprocess pipelines), and at 800 headings on bash 3.2 one subshell
-was seen spinning with ~250 leaked pipe fds. Measured old against new to
-say whether that is pre-existing (Notes); a separate issue if so.
+Not done: `check` still leaks one process-substitution fd per heading on
+bash 3.2 (the inner id loop's `< <(…)`); harmless at the sizes trackers
+reach, and the shape that tripped over it is gone (Notes).
 
 ## Acceptance criteria
 
@@ -61,6 +61,8 @@ say whether that is pre-existing (Notes); a separate issue if so.
       21 KB) answers `already bundled`, where v0.60.0 answered `no release`.
 - [x] The golden history (case 1) is byte-identical to the 0.53.1 writer's.
 - [x] `bin/check-bash32` clean; `bin/check-manifest` and `bin/lint` exit 0.
+- [x] `check` at 300 / 800 headings costs what it did: 6.0 s / 23.4 s
+      (v0.60.0: 6.9 s / 23.7 s).
 
 ## Verification
 
@@ -78,3 +80,13 @@ galt main's `tasks/RELEASES.md` and `tasks/completed/TASK-467-*.md`.
   tracker: old `error: no release v2.43.0`, new `already bundled: TASK-467
   in v2.43.0`. check at 100 headings: 2.4 s new, 2.2 s old. bash 3.2 gate
   clean (68 files); check-manifest 0; lint 0.
+- 2026-09-26 (second cut) — the first cut had the two readers read on with
+  a flag instead of `exit`; test-release passed, but at 300 headings `check`
+  never finished: bash 3.2's child for the inner id loop's `<( … )` spun at
+  98% CPU with no children and ~250 inherited pipe fds (one leaks per
+  heading), the trace ending at its `read -r id`. Bisected: the flag in
+  `subsection` alone reproduces it (45 s cap hit); in `section_body` alone
+  8.4 s. Old script: 300 → 6.9 s, 800 → 23.7 s. Second cut (each reader one
+  awk over the file, early `exit` kept): 300 → 6.0 s, 800 → 23.4 s;
+  test-release 26/26, v0.60.0 18/8; real tracker `already bundled`; the
+  same tracker with CRLF line ends: bundle and manifest correct.
