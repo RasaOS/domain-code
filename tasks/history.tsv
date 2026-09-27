@@ -111,3 +111,4 @@ date	id	from	to	actor	note
 2026-09-27	TASK-077	triage	backlog	claude	fits Fail-closed defaults: a safety-net hook actively harming the common case
 2026-09-27	TASK-077	backlog	active	claude	reproduced upstream at HEAD; fix + test drafted
 2026-09-27	TASK-077	active	review	claude	PR opening next
+2026-09-27	TASK-077	review	completed	claude	gate: PR #20 merged 0dd0830c; bin/test-git-guard 24/24, and 19/24 (5 fail, exactly the no-op cases) against the unfixed script; CI: manifest+schema, bash-3.2-floor and lint green at merge, macos job corroborated by an identical local run under /bin/bash 3.2.57

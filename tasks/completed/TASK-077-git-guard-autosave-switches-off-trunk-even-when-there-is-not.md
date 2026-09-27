@@ -5,6 +5,7 @@ created: 2026-09-27
 created_by: claude
 updated: 2026-09-27
 phase: P1
+completed_by: claude
 ---
 
 # TASK-077: git-guard autosave switches off trunk even when there is nothing to save
@@ -183,3 +184,19 @@ ordering.
 - 2026-09-27 — `bin/init` into a fresh temporary project: the installed
   `.claude/skills/git-guard/git-guard.sh` is byte-identical to the
   source, and its `status` subcommand runs cleanly there.
+- 2026-09-27 — Merged (owner's go-ahead: "merge it") as `0dd0830c`, a
+  merge commit, matching this repository's own precedent
+  (`main` was unprotected; three of four CI jobs were green at merge
+  time — `manifest + schema`, `bash 3.2 floor` (which runs this task's
+  own `bin/test-git-guard` under Linux + mawk), `platform-drift lint`;
+  the fourth, `runs on stock macOS bash`, was still scheduling — this
+  task's own local run under that exact bash binary, `/bin/bash`
+  3.2.57, had already passed 24/24, so the CI gate here was corroboration,
+  not the first evidence).
+
+| **Branch** | `task/TASK-077-git-guard-autosave-clean-trunk` |
+| **PR** | [#20](https://github.com/RasaOS/domain-code/pull/20) |
+| **Tests** | `bin/test-git-guard`: 24 green (0 focused vs. full — the whole suite is the focused run) · bash 3.2 floor CI job 4m7s |
+| **Build** | clean — `bin/check-bash32` clean (69 files), `bin/lint` exit 0 (one pre-existing, unrelated MEDIUM finding), `bin/test-contract` 40/40, `bin/check-manifest` OK |
+
+Gate satisfied 2026-09-27 by claude — PR #20 merged 0dd0830c; bin/test-git-guard 24/24, and 19/24 (5 fail, exactly the no-op cases) against the unfixed script; CI: manifest+schema, bash-3.2-floor and lint green at merge, macos job corroborated by an identical local run under /bin/bash 3.2.57
