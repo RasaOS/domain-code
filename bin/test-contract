@@ -16,6 +16,9 @@
 # rather than md5 and stat -f. Exit 0 only if every case passes.
 
 set -u
+# bin/init installs land.sh's pre-push guard, which refuses Claude's pushes
+# to a trunk. These fixtures push their own throwaway trunks.
+unset CLAUDECODE
 
 # The harness itself works on bytes: BSD grep in a UTF-8 locale will not
 # match a line that holds an invalid byte, even with -a, so a check could

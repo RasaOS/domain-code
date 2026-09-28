@@ -16,6 +16,8 @@
 #   - its body's merge manifest is valid and says `merge: auto`
 #   - every PR in the manifest's `after` list has merged
 #   - GitHub says it is mergeable (no conflict)
+#   - it contains the latest trunk (else state=behind: the run merges the
+#     trunk into it with land.sh sync-pr, and CI runs again)
 #   - its CI is green (peer-review.sh's classifier: pending, failing
 #     and "no checks" all say no)
 #
@@ -34,8 +36,9 @@
 #   auto-merge.sh log <N> <event> [detail]   append to the run log
 #
 #   --from-json reads the open-PR list from a file in `gh pr list --json`
-#   shape (number, title, url, isDraft, baseRefName, headRefOid, labels,
-#   mergeable, body, statusCheckRollup), for a session with no gh.
+#   shape (number, title, url, isDraft, baseRefName, headRefName, headRefOid,
+#   labels, mergeable, mergeStateStatus, body, statusCheckRollup), for a
+#   session with no gh.
 #
 # Exit: 0 ok · 1 error · 2 usage · 3 refused (off, locked, not merged, dirty
 #       tree) · 4 no gh (use --from-json) · 7 the post-merge deploy failed
@@ -158,12 +161,21 @@ cmd_status() {
 
 # ── plan ───────────────────────────────────────────────────────────────
 
+# fresh_trunk_sha — the trunk tip after a fetch, or nothing (no remote,
+# offline): then only GitHub's own BEHIND flag can mark a PR stale.
+fresh_trunk_sha() {
+  local t; t="$(trunk_branch)"
+  git remote get-url origin >/dev/null 2>&1 || return 0
+  git fetch -q origin "+refs/heads/$t:refs/remotes/origin/$t" 2>/dev/null || return 0
+  git rev-parse -q --verify "refs/remotes/origin/$t" 2>/dev/null || true
+}
+
 # plan_py — classify the open-PR list on stdin. Every rule is here, in one
 # ordered list, so "why was #N skipped" has exactly one answer.
 plan_py() {
   MANIFEST="$MANIFEST" PEER="$PEER" TRUNK="$(trunk_branch)" LABEL="$(cfg label)" \
   HOLD="$(cfg hold_labels)" MAX="$(cfg max_per_run)" JSON_OUT="$1" \
-  HAVE_GH="$(command -v gh >/dev/null 2>&1 && echo 1 || echo 0)" python3 -c '
+  HAVE_GH="$(command -v gh >/dev/null 2>&1 && echo 1 || echo 0)" BASE="$(fresh_trunk_sha)" python3 -c '
 import json, os, subprocess, sys
 
 E = os.environ
@@ -232,6 +244,22 @@ for p in sorted(prs, key=lambda x: int(x["number"])):
         row["reason"] = "merge conflict with the trunk"; continue
     if mg != "MERGEABLE":
         row["reason"] = "mergeability not computed yet (%s)" % mg; continue
+    # Mergeable is not up to date: CI must have run on the latest trunk.
+    # GitHub says BEHIND only under strict branch protection, so the head
+    # is also checked against the fetched trunk by git.
+    behind = str(p.get("mergeStateStatus") or p.get("mergeable_state") or "").upper() == "BEHIND"
+    head = p.get("headRefOid") or ""
+    if not behind and E.get("BASE") and head:
+        def have(sha):
+            return subprocess.run(["git", "cat-file", "-e", sha + "^{commit}"], capture_output=True).returncode == 0
+        if not have(head):
+            subprocess.run(["git", "fetch", "-q", "origin", "+refs/pull/%d/head:refs/land/pr-%d" % (n, n)], capture_output=True)
+        if have(head):
+            behind = subprocess.run(["git", "merge-base", "--is-ancestor", E["BASE"], head], capture_output=True).returncode != 0
+    if behind:
+        row["state"], row["branch"] = "behind", p.get("headRefName") or ""
+        row["reason"] = "behind the trunk: the run merges the trunk in (land.sh sync-pr), then CI runs again"
+        continue
     rc, out, _ = run(["bash", E["PEER"], "classify"], json.dumps({"statusCheckRollup": p.get("statusCheckRollup") or []}))
     c = dict(l.split("=", 1) for l in out.splitlines() if "=" in l)
     if rc == 4:
@@ -256,7 +284,8 @@ for r in rows:
 
 eligible = [r["pr"] for r in rows if r["state"] == "eligible"]
 if E["JSON_OUT"] == "1":
-    print(json.dumps({"trunk": E["TRUNK"], "label": label, "eligible": eligible, "prs": rows}, indent=2))
+    print(json.dumps({"trunk": E["TRUNK"], "label": label, "eligible": eligible,
+                      "behind": [r["pr"] for r in rows if r["state"] == "behind"], "prs": rows}, indent=2))
 else:
     print("auto-merge plan: %d open PR(s), %d eligible (label: %s, trunk: %s)" % (len(rows), len(eligible), label, E["TRUNK"]))
     for r in rows:
@@ -264,8 +293,12 @@ else:
             print("pr=%d state=eligible method=%s on_merge=%s head=%s title=%s"
                   % (r["pr"], r["method"], r["on_merge"], r["head"][:12], r["title"]))
         else:
+            if r["state"] == "behind":
+                print("pr=%d state=behind branch=%s reason=%s" % (r["pr"], r.get("branch", ""), r["reason"]))
+                continue
             print("pr=%d state=skip reason=%s" % (r["pr"], r["reason"]))
     print("eligible=" + " ".join(str(n) for n in eligible))
+    print("behind=" + " ".join(str(r["pr"]) for r in rows if r["state"] == "behind"))
 '
 }
 
@@ -284,12 +317,13 @@ cmd_plan() {
   else
     command -v gh >/dev/null 2>&1 || {
       echo "auto-merge: no gh — list the open PRs with the session's GitHub tooling, save them as JSON" >&2
-      echo "  (number, title, url, isDraft, baseRefName, headRefOid, labels, mergeable, body," >&2
+      echo "  (number, title, url, isDraft, baseRefName, headRefName, headRefOid, labels, mergeable," >&2
+      echo "  mergeStateStatus, body," >&2
       echo "  statusCheckRollup) and run: auto-merge.sh plan --from-json <file>" >&2
       exit 4
     }
     gh pr list --state open --limit 100 \
-      --json number,title,url,isDraft,baseRefName,headRefOid,labels,mergeable,body,statusCheckRollup \
+      --json number,title,url,isDraft,baseRefName,headRefName,headRefOid,labels,mergeable,mergeStateStatus,body,statusCheckRollup \
       2>/dev/null | plan_py "$json" || die "could not list the open PRs"
   fi
 }

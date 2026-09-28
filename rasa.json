@@ -608,6 +608,12 @@
         "note": "/auto-merge settings: enabled (off by default), the opt-in label, hold labels, max merges per run, the CI wait, whether non-prod post-merge deploys run, and the suggested /loop interval. Project-owned and committed; seeded once. Added in v0.60.0."
       },
       {
+        "from": "seed/landing.json.template",
+        "to": ".claude/landing.json",
+        "policy": "skip-if-exists",
+        "note": "How skill outputs reach the trunk (land.sh): doc outputs land by themselves through a verified, CI-gated PR; everything else goes through a PR the skill never merges. Can only narrow the fixed docs class (docs: auto|pr, per-skill pr). Project-owned; seeded once. Added in v0.61.0."
+      },
+      {
         "from": "seed/env-transport.md.template",
         "to": ".claude/env-transport.md",
         "policy": "skip-if-exists",

@@ -1,14 +1,15 @@
 ---
 name: release
-description: Cut a production release end-to-end — preflight, merge integration into main, tag the release commit, deploy, push the tag, append AUDIT entry. Ships through the build → test → deploy chain: builds and tests the release commit (`./build/build`, `./build/test`), deploys that build to staging, then promotes the same build to production with `./build/deploy --intent=release`; falls back to a deploy command discovered from CLAUDE.md / DEPLOY.md only for a project with no pipeline. **Invocation is consent: this skill does not ask for confirmation at any soft gate.** It stops only at hard blockers (auth, failed build or tests, dirty tree, a refused gate, no pipeline and no deploy command, etc.). Triggered when the user wants to ship — e.g. "/release", "/release patch", "/release v1.2.0", "ship it", "cut a release".
+description: Cut a production release end-to-end — preflight, sync the integration branch with the latest trunk and open the release PR, tag the release commit, deploy, merge the release PR pinned to what shipped, push the tag, land the AUDIT/RELEASES record. Ships through the build → test → deploy chain: builds and tests the release commit (`./build/build`, `./build/test`), deploys that build to staging, then promotes the same build to production with `./build/deploy --intent=release`; falls back to a deploy command discovered from CLAUDE.md / DEPLOY.md only for a project with no pipeline. **Invocation is consent: this skill does not ask for confirmation at any soft gate.** It stops only at hard blockers (auth, failed build or tests, dirty tree, a refused gate, no pipeline and no deploy command, etc.). Triggered when the user wants to ship — e.g. "/release", "/release patch", "/release v1.2.0", "ship it", "cut a release".
 ---
 
 # /release — Cut a production release
 
 Orchestrate the deploy sequence end-to-end. Discover the project's
 deploy command from its docs and manifests rather than hardcoding,
-then run the canonical sequence: **preflight → merge integration
-→ tag → deploy → push tag → record**.
+then run the canonical sequence: **preflight → release PR → tag →
+deploy → merge the PR → push tag → record**. The trunk moves only
+through the release PR; nothing pushes `main` directly.
 
 **Invocation is consent.** The user typed `/release` — that is the
 release authorization. This skill does not ask "are you sure?",
@@ -43,8 +44,10 @@ merge-bearing skills) and Rule 5 (deploys route through
   - Missing release-plan match (a `tasks/RELEASES.md` entry
     declares scope that doesn't match what merged — surface the
     mismatch and stop).
-  - Merge refused by branch protection (the integration → main
-    merge fails the remote's protection rules).
+  - Merge refused by branch protection (the release PR's merge
+    fails the remote's protection rules).
+  - The trunk moved while the release ran (the deployed commit no
+    longer contains the latest trunk): stop before merging.
   - Deploy command itself fails — stop, no retry, report exactly
     what failed.
 - **Pick the version; do not ask.** If invoked with a version arg
@@ -52,11 +55,13 @@ merge-bearing skills) and Rule 5 (deploys route through
   `/release v1.2.3`), use that. Otherwise compute it from the
   heuristic in `release-rules.md`. The choice
   is logged as a flagged assumption in the closing report.
-- **Order: preflight → merge → tag → deploy → push tag.** The
-  tag is created on the merge commit *before* deploy runs, so
-  the commit's identity is locked. The tag is pushed *after*
-  deploy succeeds, so a failed deploy doesn't publish a stale
-  release tag.
+- **Order: preflight → release PR → tag → deploy → merge → push
+  tag.** The release commit is the integration branch's head,
+  synced with the latest trunk, so merging it adds nothing that
+  was not built and deployed. The tag is created on it *before*
+  deploy runs, so the commit's identity is locked. The PR merges
+  and the tag is pushed *after* deploy succeeds, so a failed
+  deploy leaves neither a merged release nor a stale tag.
 - **Platform routing is automatic.** If a `<platform>-release`
   skill exists for the detected platform, route to it. Do not
   ask — the user invoked `/release`, they want the right release
@@ -73,8 +78,10 @@ merge-bearing skills) and Rule 5 (deploys route through
   Lightweight tags do not carry the notes message.
 - **AUDIT and RELEASES recorded.** `tasks/AUDIT.md` gets a 🚀
   entry; `tasks/RELEASES.md` flips the version's entry to
-  ✅ Shipped with the tag. These edits are committed to `main`
-  as part of the release — they are not left dangling.
+  ✅ Shipped with the tag. These edits land through
+  `land.sh docs` (a self-merging docs PR) as part of the release
+  — they are not left dangling, and they are never pushed to
+  `main` directly.
 - **Honest reporting on failure.** Partial state is the worst
   state to leave undocumented. Any failure mid-flow is captured
   in the closing report with the exact step that failed, the
@@ -151,9 +158,13 @@ Run in parallel:
   with `ENV_CLASS=prod` (it ignores the pipeline's own records —
   `deploys/`, `builds/`, `tests/runs/`). A bare `git status
   --porcelain` counts those records and would stop every release.
-- `git fetch origin` — capture remote state.
-- `git log HEAD..origin/main --oneline` — if non-empty AND on
-  main, the local is behind; hard-stop with "behind upstream."
+- `bash .claude/skills/land/land.sh sync` — fetch the trunk and
+  bring it into the current branch (a fast-forward on `main`, a
+  merge on the integration branch; never a rebase). Exit 3 on
+  `main` means local commits that are not on origin: hard-stop,
+  they must land through a PR. Exit 5 is a conflict: hard-stop
+  and report the files. On the integration branch, push the
+  synced head.
 - `git describe --tags --abbrev=0` — capture the previous tag.
 - `gh pr list --state open --base main` — for visibility; not
   a stop condition.
@@ -250,30 +261,32 @@ State the choice:
 
 This is informational, not a question. The flow continues.
 
-### Step 3 — Merge integration → main
+### Step 3 — Open the release PR
 
 If the current branch is `main` and pre-flight confirmed nothing
-to merge, **skip this step**. The release is being cut on
-already-merged work; that's a valid path.
+to merge, **skip the PR**: the release commit is `main`'s head,
+which Step 1 made equal to `origin/main`. That's a valid path.
 
-Otherwise, merge the current branch into `main`:
+Otherwise the integration branch is the release, proposed
+through a PR — the trunk never moves by a local merge and a
+push:
 
-1. `git checkout main`
-2. `git pull --ff-only origin main` — must succeed; failure
-   means main moved unexpectedly, hard-stop.
-3. `git merge --no-ff <integration-branch> -m "Merge
-   <integration-branch> into main (<version>)"` — `--no-ff`
-   preserves the integration branch's history as a merge bubble,
-   matching the project's existing release-merge convention.
-4. If the merge has conflicts, hard-stop. Report exactly which
-   files; do not attempt to resolve.
-
-The merge commit is the release commit — its SHA is what the tag
-will reference. Capture it:
+1. The integration branch is synced with the latest trunk and
+   pushed (Step 1). Its head **is** the release commit: because
+   it contains `origin/main`, merging it adds nothing that was
+   not built, tested and deployed.
+2. Open (or reuse) the PR integration → `main` with a merge
+   manifest: `kind: release`, `release: <version>`,
+   `merge: manual`, `method: merge` (a merge bubble, the
+   project's release convention), `on_merge: release:<version>`.
+   `gh pr create`, or the session's GitHub tooling.
+3. Capture the release commit:
 
 ```sh
 RELEASE_SHA=$(git rev-parse HEAD)
 ```
+
+The PR is merged in Step 6, after the deploy succeeds.
 
 ### Step 4 — Tag the release commit (local)
 
@@ -315,7 +328,8 @@ only if deploy succeeds.
 **Build, test, stage, then promote.** Production accepts only a build
 that `./build/test` passed **and** that ran — and passed its smoke
 check — in staging (`gates/verified-build.sh`, `gates/promoted-build.sh`;
-neither has a bypass). On the release commit from Step 3:
+neither has a bypass). On the release commit from Step 3 (the synced
+integration head, checked out):
 
 ```sh
 ./build/build && ./build/test
@@ -323,7 +337,7 @@ neither has a bypass). On the release commit from Step 3:
 ```
 
 `<staging-env>`: `environment.sh classes`, the `staging` row. If the
-build and test already ran on the integration branch and Step 3's merge
+build and test already ran on the integration branch and Step 1's sync
 did not change the source (main had nothing the branch lacked), the
 records still match — the chain keys on the source fingerprint, not the
 commit — and the build is reused; otherwise it is rebuilt here, which is
@@ -389,20 +403,38 @@ Step 4 remains — the user decides whether to delete it (it
 represents "tried to ship v1.2.0; deploy failed") or keep it as
 a record of the attempt.
 
-### Step 6 — Push the tag
+### Step 6 — Merge the release PR, then push the tag
 
 After deploy success:
 
+1. **The trunk must not have moved.** Run
+   `bash .claude/skills/land/land.sh fresh --sha "$RELEASE_SHA"`.
+   Exit 5 means `main` moved while the release ran, so merging now
+   would put undeployed code on the trunk: hard-stop with a
+   partial-state warning (deployed, not merged). The user re-runs
+   `/release`; the build is reused if the source is unchanged.
+2. **Merge the release PR, pinned to what shipped:**
+
 ```sh
-git push origin main
+gh pr merge <N> --merge --match-head-commit "$RELEASE_SHA"
+```
+
+   Without `gh`, merge it with the session's GitHub tooling:
+   `merge_method: merge`, `expectedHeadSha: $RELEASE_SHA`. A
+   branch-protection refusal is a hard blocker — never `--admin`.
+   (Skipped when Step 3 found nothing to merge.)
+3. **Push the tag** — tags are allowed; `main` is never pushed:
+
+```sh
 git push origin "$TAG"
 ```
 
-Two separate pushes — the main push (carrying the merge commit)
-and the tag push are distinct operations and should not be
-combined. If the tag push fails (network, auth), report it as a
-partial-state warning: the deploy went live but the tag isn't
-remote yet. The user resolves by pushing the tag manually.
+The tag points at `RELEASE_SHA`, the deployed commit, which the
+merge makes part of `main`'s history. If the merge or the tag push
+fails, report it as a partial-state warning: the deploy went live
+but the release is not recorded on the remote yet. Then bring the
+local trunk up to date: `git checkout main` and
+`bash .claude/skills/land/land.sh sync`.
 
 ### Step 7 — Record the release
 
@@ -447,17 +479,17 @@ The next version is the previous version plus the default bump
 task list `(no tasks yet)` is the placeholder — the first
 `/release-add` invocation will replace it with a real bullet.
 
-Commit these edits to `main` as the post-release audit commit:
+Land these edits as the post-release record — a docs landing, never
+a commit pushed to `main`:
 
 ```sh
-git add tasks/AUDIT.md tasks/RELEASES.md
-git commit -m "audit: record v1.2.0 release"
-git push origin main
+bash .claude/skills/land/land.sh docs --skill release --title "record v1.2.0 release" -- tasks/AUDIT.md tasks/RELEASES.md
 ```
 
-This commit is part of the contract — partial state ("deploy
-shipped but no audit entry") is not acceptable. If the commit
-fails, report it as a partial-state warning.
+This landing is part of the contract — partial state ("deploy
+shipped but no audit entry") is not acceptable. Exit 6 (CI still
+running) leaves the record PR open: say so, and `land.sh merge`
+finishes it. Any other non-zero exit is a partial-state warning.
 
 ### Step 8 — Closing report
 
@@ -474,9 +506,10 @@ Render the deploy completion report per §5 Deployment report
   ┌─ release ──────────────────────────────────────────┐
   │                                                    │
   │   ●  pre-flight      passed      <duration>        │
-  │   ●  merge to main   <branch>    <duration>        │
+  │   ●  release PR      #<N>        <duration>        │
   │   ●  tagged          <tag>       <duration>        │
   │   ●  deploy          succeeded   <duration>        │
+  │   ●  PR merged       <sha>                         │
   │   ●  tag pushed      ✓                             │
   │   ●  audit recorded  ✓                             │
   │                                                    │
@@ -512,8 +545,9 @@ Glyph semantics: ● = step succeeded, ◐ = step running, ✗ = step
 failed (would have hard-stopped before this report). ▲ marks the
 version bump.
 
-If any step partially succeeded (deploy went through, tag push
-failed; or deploy went through, audit commit failed), use a §25
+If any step partially succeeded (deploy went through, the PR merge
+or tag push failed; or deploy went through, the record landing
+failed), use a §25
 WARNING alert instead of §5 — the deployment box implies a clean
 release, which a partial state isn't.
 
@@ -529,6 +563,11 @@ release, which a partial state isn't.
 - **Don't push a tag before deploy succeeds.** Tag is created
   locally in Step 4, pushed in Step 6. A pushed tag for a failed
   deploy is a misleading public record.
+- **Don't push `main`, and don't merge locally into it.** The
+  trunk moves only through the release PR (Step 6) and the record
+  landing (Step 7). The land.sh guard refuses a push to `main`.
+- **Don't merge the release PR when `main` moved.** Undeployed
+  code would ride in under the release's name.
 - **Don't run lightweight tags.** Annotated only.
 - **Don't deploy with a dirty working tree.** Hard-stop at
   pre-flight.
@@ -572,12 +611,14 @@ release, which a partial state isn't.
 ## What "done" looks like for a /release session
 
 - Pre-flight passed (every check ●).
-- Integration branch merged to main (the release commit exists).
+- The release PR merged, pinned to the deployed commit (or, on the
+  nothing-to-merge path, the release commit is `main`'s head).
 - Annotated tag created on the release commit AND pushed.
 - The build that passed `./build/test` deployed to staging, then
   promoted to production, and `60-verify` passed in both.
 - `AUDIT.md` entry appended; `RELEASES.md` entry marked ✅
-  Shipped; both committed to main.
+  Shipped; both landed through `land.sh docs` (merged, or the
+  record PR open with the reason).
 - Closing report rendered with the tag URL, commit SHA, and the
   rollback escape hatch.
 

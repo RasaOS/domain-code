@@ -32,6 +32,9 @@
 # Exit 0 only if every case passes.
 
 set -u
+# bin/init installs land.sh's pre-push guard, which refuses Claude's pushes
+# to a trunk. These fixtures push their own throwaway trunks.
+unset CLAUDECODE
 here="$(cd "$(dirname "$0")" && pwd -P)"
 ELEMENT="$(cd "$here/.." && pwd -P)"
 command -v curl >/dev/null 2>&1 || { echo "test-pipeline: curl is required"; exit 2; }

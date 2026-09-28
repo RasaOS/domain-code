@@ -22,6 +22,9 @@
 # Portable on purpose: bash 3.2, POSIX tools. Exit 0 only if every case passes.
 
 set -u
+# bin/init installs land.sh's pre-push guard, which refuses Claude's pushes
+# to a trunk. These fixtures push their own throwaway trunks.
+unset CLAUDECODE
 here="$(cd "$(dirname "$0")" && pwd -P)"
 ELEMENT="$(cd "$here/.." && pwd -P)"
 
@@ -51,11 +54,13 @@ cat > "$T/shim/gh" <<EOF
 slug() { printf '%s' "\$1" | tr '/' '_'; }
 case "\$1 \$2" in
   "pr view")
+    case "\$3" in https://*) [ -f "$T/gh-draft" ] && printf '{"isDraft":true}' || printf '{"isDraft":false}'; exit 0 ;; esac
     f="$T/gh-pr-\$(slug "\$3")"
     [ -f "\$f" ] || exit 1
     printf '{"url":"%s","state":"OPEN"}' "\$(cat "\$f")" ;;
   "label create") echo "\$@" >> "$T/gh-labels" ;;
   "pr edit") printf '%s\n' "\$@" > "$T/gh-edit-args" ;;
+  "pr ready") printf '%s\n' "\$@" > "$T/gh-ready-args" ;;
   "pr create")
     printf '%s\n' "\$@" > "$T/gh-create-args"
     head=""; prev=""
@@ -132,6 +137,7 @@ out="$($S branch TASK-001 --slug Bad_Slug 2>&1)"; rc=$?
 expect "a non-kebab slug is refused" 2 "$rc" "kebab" "$out"
 out="$(cd bin 2>/dev/null || cd tasks; "$P/$S" branch TASK-001 --slug greeting 2>&1)"; rc=$?
 expect "a change task gets task/TASK-NNN-slug (run from a subdirectory)" 0 "$rc" "branch=task/TASK-001-greeting" "$out"
+expect "  cut from the freshly fetched trunk" 0 0 "base=origin/main (fetched)" "$out"
 out="$($S branch TASK-001 --slug other 2>&1)"; rc=$?
 expect "already on a side branch: it is kept" 0 "$rc" "branch=task/TASK-001-greeting" "$out"
 
@@ -271,7 +277,15 @@ expect "  and on_merge" 0 0 "^on_merge=deploy:staging$" "$out"
 expect "the After merge section names the deploy" 0 0 "Deploy to \`staging\`" "$(cat "$B7")"
 rm -f "$T/gh-edit-args"
 out="$(PATH="$T/shim:$PATH" "$S" open TASK-001 "$B7" 2>&1)"; rc=$?
+expect "open refuses a branch that lacks the latest trunk" 3 "$rc" "does not contain the latest main" "$out"
+out="$(bash .claude/skills/land/land.sh sync --push 2>&1)"; rc=$?
+expect "land.sh sync --push merges the trunk in and pushes" 0 "$rc" "pushed=task/TASK-001-greeting" "$out"
+touch "$T/gh-draft"
+out="$(PATH="$T/shim:$PATH" "$S" open TASK-001 "$B7" 2>&1)"; rc=$?
+rm -f "$T/gh-draft"
 expect "merge: auto: open adds the auto-merge label" 0 "$rc" "label=auto-merge" "$out"
+expect "  an earlier draft is marked ready, with the §10 body" 0 0 "ready=https://github.com/o/r/pull/1" "$out"
+[ -f "$T/gh-ready-args" ] && ok "  through gh pr ready" || bad "  through gh pr ready" "not called"
 expect "  through gh pr edit --add-label" 0 0 "auto-merge" "$(cat "$T/gh-edit-args" 2>/dev/null)"
 rm -f "$T/gh-edit-args"
 out="$(PATH="$T/shim:$PATH" "$S" open TASK-001 "$B" 2>&1)"; rc=$?

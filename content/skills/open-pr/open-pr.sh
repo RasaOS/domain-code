@@ -113,6 +113,15 @@ except ValueError: sys.exit(0)
 print(d.get("url","") if d.get("state")=="OPEN" else "")' 2>/dev/null || true
 }
 
+# pr_is_draft <url> — "true" when the PR is a draft; empty when unknown.
+pr_is_draft() {
+  command -v gh >/dev/null 2>&1 || return 0
+  gh pr view "$1" --json isDraft 2>/dev/null \
+    | python3 -c 'import json,sys
+try: print("true" if json.load(sys.stdin).get("isDraft") else "false")
+except ValueError: pass' 2>/dev/null || true
+}
+
 cmd_plan() {
   local id="$1" stage branch trunk dirty ahead pr
   require_task "$id"
@@ -169,8 +178,19 @@ cmd_branch() {
     *[!a-z0-9-]*|-*|*-) echo "error: --slug must be kebab-case (a-z, 0-9, -)" >&2; exit 2 ;;
   esac
   target="$(branch_prefix "$id")/$id-$slug"
-  git checkout -q -b "$target" 2>/dev/null || die "could not create branch '$target'"
-  echo "branch=$target"
+  # Cut from the freshly fetched trunk, carrying the uncommitted work, so the
+  # PR starts from the latest code. If the trunk moved under those files,
+  # cut from here; `open` then refuses until `land.sh sync` brings it in.
+  if git remote get-url origin >/dev/null 2>&1 \
+     && git fetch -q origin "+refs/heads/$trunk:refs/remotes/origin/$trunk" 2>/dev/null \
+     && git checkout -q --no-track -b "$target" "origin/$trunk" 2>/dev/null; then
+    echo "branch=$target"
+    echo "base=origin/$trunk (fetched)"
+  else
+    git checkout -q -b "$target" 2>/dev/null || die "could not create branch '$target'"
+    echo "branch=$target"
+    echo "note: cut from the local $trunk; bring the latest trunk in before opening: bash .claude/skills/land/land.sh sync"
+  fi
 }
 
 # The body skeleton, in the shape .github/pull_request_template.md and
@@ -333,11 +353,24 @@ cmd_open() {
     || refuse "'$branch' has no upstream — push it first (push.sh run)"
   [ "$(git rev-list --count '@{u}..HEAD' 2>/dev/null || echo 1)" = "0" ] \
     || refuse "'$branch' has unpushed commits — push them first (push.sh run)"
+  # A PR is proposed against the latest trunk, never a stale one.
+  if git fetch -q origin "+refs/heads/$trunk:refs/remotes/origin/$trunk" 2>/dev/null \
+     && ! git merge-base --is-ancestor "origin/$trunk" HEAD 2>/dev/null; then
+    refuse "'$branch' does not contain the latest $trunk — run: bash .claude/skills/land/land.sh sync --push, re-run the gate (Step 3), then open"
+  fi
   cmd_check "$id" "$body" "$draft" || exit 3
 
   url="$(existing_pr)"
   if [ -n "$url" ]; then
     echo "pr=$url (already open — not re-created)"
+    # A draft opened earlier (/land pr --draft, /mission) becomes this PR:
+    # the §10 body replaces the draft's, and it is marked ready.
+    if [ "$draft" != "--draft" ] && [ "$(pr_is_draft "$url")" = "true" ]; then
+      gh pr edit "$url" --body-file "$body" >/dev/null 2>&1 \
+        && gh pr ready "$url" >/dev/null 2>&1 \
+        && echo "ready=$url (was a draft; body replaced)" \
+        || echo "open-pr: could not mark $url ready — do it by hand (gh pr ready)" >&2
+    fi
   else
     command -v gh >/dev/null 2>&1 || {
       echo "open-pr: no gh — open the PR with the session's GitHub tooling:" >&2

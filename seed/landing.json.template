@@ -1,0 +1,12 @@
+{
+  "_doc": "How this project's skill outputs reach the trunk (.claude/skills/land/land.sh). Doc outputs (docs/audits/, docs/decisions/, the task ledger, …) land by themselves: a land/ branch cut from the freshly fetched trunk, a PR, CI, and a merge pinned to the verified head. Everything else (code, CLAUDE.md and whatever it imports, .claude/, .github/) goes through a PR that the skill never merges. Which files are docs is fixed in land.py; this file can only make landing more careful, never wider. Project-owned; bin/init seeds it once.",
+
+  "docs": "auto",
+  "_docs_doc": "auto: doc outputs merge themselves once CI passes. pr: they open a PR and wait for a person, for example on a public repository where audits need a redaction pass before they are published.",
+
+  "skills": {},
+  "_skills_doc": "Per-skill narrowing, e.g. {\"audit\": \"pr\"}. Only \"pr\" narrows anything; \"auto\" here cannot override \"docs\": \"pr\" above.",
+
+  "check_wait_secs": 180,
+  "_check_wait_secs_doc": "How long a docs landing waits for CI before leaving the PR open (land.sh merge finishes it later)."
+}

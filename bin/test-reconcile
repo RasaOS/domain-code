@@ -23,6 +23,9 @@
 # Portable on purpose: bash 3.2, POSIX tools, python3.
 
 set -u
+# bin/init installs land.sh's pre-push guard, which refuses Claude's pushes
+# to a trunk. These fixtures push their own throwaway trunks.
+unset CLAUDECODE
 here="$(cd "$(dirname "$0")" && pwd -P)"
 ELEMENT="$(cd "$here/.." && pwd -P)"
 T="$(mktemp -d "${TMPDIR:-/tmp}/test-reconcile.XXXXXX")" || exit 2
