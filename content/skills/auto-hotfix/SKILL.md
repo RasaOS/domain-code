@@ -60,14 +60,19 @@ tasks *after* the hotfix ships, not during it.
   be in if rollback runs, under **Blast radius and reversal**. A
   hotfix without a rollback plan is a hotfix that can't be
   safely shipped.
-- **Spec-file fast-path is the default.** Per `autonomy-rules.md`
-  Exception 2 — the hotfix spec file and the `tasks/history.tsv`
-  and `tasks/ROADMAP.md` lines filing it wrote all match the
-  allowlist, so if the working tree is spec-files-only, it
-  auto-merges to `main` via a `spec/TASK-NNN-slug` PR.
-- **Never auto-commit code.** The hotfix FIX is `/auto-develop`'s
+- **Docs landing is the default.** Per `autonomy-rules.md`
+  Exception 2, exactly as `/auto-task` does: `land.sh sync`
+  before filing, then `land.sh docs` for what it wrote — the
+  hotfix spec, the `tasks/history.tsv` and `tasks/ROADMAP.md`
+  lines filing it wrote, and the run record — a PR from the
+  latest trunk that merges itself after CI. Other changes in the
+  working tree neither block it nor ride along — landing is
+  path-scoped.
+- **Never merge code.** The hotfix FIX is `/auto-develop`'s
   job, on a `hotfix/TASK-NNN-slug` branch per
   `code-task-rules.md` §10. `/auto-hotfix` writes the contract.
+  Any code it does write is code class: it goes through
+  `land.sh pr` / `/open-pr`, and this skill never merges it.
 
 ## Process
 
@@ -90,9 +95,12 @@ tasks *after* the hotfix ships, not during it.
 5. **Write the rollback plan.** What reverts the hotfix if it
    itself breaks something? Capture: the revert command, the
    resulting state, who can authorize escalation if needed.
-6. **File it.**
+6. **File it**, after a sync — ids come from the local ledger, so
+   it must hold the latest trunk (report a non-zero sync exit;
+   never retry it blindly):
 
    ```bash
+   bash .claude/skills/land/land.sh sync
    .claude/bin/task new --type defect --priority now --phase <P> \
      --by "$(bash .claude/skills/task-enforce/task-enforce.sh who)" "<what is broken>"
    ```
@@ -115,10 +123,23 @@ tasks *after* the hotfix ships, not during it.
    done-gate passes and the PR merges; then the 🔥
    `tasks/AUDIT.md` entry and the postmortem
    (`code-task-rules.md` §4, §13).
-9. **Spec-file fast-path** per `autonomy-rules.md` Exception 2.
+9. **Land the spec** per `autonomy-rules.md` Exception 2. Once
+   the spec is validated and the run record is closed
+   (`.claude/skills/runs/runs.sh close`), land them together:
+
+   ```bash
+   bash .claude/skills/land/land.sh docs --skill auto-hotfix --title "hotfix spec TASK-NNN: <what is broken>" --tasks TASK-NNN -- tasks/active/TASK-NNN-slug.md tasks/history.tsv tasks/ROADMAP.md tasks/runs/<RUN-id>.md
+   ```
+
+   Exit 4 (no `gh`): finish with the session's GitHub tooling per
+   `land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never
+   retry blindly. As a step of `/mission`, `/self-heal` or
+   `/self-improve`, skip this: the orchestrator's branch and PR
+   carry the spec.
 10. **Render the autonomy report** — the hotfix spec path, the
     branch name to use, the urgency justification, every
-    assumption, any hard gate hit, and the fast-path result.
+    assumption, any hard gate hit, and one landing line:
+    `Landed: PR #N merged` or `Not landed: exit N — <message>`.
 
 ## When NOT to use this skill
 
@@ -142,6 +163,8 @@ A complete, implementation-ready hotfix spec at
 post-fix follow-ups captured, and listed in `ROADMAP.md` under
 the broken functionality's phase. The autonomy report names the branch to
 use (`hotfix/TASK-NNN-slug`) and the next skill in the chain
-(`/auto-develop` on that branch). If the spec-file fast-path
-engaged: the spec is already on `main` via a merged PR. The fix
-is the user's next action, urgently.
+(`/auto-develop` on that branch). Landed: the spec, its ledger
+lines and the run record are already on the trunk via a merged
+`land.sh docs` PR; if not, the report names the exit code and
+what is still open (in a composed run, the orchestrator's PR
+carries the spec). The fix is the user's next action, urgently.

@@ -1,16 +1,17 @@
 ---
 name: open-pr
-description: Hand one task from build to review — get onto the task's branch, commit and push the work, open the pull request in the shape code-task-rules.md §10 requires (title `TASK-NNN: <title>`, the task, its acceptance criteria ☑/☐, files changed against the spec's expected list, "How I verified" with real output), `task submit` it into review/, and post the hand-off table. Refuses a PR the spec does not support (an unmet criterion, an empty "How I verified"). Never merges. Triggered when the work on a task is done and the user wants it up for review — e.g. "/open-pr", "/open-pr TASK-042", "open the PR for this task", "put this up for review", "submit TASK-042".
+description: Hand one task from build to review — get onto the task's branch (cut from the latest trunk), commit and push the work, open the pull request (or mark the branch's open draft ready) in the shape code-task-rules.md §10 requires (title `TASK-NNN: <title>`, the task, its acceptance criteria ☑/☐, files changed against the spec's expected list, "How I verified" with real output), `task submit` it into review/, and post the hand-off table. Refuses a PR the spec does not support (an unmet criterion, an empty "How I verified"). Never merges. Triggered when the work on a task is done and the user wants it up for review — e.g. "/open-pr", "/open-pr TASK-042", "open the PR for this task", "put this up for review", "submit TASK-042".
 ---
 
 # /open-pr — from built to in review
 
 The step between "the code is written" and "a reviewer can look at
-it". `/auto-develop` and `/auto-test` end with uncommitted work;
-`/push` commits and pushes but deliberately does not open a PR.
-Code-task-rules §10 says exactly what a task's PR must look like
-and that `task submit` happens when it opens — `/open-pr` is the
-skill that does it.
+it". `/auto-develop` and `/auto-test` end with a draft PR
+(`land.sh pr --draft`); `/push` commits and pushes but deliberately
+does not open a PR. Code-task-rules §10 says exactly what a task's PR
+must look like and that `task submit` happens when it opens —
+`/open-pr` is the skill that does it, turning such a draft into that
+PR.
 
 Per CLAUDE.md ethos: a PR is a claim that the spec is met. This skill
 refuses to make that claim until the task file, the test run and the
@@ -52,9 +53,10 @@ PR body all say the same thing.
   the PR branch and pushes it, so the tree is clean and the branch
   carries its own transition.
 - **Not chained from autonomous skills.** `/auto-develop`,
-  `/auto-test` and `/mission` do not call this skill: opening a PR
-  from an autonomous run is not one of `autonomy-rules.md`'s
-  exceptions. `/mission` opens its own draft PR under Exception 1.
+  `/auto-test` and `/mission` do not call this skill: an autonomous
+  run opens only a draft (`/auto-develop` and `/auto-test` through
+  `land.sh pr --draft`, `/mission` under Exception 1). Marking it
+  ready with the §10 body, and submitting the task, is this skill's.
 
 ## Interface
 
@@ -91,10 +93,27 @@ bash .claude/skills/open-pr/open-pr.sh branch <TASK-ID> --slug <kebab-slug>
 ```
 
 On the trunk it cuts `task/TASK-NNN-<slug>` (`hotfix/…` for a
-`priority: now` defect). On a side branch it keeps that branch — a
-pushed branch is never renamed. Derive the slug from the task title.
+`priority: now` defect) from the freshly fetched `origin/<trunk>`,
+carrying your uncommitted work, and prints `base=origin/<trunk>
+(fetched)`. When it cannot (no remote, or the trunk moved under your
+files) it cuts from the local trunk and prints a note to sync — Step 3
+does. On a side branch it keeps that branch — a pushed branch is never
+renamed. Derive the slug from the task title.
 
 ### Step 3 — Run the full gate once
+
+If the trunk moved since the branch was cut (`branch` printed the note
+to sync, or the branch is an older one, such as a `/auto-develop`
+draft's), bring it in **before** the gate, so "How I verified"
+describes the synced tree. It is safe either way — `sync=up to date`
+when nothing moved:
+
+```bash
+bash .claude/skills/land/land.sh sync
+```
+
+On a branch it merges the trunk in, never a rebase or a force. Exit 5
+is a conflict, already undone: report it and stop; never retry blindly.
 
 Per `code-task-rules.md` §10: run the project's **unfiltered**
 headless test command and its build (from `CLAUDE.md`), once. Keep
@@ -179,17 +198,27 @@ row.
 bash .claude/skills/open-pr/open-pr.sh open <TASK-ID> <body-file> [--draft]
 ```
 
-It re-checks, refuses dirty or unpushed work, opens the PR against
-the trunk with the title `TASK-NNN: <task title>` (or reuses the one
-already open for the branch), runs `task submit`, and commits and
-pushes that ledger transition onto the branch. When the manifest says
-`merge: auto` it also adds the `auto-merge` label, creating it on first
-use. The label is the second half of `/auto-merge`'s opt-in.
+It re-checks, refuses dirty or unpushed work, and refuses a branch
+that does not contain the latest trunk — the trunk moved after Step 3:
+run `bash .claude/skills/land/land.sh sync --push`, re-run the gate
+(Step 3) and update "How I verified", then `open` again. It opens the
+PR against the trunk with the title `TASK-NNN: <task title>`, or reuses
+the one already open for the branch: a **draft** opened earlier
+(`/auto-develop`'s `land.sh pr --draft`, or `/mission`) gets the §10
+body in place of its own and is marked ready (`gh pr edit` +
+`gh pr ready`; if it says it could not, do both by hand). Then it runs
+`task submit`, and commits and pushes that ledger transition onto the
+branch. When the manifest says `merge: auto` it also adds the
+`auto-merge` label, creating it on first use. The label is the second
+half of `/auto-merge`'s opt-in.
 
-**Exit 4 (no `gh`):** open the PR with the session's GitHub tooling
-(e.g. `mcp__github__create_pull_request`) using the base, head, title
-and body file it printed. Add the `auto-merge` label if it names one.
-Then:
+**Exit 4 (no `gh`):** `open` cannot see an existing PR, so look for one
+on the branch first. None → open the PR with the session's GitHub
+tooling (e.g. `mcp__github__create_pull_request`) using the base, head,
+title and body file it printed. A draft already open → do both halves
+yourself: replace its body with the body file and mark it ready (e.g.
+`mcp__github__update_pull_request` with `body` and `draft: false`).
+Add the `auto-merge` label if it names one. Then:
 
 ```bash
 bash .claude/skills/open-pr/open-pr.sh submit <TASK-ID> --pr <url>
@@ -242,8 +271,11 @@ The §10 hand-off table, in chat. Nothing is done yet — the task is in
 
 - **Already on a `/mission` `feat/` branch.** Kept; the PR title still
   names the task. `branch` notes the mismatch.
-- **A PR is already open for the branch.** `open` reuses it and only
-  submits.
+- **A PR is already open for the branch.** `open` reuses it, never a
+  second one. A draft (from `/auto-develop`'s `land.sh pr --draft` or
+  `/mission`) gets the §10 body and is marked ready, then submitted;
+  without `gh`, Step 7's exit-4 path does both. A ready PR is only
+  submitted. With `--draft`, it stays a draft.
 - **Push fails after submit.** The transition is committed locally;
   push the branch and the PR picks it up.
 - **The task has no acceptance criteria.** It is a stub — `check`

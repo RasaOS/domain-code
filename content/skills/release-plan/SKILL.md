@@ -69,20 +69,28 @@ and `v1.2.4` after `v1.3.0` is a normal thing to plan.
 If the user does not give a version, propose one from the last tag plus a
 minor bump and say that is what you did.
 
-## Committing
+## Landing
 
-**This skill never commits.** Planning edits are ordinary doc edits and
-the user commits them with their next change.
-
-This is deliberate rather than lazy: `git-clean.sh` counts `tasks/` as
-dirty for production, so a release that "helpfully" auto-committed or
-exempted the file would pass its own preflight and then fail the prod
-pipeline on the file it just exempted. End with the command, suggested
-not executed:
+`tasks/RELEASES.md` is docs class, so a planning edit lands by itself (a
+PR from the latest trunk that merges after CI). After a write
+(`create`, `target`, `untarget`), once `release.sh check` passes:
 
 ```bash
-git add tasks/RELEASES.md && git commit -m "releases: target TASK-058 at v1.3.0"
+bash .claude/skills/land/land.sh docs --skill release-plan --title "<what was planned>" -- tasks/RELEASES.md
 ```
+
+This is deliberate: `git-clean.sh` counts `tasks/` as dirty for
+production, so a plan left uncommitted in the working tree blocks the
+next `/release` at pre-flight, and exempting the file instead would pass
+that preflight and then fail the prod pipeline on the file it just
+exempted. Landing records the plan and leaves the tree clean.
+
+Name only `tasks/RELEASES.md`. Exit 4 (no `gh`): finish with the
+session's GitHub tooling per `land/SKILL.md` "Without `gh`". Exits
+5/6/7: report, never retry blindly. As a step of `/mission`,
+`/self-heal` or `/self-improve`, skip this: the orchestrator's branch
+and PR carry the file. End the report with one line: `Landed: PR #N
+merged` or `Not landed: exit N — <message>`.
 
 ## Related
 

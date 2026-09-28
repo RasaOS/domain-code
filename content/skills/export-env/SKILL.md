@@ -83,7 +83,7 @@ Invoke `export-env.sh build` with the chosen flags. Capture stdout/exit code:
 
 ### Report
 
-After writing, show:
+After landing (see "Land as a PR" below), show:
 
 ```markdown
 ## ✓ `.env.production-template` written
@@ -91,6 +91,7 @@ After writing, show:
 **Filters:** profile=production, required-only
 **Vars exported:** 14
 **Groups:** database/postgres (5), database/redis (3), auth/jwt (1), external-apis/openai (1), cloud/azure (4)
+**PR:** #N open, never merged by this skill *(or `Not landed: exit N — <message>`)*
 
 ### What's in it
 
@@ -114,9 +115,9 @@ OR (if file existed and was overwritten):
 
 ### Next steps
 
-1. Inspect: `git diff .env.production-template`
+1. Review the PR: #N
 2. Copy to actual profile: `cp .env.production-template .env.production && # fill in values`
-3. Commit the template: `git add .env.production-template && git commit -m "chore: regenerate .env.production-template from stamps"`
+3. Re-run `land.sh pr` after an edit — the push updates the open PR; merge it once reviewed (this skill never merges it)
 
 The actual `.env.production` file should NOT be committed (it's in
 `.gitignore`). Only the template.
@@ -144,9 +145,15 @@ Optionally, after exporting and before the user runs the result:
 
 Run `import-env.sh parse <new-template>` and `import-env.sh diff <new-template>`. If anything's NEW or MISSING, surface — could indicate a bug in `export-env.sh` or a stamp without a `var_name` field.
 
-### Never auto-commit
+### Land as a PR
 
-Same kit convention as every other writing skill. Generated file is unstaged; the user reviews and commits.
+After the last write (and the round-trip check, if run), name every template this run wrote — `.env-template` or the variant path — and nothing else:
+
+```bash
+bash .claude/skills/land/land.sh pr --skill export-env --title "regenerate <file> from stamps" -- <files>
+```
+
+Templates are code class: every contributor copies them to configure their environment, so a reviewer merges them. `land.sh pr` commits only those files on a branch from the latest trunk, pushes and opens a PR (or updates the open one for the branch). **It never merges.** Never pass a filled `.env` / `.env.<profile>` — those stay gitignored; templates hold placeholders only. A run that wrote nothing (`preview`, `diff`, `--stdout`, cancel) lands nothing. Exit 4 (no `gh`): finish with the session's GitHub tooling per `land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never retry blindly. As a step of `/mission`, `/self-heal` or `/self-improve`, skip this: the orchestrator's branch and PR carry the files.
 
 ## Output format the script generates
 
@@ -219,7 +226,7 @@ Exit codes:
 ## What this skill does NOT do
 
 - **Doesn't write values.** Only placeholders. Real values live in gitignored profile files.
-- **Doesn't auto-commit.** Generated template is left unstaged for review.
+- **Doesn't merge.** The template goes to a PR through `land.sh pr`; a reviewer merges it.
 - **Doesn't read existing `.env*` values** (even to preserve them across regeneration). Templates are pure metadata.
 - **Doesn't enforce stamp completeness.** If `env/stamps/` is empty, the output is just a header. Run `/import-env` first.
 - **Doesn't manage secrets sources.** Per-stamp source documentation lives in the stamp's body (`env-rules.md`).
@@ -236,4 +243,4 @@ If `env/stamps/` is empty, run `/import-env` first (or write stamps by hand). `/
 
 ---
 
-**See also:** `import-env` (the inverse skill), `env-rules.md` (stamp model), `stamps.md` (universal stamp pattern), `script-craft.md` (doctrine: script owns mechanics).
+**See also:** `import-env` (the inverse skill), `env-rules.md` (stamp model), `stamps.md` (universal stamp pattern), `script-craft.md` (doctrine: script owns mechanics), `land/SKILL.md` (how its files reach the trunk).

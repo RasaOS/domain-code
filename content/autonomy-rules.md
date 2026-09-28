@@ -62,14 +62,16 @@ situation** in its report:
   `git-flow-rules.md` Rules 2, 4, and 5 these are always
   user-authorized. An autonomous skill (auto-* family + /mission)
   never merges to `main`, never pushes `main`, never tags a
-  release, never deploys to prod. Four narrow carve-outs for the
+  release, never deploys to prod. Five narrow carve-outs for the
   autonomous family, all documented in "The exceptions" below:
   (a) `/mission` may push its own `feat/` branch and open a draft
-  PR; (b) `/auto-task` and `/auto-phase` may auto-merge
-  spec-only PRs to `main`; (c) `/mission` may run a non-prod
-  preview deploy when the goal asks for it; (d) `/auto-merge` may
-  merge PRs that opted in and passed `/peer-review`, then deploy them
-  to a non-prod environment.
+  PR; (b) any autonomous skill's docs-class outputs land through
+  `land.sh docs`, a PR that merges itself after CI; (c) `/mission`
+  may run a non-prod preview deploy when the goal asks for it;
+  (d) `/auto-merge` may merge PRs that opted in and passed
+  `/peer-review`, then deploy them to a non-prod environment;
+  (e) `/auto-develop` and `/auto-test` may commit to the task
+  branch and open a draft PR, which they never merge.
 
   Two additional static-authorization carve-outs live in
   `git-flow-rules.md` Rule 2 for the **user-invoked
@@ -99,14 +101,19 @@ Autonomy changes *who decides*, never *how good the work is*. Every
 `craft-rules.md`, `test-rules.md`, and `git-flow-rules.md`.
 Autonomy never lowers a verification bar, never skips a test, never
 ships unreviewed work. **"Never auto-commit" still holds** as the
-default — an `auto-*` skill leaves its work in the working tree,
-uncommitted, for the user to review with `git diff` and commit.
-The four documented exceptions are below.
+default — outside the documented exceptions, an `auto-*` skill
+leaves its work in the working tree, uncommitted, for the user to
+review with `git diff` and commit. The exceptions now cover the
+family's own outputs: docs land through a PR that merges itself
+after CI (Exception 2), and code goes to the task branch in a
+draft PR a reviewer merges (Exception 5). Nothing an `auto-*`
+skill writes reaches `main` without a PR. The five documented
+exceptions are below.
 
-## The exceptions — four narrow carve-outs
+## The exceptions — five narrow carve-outs
 
 The default — "never auto-commit, never merge to `main`, never
-deploy" — holds for the `auto-*` family. Four narrowly-scoped
+deploy" — holds for the `auto-*` family. Five narrowly-scoped
 exceptions are encoded in the contract. Each is opt-in by *intent*
 (the skill triggers the carve-out only when its specific
 conditions hold), bounded (each names its scope precisely), and
@@ -125,54 +132,74 @@ The draft PR waits for the user to validate and merge. The commit
 and the PR are `/mission`'s to make; **the merge to `main` is
 always the user's**.
 
-### Exception 2 — `/auto-task` and `/auto-phase` may auto-merge spec-only PRs
+### Exception 2 — Docs landing
 
-Task and phase **spec files** are documentation, not code. They
-describe work; they do not run work. The team needs visibility
-into what has been spec'd, and the friction of "every spec file
-waits for a manual commit + PR + review + merge" is a real tax on
-the autonomous flow.
+Specs, ledger moves, audits and decisions are **documentation**,
+not code. They describe work; they do not run work. The team needs
+visibility into what has been spec'd and decided, and a record
+left uncommitted in one session's working tree is gone when the
+container is. "Every record waits for a manual commit + PR +
+review + merge" is a real tax on the autonomous flow, and "leave
+it uncommitted" is how records got lost.
 
 The carve-out:
 
-- **Allowlist.** Every file in the PR must match the spec-file
-  allowlist: `tasks/**/*.md`, `tasks/PHASES.md`,
-  `tasks/ROADMAP.md`, `tasks/RELEASES.md`, and
-  `tasks/history.tsv` — the transition log `.claude/bin/task`
-  appends to on every filing and move; data, not code. Any file
-  outside the allowlist disqualifies the fast-path, including
+- **Docs class only, decided by a program.** `land.sh` /
+  `land.py` classify every file, and nothing else does. Docs class
+  is the `tasks/**` ledger (`tasks/**/*.md`, `tasks/history.tsv`)
+  and the records
+  (`docs/{audits,decisions,postmortems,retros,notes,handoff,blast-radius,scope,exports,regrets,mvp,wrangle}/**/*.md`,
+  `docs/glossary.md`); the full table is in `land/SKILL.md`.
+  Never docs class, whatever the path: any `CLAUDE.md` /
+  `AGENTS.md`, anything `CLAUDE.md` `@`-imports (e.g.
+  `docs/notes/INDEX.md`), `.claude/**`, `.github/**`, and
   `tasks/tasks.config.yml`, which declares the ledger's actors and
-  targets and is a decision, not a spec.
-- **Clean tree precondition.** The working tree must contain no
-  non-spec dirty files at the moment the fast-path runs. If it
-  does, fall back to "leave uncommitted" — same as the default.
-- **Short-lived branch + real PR.** Push to a `spec/<id>` branch
-  (e.g. `spec/TASK-NNN-slug`, `spec/PHASE-X-slug`), open a PR
-  labeled `spec-only` with the autonomy report's assumptions in
-  the body, then merge via `gh pr merge --squash --delete-branch`.
-- **Branch protection wins.** If branch protection refuses the
-  merge, the PR stays open and the autonomy report says so. The
-  skill does not use `--admin` or force the merge.
-- **Never code.** This carve-out exists *because* spec files are
-  not code. The moment any non-allowlist file is in the change
-  set, the fast-path is off — no exceptions.
-- **The allowlist is checked by a program, not by reading.**
-  `task-enforce.sh spec-gate` verifies the change set, and
-  `spec-gate --pr <N>` verifies the **pushed artifact** before the
-  merge. No bypass variable, by the `class-guard.sh` precedent.
-  Until v0.52.0 this precondition was prose only: there was no
-  script behind either skill and no `git diff --name-only` anywhere
-  near them, so the sole autonomous path to `main` rested on the
-  authoring model correctly applying a glob list to its own change.
-  The allowlist text was itself silently corrupted from v0.48.0 to
-  v0.49.0 for exactly that reason — nothing read it.
+  targets and is a decision, not a record. A code-class file refuses the landing (exit 3), with no
+  bypass; project config can make docs wait for a person, never
+  widen the class.
+- **By class, not by name.** Any autonomous skill's docs-class
+  outputs land this way. `/auto-task`, `/auto-phase`, `/auto-bug`,
+  `/auto-hotfix` and `/reconcile` land their specs, ledger lines
+  and run records through it.
+- **Path-scoped, from the latest trunk.** Name the files the skill
+  wrote, and nothing else:
 
-Rationale: spec content is the team's plan, not the team's
-runtime. Auto-merging a spec is the same review-tradeoff as
+  ```bash
+  bash .claude/skills/land/land.sh docs --skill <name> --title "<what>" [--summary "<why>"] [--tasks "TASK-NNN ..."] -- <file>...
+  ```
+
+  It syncs, cuts a short-lived `land/` branch from the freshly
+  fetched trunk, opens a PR, waits for CI, and merges pinned to the
+  verified head (`--match-head-commit`). Other changes in the
+  working tree neither block it nor ride along: the path-scoped
+  landing replaces the old clean-tree precondition.
+- **CI and branch protection win.** Only a CI pass merges. Checks
+  failing or pending, or a merge that branch protection refuses,
+  leave the PR open (exit 6) and the autonomy report says so. The
+  skill never uses `--admin` or forces the merge. Exit 4 (no `gh`):
+  finish with the session's GitHub tooling per `land/SKILL.md`
+  "Without `gh`". Exits 5/6/7: report, never retry blindly.
+- **Never code.** This carve-out exists *because* these files are
+  not code. Code, and anything an agent loads as instructions,
+  goes by PR and is never merged by the skill that wrote it
+  (Exception 5).
+- **Not in a composed run.** As a step of `/mission`, `/self-heal`
+  or `/self-improve`, a skill does not land on its own: the
+  orchestrator's branch and PR carry its files.
+- **The class is checked by a program, not by reading.** Until
+  v0.52.0 the spec-file allowlist was prose only, and its text was
+  silently corrupted from v0.48.0 to v0.49.0 for exactly that
+  reason — nothing read it. `land.py` classifies every file before
+  the push and again on the **pushed commit** (both sides of any
+  rename) before the merge. It replaces the `spec-gate` and
+  `spec-only`-label flow.
+
+Rationale: a record is the team's plan and memory, not the team's
+runtime. Auto-landing one is the same review-tradeoff as
 auto-publishing a draft note to a shared Notion. It is reversible
 (`git revert`) and visible (PR record). Lifting the gate for code
-would change behavior on `main`; lifting it for specs only
-changes what plans are visible.
+would change behavior on `main`; lifting it for docs only changes
+what plans and records are visible.
 
 ### Exception 3 — `/mission` may run an opt-in preview deploy
 
@@ -240,6 +267,47 @@ merge safe, not the person who clicks the button. When all of them pass
 on a PR its author opted in, waiting for a click adds latency, not
 safety. Production stays a person's decision.
 
+### Exception 5 — `/auto-develop` and `/auto-test` commit to the task branch and open a draft PR
+
+Code left uncommitted in one session's working tree is lost the
+same way a record is, and nobody can review what they cannot see.
+Code that reaches `main` unreviewed is the failure every other
+gate here exists to stop. A draft PR on the task's branch answers
+both: the work is durable and visible, and the merge is still a
+reviewer's.
+
+- **The task branch, from the latest trunk.** `land.sh sync`
+  first, then the task's branch (`task/TASK-NNN-<slug>`, or
+  `hotfix/…` for a `priority: now` defect) cut from the fresh
+  trunk before any code. Never the trunk.
+- **Commit the named files, open a draft.** Name the files the
+  run wrote, and nothing else:
+
+  ```bash
+  bash .claude/skills/land/land.sh pr --skill <name> --title "<what>" [--tasks TASK-NNN] [--draft] [--summary "<why>"] [--verified "<commands and results>"] -- <file>...
+  ```
+
+  Always with `--draft`, and `--tasks` naming the task. It commits
+  only those files, merges the latest trunk in (a merge, never a
+  rebase or a force), pushes the branch, and opens a **draft** PR
+  whose merge manifest says `merge: manual`. An open PR for the
+  branch is reused.
+- **Never merges.** The merge is `/peer-review`'s, `/auto-merge`'s
+  (Exception 4) or a person's; `/open-pr` marks the draft ready.
+  Exit 4 (no `gh`): finish with the session's GitHub tooling per
+  `land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never retry
+  blindly.
+- **Not when composed by `/mission`.** Inside a mission the work
+  commits to `/mission`'s `feat/` branch and rides its draft PR
+  (Exception 1); the step opens no PR of its own. The same holds
+  under `/self-heal` and `/self-improve`.
+
+Rationale: a commit on a branch nobody runs changes nothing on
+`main`, and a draft PR is a review surface, not a merge. It is the
+smallest step past "leave it uncommitted" that makes code durable,
+and it leaves the one decision that changes behavior — the merge —
+with a reviewer.
+
 ## The autonomy report
 
 Every `auto-*` skill ends with exactly one report — the user's
@@ -282,6 +350,7 @@ Render this in chat at the end of the run:
 
 > **Outcome.** <completed | stopped at a hard gate>
 > **Deliverable.** <what was produced — file paths, or "—">
+> **Landing.** <Landed: PR #N merged | PR: #N open (draft), never merged by this skill | Not landed: exit N — message>
 
 ## Evidence
 
@@ -317,8 +386,8 @@ Omit this whole section if the run completed cleanly.>
 
 ## What's next
 
-<One or two lines — the immediate next step. e.g. "Review the spec
-and commit", or "Unlock contract `user-schema` and re-run".>
+<One or two lines — the immediate next step. e.g. "Review draft
+PR #N and mark it ready", or "Unlock contract `user-schema` and re-run".>
 ```
 
 ## Looping to a verified end state with `/goal`

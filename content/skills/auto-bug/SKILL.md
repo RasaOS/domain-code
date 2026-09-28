@@ -44,12 +44,16 @@ steps and the observable wrong behavior — not what the developer
 - **Phase is the broken functionality's phase, not a "bugs"
   phase.** A login bug belongs to the auth phase. The skill
   decides phase by reading where the broken code lives.
-- **Spec-file fast-path is the default.** Per `autonomy-rules.md`
-  Exception 2 — same allowlist as `/auto-task`. If the working
-  tree is spec-files-only, the bug spec auto-merges to `main`
-  via a `spec/TASK-NNN` PR. Otherwise leave uncommitted.
+- **Docs landing is the default.** `autonomy-rules.md`
+  Exception 2 (docs landing) covers `/auto-bug` by class, not by
+  name: the defect spec, its `tasks/history.tsv` and
+  `tasks/ROADMAP.md` lines, and the run record are docs class, so
+  they land exactly as `/auto-task`'s do — `land.sh sync` before
+  filing, `land.sh docs` at the end: a PR from the latest trunk
+  that merges itself after CI. Other changes in the working tree
+  neither block it nor ride along — landing is path-scoped.
 - **Never auto-commit code.** The bug FIX is `/auto-develop`'s
-  job. `/auto-bug` writes the contract, not the implementation.
+  job — code, which goes by PR. `/auto-bug` writes the contract, not the implementation.
 
 ## Process
 
@@ -72,9 +76,12 @@ steps and the observable wrong behavior — not what the developer
    tests, its callers) and external (current docs for the
    framework, if relevant). The defect template's cause section
    is filled from this recon where possible.
-6. **File it.**
+6. **Sync, then file it.** Ids come from the local ledger, so it
+   must hold the latest trunk (report a non-zero sync exit; never
+   retry it blindly):
 
    ```bash
+   bash .claude/skills/land/land.sh sync
    .claude/bin/task new --type defect --phase <P> \
      --by "$(bash .claude/skills/task-enforce/task-enforce.sh who)" "<what is wrong>"
    ```
@@ -88,11 +95,23 @@ steps and the observable wrong behavior — not what the developer
    reported (`tasks/backlog/TASK-NNN-slug.md`), in
    `.claude/task-templates/defect.md`'s shape, then run
    `.claude/bin/check-tasks --fix` (I-34).
-8. **Spec-file fast-path** per `autonomy-rules.md` Exception 2.
-   Same allowlist as `/auto-task`.
+8. **Land the spec** per `autonomy-rules.md` Exception 2, as
+   `/auto-task` does. Once the spec is validated and the run
+   record is closed (`.claude/skills/runs/runs.sh close`):
+
+   ```bash
+   bash .claude/skills/land/land.sh docs --skill auto-bug --title "spec TASK-NNN: <what is wrong>" --tasks TASK-NNN -- tasks/backlog/TASK-NNN-slug.md tasks/history.tsv tasks/ROADMAP.md tasks/runs/<RUN-id>.md
+   ```
+
+   Exit 4 (no `gh`): finish with the session's GitHub tooling per
+   `land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never
+   retry blindly. As a step of `/mission`, `/self-heal` or
+   `/self-improve`, skip this: the orchestrator's branch and PR
+   carry the spec.
 9. **Render the autonomy report** — the bug spec path, every
    assumption (especially the root-cause guess if any), any hard
-   gate hit, and the fast-path result.
+   gate hit, and one landing line: `Landed: PR #N merged` or
+   `Not landed: exit N — <message>`.
 
 ## When NOT to use this skill
 
@@ -110,7 +129,8 @@ steps and the observable wrong behavior — not what the developer
 
 A complete, implementation-ready defect spec in `tasks/backlog/`,
 `ROADMAP.md` updated under the broken functionality's phase,
-plus one autonomy report. If the spec-file fast-path engaged:
-the spec is on `main` via a merged `spec-only` PR. Otherwise:
-uncommitted, for the user to review and commit. The fix routes
-through `/auto-develop` next.
+plus one autonomy report. Landed: the spec, its ledger lines and
+the run record are on the trunk via a merged `land.sh docs` PR.
+Not landed: the report names the exit code and what is still
+open; in a composed run, the orchestrator's PR carries the spec.
+The fix routes through `/auto-develop` next, by PR.

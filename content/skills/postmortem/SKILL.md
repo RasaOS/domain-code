@@ -48,7 +48,8 @@ entry instead and move on. Postmortems are for incidents that
 - **Action items are concrete and owned.** "We should improve
   testing" is not an action item. "Add E2E coverage for the
   payment-confirmation flow (TASK-NNN, owner: <name>)" is.
-- **Don't auto-commit.** Draft the file; user reviews and commits.
+- **Land it, don't commit it by hand.** Once the postmortem and
+  its AUDIT entry are written, `land.sh docs` lands both (Step 6).
 
 ## Process
 
@@ -216,10 +217,27 @@ skill — hand off:
 > in the table need to become tasks — want me to file them via
 > `/task`?"
 
-### Step 6 — Show the user
+### Step 6 — Land the postmortem and the AUDIT entry
 
-Render the drafted postmortem in the response. Ask for edits
-before committing.
+Both are docs class, so they land by themselves (a PR from the
+latest trunk that merges after CI). Run it once the action-item
+table is final (any task ids from Step 5 filled in):
+
+```bash
+bash .claude/skills/land/land.sh docs --skill postmortem --title "Postmortem: <short title>" -- docs/postmortems/YYYY-MM-DD-short-slug.md tasks/AUDIT.md
+```
+
+Name only the files this run wrote. Exit 4 (no `gh`): finish with
+the session's GitHub tooling per `land/SKILL.md` "Without `gh`".
+Exits 5/6/7: report, never retry blindly. As a step of `/mission`,
+`/self-heal` or `/self-improve`, skip this: the orchestrator's
+branch and PR carry both files.
+
+### Step 7 — Show the user
+
+Render the postmortem in the response, with one landing line:
+`Landed: PR #N merged` or `Not landed: exit N — <message>`. Edits
+they ask for afterwards land the same way.
 
 ## Severity rubric
 
@@ -252,7 +270,9 @@ before committing.
 
 - **Don't write blame into the timeline.** "X forgot to do Y" —
   rewrite as "the workflow let Y be skipped".
-- **Don't auto-commit.** Same as `/decision`.
+- **Don't commit or push the postmortem or AUDIT entry
+  yourself.** `land.sh docs` lands them (Step 6), same as
+  `/decision`.
 - **Don't soften.** If the action items are uncomfortable, that's
   the postmortem doing its job. Don't soften them to make the
   doc easier to read.
@@ -275,6 +295,9 @@ before committing.
 - AUDIT.md entry appended (⚠️).
 - Action items either filed as tasks (via `/task`) or marked
   "pending discussion" with the why.
-- File rendered in the response, uncommitted.
+- Both landed with `land.sh docs` (merged PR), left to the
+  orchestrator in a composed run, or the exit code and what is
+  still open reported.
+- File rendered in the response with its landing line.
 - The lesson is captured in language that won't make sense only
   to people who were there.

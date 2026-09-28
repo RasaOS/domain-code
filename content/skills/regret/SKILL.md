@@ -42,7 +42,9 @@ punitive.
 - **Cite the original decision if it exists.** Link to the
   `/decision` doc, the PR that landed the change, or the
   commit. Anchors the regret to actual history.
-- **Don't auto-commit.** Standard kit rule.
+- **Land it, don't commit it by hand.** Once the regret (and
+  the decision footer, if any) is written, `land.sh docs`
+  lands it (Step 7).
 
 ## Process
 
@@ -137,10 +139,26 @@ add a one-line "Update: see `<regret path>`" footer to it?
 That way anyone reading the original lands at the regret too.
 ```
 
-On approval: append a footer to the decision file. Don't
-commit.
+On approval: append a footer to the decision file. It lands
+with the regret in Step 7.
 
-### Step 7 — Closing summary
+### Step 7 — Land the regret (and the decision footer)
+
+Both are docs class, so they land by themselves (a PR from the
+latest trunk that merges after CI):
+
+```bash
+bash .claude/skills/land/land.sh docs --skill regret --title "Regret: <topic, terse>" -- docs/regrets/<YYYY-MM-DD>-<slug>.md docs/decisions/<original>.md
+```
+
+Name only the files this run wrote: drop the decision file if
+Step 6 didn't touch it. Exit 4 (no `gh`): finish with the
+session's GitHub tooling per `land/SKILL.md` "Without `gh`".
+Exits 5/6/7: report, never retry blindly. As a step of
+`/mission`, `/self-heal` or `/self-improve`, skip this: the
+orchestrator's branch and PR carry the files.
+
+### Step 8 — Closing summary
 
 ```markdown
 # 🪨 Regret captured
@@ -153,9 +171,12 @@ relitigating" line>
 *(If decision linked:)* Updated [`<original-decision-path>`](<link>)
 with a pointer to this regret.
 
-Review with `git diff`, edit anything that misrepresents the
-history, commit when ready.
+Landed: PR #N merged
+*(or)* Not landed: exit N — <message>
 ```
+
+Edits that correct how the history is represented land the
+same way.
 
 ## Output structure
 
@@ -270,7 +291,8 @@ hindsight record.*
 - **Don't editorialize emotional language.** "We hated it",
   "this was a disaster" — strip these. Specific facts beat
   emotional adjectives.
-- **Don't auto-commit.** Standard kit rule.
+- **Don't commit or push the regret or the decision footer
+  yourself.** `land.sh docs` lands them (Step 7).
 - **Don't skip "stop relitigating".** That section is the
   whole point of the artifact. If the user genuinely doesn't
   know what would prevent relitigation, surface that as
@@ -320,4 +342,6 @@ capturing the original choice, what hindsight reveals, what
 we'd do differently, and — most importantly — the rule of
 thumb that prevents the same call being made unconsidered
 next time. Optionally linked from the original decision doc.
-Uncommitted. The user knows the lesson is now durable.
+Landed with `land.sh docs` (merged PR), left to the
+orchestrator in a composed run, or the exit code and what is
+still open reported. The user knows the lesson is now durable.

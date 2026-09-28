@@ -178,7 +178,11 @@ If a task needs one of these, say so in its `## Blocker` and stop.
 
 - **Branch:** `task/TASK-NNN-short-slug`; `hotfix/TASK-NNN-slug` for a
   `priority: now` defect; `chore/<slug>` only for work that is genuinely not
-  a task.
+  a task. Cut it from the freshly fetched `origin/<trunk>`, never a possibly
+  stale local trunk.
+- **Latest trunk:** before the full gate and before the PR opens, the branch
+  contains the latest trunk — `bash .claude/skills/land/land.sh sync` merges
+  it in (never a rebase or a force). `open-pr.sh open` refuses otherwise.
 - **Commits:** match the repository's style — usually a one-line summary, a
   blank line, a body saying *why*, and a `Co-Authored-By` trailer. Check
   `git log` first.
@@ -295,13 +299,28 @@ every act has an owner and something notices when one is skipped.
 |---|---|---|
 | `start` | work begins on a branch | the person or agent starting — **refused** while they hold stale active work, are at the WIP limit, or merged work waits to be passed |
 | `submit` | the PR opens, ready | `/open-pr` (committed on the PR branch) |
-| `pass` | the done-gate passed, **inside the PR, just before it merges** | `/peer-review` — the trunk changes only through a merged PR, so a pass made after the merge has nowhere to land |
+| `pass` | the done-gate passed, **inside the PR, just before it merges** | `/peer-review`, committed on the PR branch; `/reconcile` when someone merged outside `/peer-review` |
 | `reject` | a gate fails, or the PR closes unmerged | `/peer-review`; `/reconcile` for a closed PR |
 | `park` / `close` | work stalls or is abandoned | a person, via `/reconcile`'s proposal batch |
 
+A ledger move made **after** a merge — a pass when someone merged outside
+`/peer-review`, `/release-add` bundling, a `/reconcile` run — lands through
+`bash .claude/skills/land/land.sh docs`: a docs PR from the latest trunk
+that merges itself after CI. Never a direct commit to the trunk.
+
+Planning moves are records, not work in flight: filing a task (`task new`),
+expanding, graduating, parking, closing or reopening one, and editing a
+`triage/` or `backlog/` body. Whoever makes them (`/task`, `/plan`,
+`/spec-phase`, the auto-* filers) runs `land.sh sync` first, because ids come
+from the local ledger, then lands the touched task files, `tasks/history.tsv`
+and `tasks/ROADMAP.md` with `land.sh docs`. (The vendored `/task` skill cannot
+say this itself; this is the domain's rule for it.) Transitions of work in
+flight — `start`, `submit`, `block`, `unblock`, `reject`, `pass` — are not
+landed on their own: they ride the work's branch and PR.
+
 Anything that slips through is caught by `/reconcile` (evidence-certain
-moves automatically, judgment calls in one batch, all through one ledger
-PR) and by the enforcement installed with the Element — thresholds in
+moves automatically, judgment calls in one batch, all through one
+self-landing ledger PR) and by the enforcement installed with the Element — thresholds in
 `.claude/task-hygiene.json`:
 
 - **Session start** prints the stale tasks.

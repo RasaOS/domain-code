@@ -36,7 +36,13 @@ Read in this order to understand the project's release setup:
 
 If the project doesn't have these files yet, the skill scaffolds
 them as a one-time setup (with user confirmation), referencing the
-`ios-task-rules.md` and the kit's pattern for `release-testflight.sh`.
+`ios-task-rules.md` and the Element's pattern for `release-testflight.sh`.
+The `scripts/` files it writes are code class: propose them with
+`bash .claude/skills/land/land.sh pr --skill ios-release --title "<what>" -- <file>...`,
+naming only those files (never `scripts/.release.env`, which is
+gitignored). That PR is never merged by this skill; the setup report
+says `PR: #N open, never merged by this skill`, and the release runs
+once the PR has merged and the shipped commit is tagged.
 
 ### Pre-flight gates (refuse if any fail)
 
@@ -129,6 +135,23 @@ Then append to `tasks/AUDIT.md`:
 ```markdown
 - 🚀 Released `vX.Y.Z-N` to TestFlight (uploaded YYYY-MM-DD HH:MM)
 ```
+
+and land that line. `tasks/AUDIT.md` is docs class: it merges itself
+after CI, built on the latest trunk (see `land/SKILL.md`):
+
+```bash
+bash .claude/skills/land/land.sh docs --skill ios-release --title "record <version>" -- tasks/AUDIT.md
+```
+
+- Exit 0 → add `Landed: PR #N merged` to the closing report.
+- Exit 4 → no `gh`: finish with the session's GitHub tooling per
+  `land/SKILL.md` "Without gh".
+- Any other exit → add `Not landed: exit N — <message>`; never retry
+  blindly (on 6 the PR stays open).
+
+When this skill runs as a step of `/mission`, `/self-heal` or
+`/self-improve`, skip the landing: the orchestrator's branch and PR
+carry `tasks/AUDIT.md`.
 
 ## What this skill does NOT do
 

@@ -47,8 +47,9 @@ Per CLAUDE.md ethos: the ledger is a factual record. Every entry's
   `.claude/settings.json` (committed) so every contributor's
   session enforces the same discipline — unlike most kit hooks,
   which are per-user.
-- **Never auto-commit.** Standard kit rule. `contract.sh` mutates
-  files; the user reviews with `git diff` and commits.
+- **Every change lands as a PR, never merged here.** `contracts/**`
+  and `.claude/settings.json` are code class: each writing verb
+  ends with `land.sh pr` (Step 5). A reviewer merges it.
 - **Stay in scope.** This skill manages a project's *own*
   contracts. Cross-repo linking and drift scanning are a separate
   concern — see "When NOT to use this skill".
@@ -171,7 +172,27 @@ Want to unlock it, or should this task stop here?
 
 Then wait. The user decides.
 
-### Step 5 — Closing summary
+### Step 5 — Land as a PR
+
+After a writing verb (`init`, `new`, `update`, `bump`, `lock`,
+`unlock`, `off`) exits 0, open a PR. Name the files this run
+wrote, and nothing else — the stamp under `contracts/stamps/`,
+`contracts/LEDGER.md`, `contracts/CONTRACTS.md`, and for
+`init`/`off` `.claude/settings.json` (plus `init`'s
+`contracts/stamps/.gitkeep`):
+
+```bash
+bash .claude/skills/land/land.sh pr --skill contract --title "<what>" -- <files>
+```
+
+It never merges. Exit 4 (no `gh`): finish with the session's
+GitHub tooling per `land/SKILL.md` "Without `gh`". Exits 5/6/7:
+report, never retry blindly. As a step of `/mission`,
+`/self-heal` or `/self-improve`, skip this: the orchestrator's
+branch and PR carry the files. `status` and `check` write
+nothing, and a refusal (Step 4) leaves nothing to land.
+
+### Step 6 — Closing summary
 
 Brief. One block for a mutation, the table for `status`.
 
@@ -186,9 +207,9 @@ tight confirmation:
 - **Version.** <old → new, or current>
 - **Lock.** <locked | unlocked>
 - **Ledger.** Recorded — `contracts/LEDGER.md`
+- **PR.** #N open, never merged by this skill *(or `Not landed: exit N — <message>`)*
 
-<next step if any — e.g. "Review with `git diff contracts/` and
-commit.">
+<next step if any — e.g. "Review and merge the PR.">
 ```
 
 ## Style rules
@@ -218,7 +239,8 @@ commit.">
 - **Don't fabricate contract content.** A schema stamp mirrors a
   real schema; an endpoint stamp mirrors a real endpoint. If you
   don't have the real shape, ask — don't invent fields.
-- **Don't auto-commit.** Standard kit rule.
+- **Don't commit, push or merge yourself.** `land.sh pr` opens the
+  PR; a reviewer merges it.
 - **Don't put cross-repo logic here.** This skill is single-repo.
 
 ## Edge cases
@@ -259,7 +281,8 @@ commit.">
 The `contracts/` folder reflects the change: a stamp created or
 updated, a version bumped, or a lock flipped — with a matching
 `LEDGER.md` entry recording who, what, why, and when, and a
-regenerated `CONTRACTS.md` index. Uncommitted. If a task hit a
+regenerated `CONTRACTS.md` index. In an open PR that this skill
+never merges (or the report names the exit). If a task hit a
 locked contract, the user has a clear decision in front of them:
 unlock and proceed, or stop. The skill never made that call for
 them.

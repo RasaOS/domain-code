@@ -32,11 +32,12 @@ document it. Default to asking questions, not proposing answers.
   or a priority doesn't serve the goal or point toward the
   vision, say so plainly. That's a flag to raise, not a veto to
   enforce.
-- **No file edits in this skill.** Don't update PHASES.md,
-  ROADMAP.md, or task specs from inside `/plan`. When a planning
-  decision is final, hand off to `/task` (for individual tasks)
-  or do a small edit OUTSIDE this skill (for phase-level docs)
-  with the user's explicit approval.
+- **No file edits until the user approves.** Don't update
+  PHASES.md, ROADMAP.md, or task specs while planning. When a
+  planning decision is final, hand off to `/task` (for individual
+  tasks); for phase-level docs, make the small edit only with the
+  user's explicit approval, then land it ("After approval — land
+  the phase docs").
 
 ## What to do on first invocation
 
@@ -87,8 +88,8 @@ When the user wants to add a phase:
    become catch-all.
 4. **If genuinely new** — propose a scope-paragraph rewrite.
    Ask if any in-flight tasks need re-homing.
-5. **Hand off** to a small docs commit (outside the skill) when
-   the user approves.
+5. **Hand off** when the user approves: make the scope edit and
+   land it ("After approval — land the phase docs").
 
 ### Pattern C — Reprioritizing
 
@@ -100,9 +101,9 @@ When the user wants to add a phase:
    sequence, ask why. If the answer is "because it would feel
    good to ship," push back — the existing sequence has reasons
    recorded in honest-tradeoffs notes.
-4. **Decide and document.** When sequence changes, the user
-   manually updates PHASES.md ordering or asks `/task` to move
-   specific tasks.
+4. **Decide and document.** When sequence changes and the user
+   approves, update PHASES.md ordering and land it (below), or
+   ask `/task` to move specific tasks.
 
 ### Pattern D — User has a vague idea
 
@@ -120,8 +121,9 @@ When the user wants to add a phase:
 
 The vision and goal live in the **Vision** and **Goal** sections
 of `CLAUDE.md`. `/plan` is where they get thought through; the
-edit itself happens outside this skill — same hand-off rule as
-phase docs.
+edit itself happens outside this skill, with the user's explicit
+approval. `CLAUDE.md` is code class: it never goes through
+`land.sh docs`.
 
 **Revising the vision** (rare — it's the north star):
 
@@ -167,6 +169,24 @@ user can settle becomes the one focused question for the next
 turn. Render the validation block, then hand off. The user can
 say "short", "long", or "skip validation" to change it.
 
+## After approval — land the phase docs
+
+Once the user approves a phase-level edit, make it, then land it.
+The phase docs are docs class, so they land by themselves (a PR
+from the latest trunk that merges after CI):
+
+```bash
+bash .claude/skills/land/land.sh docs --skill plan --title "<plan summary>" -- tasks/PHASES.md tasks/ROADMAP.md
+```
+
+Name only the files this hand-off changed, plus any
+`tasks/**/*.md` it filed. Exit 4 (no `gh`): finish with the
+session's GitHub tooling per `land/SKILL.md` "Without `gh`".
+Exits 5/6/7: report, never retry blindly. As a step of
+`/mission`, `/self-heal` or `/self-improve`, skip this: the
+orchestrator's branch and PR carry the files. The report gets one
+line: `Landed: PR #N merged` or `Not landed: exit N — <message>`.
+
 ## When NOT to use this skill
 
 - **Filing a specific task** → use `/task`.
@@ -182,8 +202,9 @@ say "short", "long", or "skip validation" to change it.
 The user leaves with one or more of:
 - A revised vision or a rotated goal, ready for a small
   `CLAUDE.md` edit
-- A new or revised phase scope, ready to be added to PHASES.md
-  + ROADMAP.md
+- A new or revised phase scope in PHASES.md + ROADMAP.md,
+  landed with `land.sh docs` once the user approved it (or
+  ready to be, if they have not yet)
 - A clearer picture of what should ship next
 - A list of tasks they want filed (handed off to `/task`)
 - A documented "we considered this and decided not to" — these

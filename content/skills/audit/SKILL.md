@@ -38,7 +38,8 @@ no narratives.
   `/task` after the user reads.
 - **Persist always.** Even if the user just asked "give me a read,"
   the audit lands at `docs/audits/<date>-<slug>.md`. The chat
-  response and the disk file are the same content.
+  response and the disk file are the same content. Then `/land`
+  gets that file onto the trunk (Step 7), so it outlives the session.
 - **Updatability.** Sections, severity tiers, lenses, and manifest
   parsers are declared in arrays at the top of `audit.sh`. Add or
   remove by editing one list — no code rewrites needed. See "Evolving
@@ -50,10 +51,11 @@ The assembled audit — script header + agent body + script footer —
 is the user-facing output. **Show it to the user as it is.**
 
 **MUST:**
-- Run the agent → validate → save pipeline.
+- Run the agent → validate → save → land pipeline.
 - Output the final assembled audit in your reply, **unchanged and
   unsummarized**.
-- Surface the saved file path in a single closing line.
+- Surface the saved file path, and how it landed, in a single
+  closing line.
 
 **MUST NOT:**
 - Summarize the audit ("Here's the gist: …"). The user wanted the
@@ -184,14 +186,36 @@ bash .claude/skills/audit/audit.sh save <target> <agent-output-file>
 Echoes the saved path (`docs/audits/<date>-<slug>.md`, with -2/-3
 collision suffix).
 
-### Step 7 — Surface to user
+### Step 7 — Land
+
+```bash
+bash .claude/skills/land/land.sh docs --skill audit --title "<audit subject>" -- docs/audits/<date>-<slug>.md
+```
+
+Name only the file `save` echoed. An audit is docs class: it merges
+itself after CI, built on the latest trunk (see `land/SKILL.md`).
+
+- Exit 0 → landed; note the PR number (`merged=#N`).
+- Exit 4 → no `gh`: finish with the session's GitHub tooling per
+  `land/SKILL.md` "Without gh".
+- Any other exit → report it; never retry blindly. On 6 the PR stays
+  open.
+
+When `/audit` runs as a step of `/mission`, `/self-heal` or
+`/self-improve`, skip this step: the orchestrator's branch and PR carry
+the audit. The closing line is then the bare saved path.
+
+### Step 8 — Surface to user
 
 Pass the agent's complete output to the user **verbatim** (per the
 Output policy above), followed by a single closing line:
 
 ```markdown
-*Saved to* `docs/audits/<date>-<slug>.md`
+*Saved to* `docs/audits/<date>-<slug>.md` · landed #N
 ```
+
+Or `· PR #N open (<why>)` when it did not merge (checks pending or
+failing, or the project makes docs wait), or `· not landed: exit N`.
 
 No preamble, no summary, no follow-up questions inside the audit
 proper.
@@ -224,8 +248,8 @@ without a /codify or /decision pass — the uniformity is the value.
   shape every time.
 - **Don't propose patches or file tasks.** Audit produces findings;
   the user routes follow-ups via `/task`.
-- **Don't auto-commit.** Saved audit lands uncommitted in the
-  working tree; user reviews + commits.
+- **Don't commit or push the audit yourself.** `land.sh docs` lands
+  it (Step 7); pass it only the saved audit file.
 - **Don't expand scope.** If something out-of-scope catches your
   eye, the agent footers it as an Open question. Don't grow the
   audit unilaterally.
@@ -245,9 +269,10 @@ without a /codify or /decision pass — the uniformity is the value.
 ## What "done" looks like for a /audit session
 
 - Audit rendered in chat verbatim from the script + agent pipeline.
-- Saved to `docs/audits/<YYYY-MM-DD>-<slug>.md`.
-- One closing line surfacing the saved path.
+- Saved to `docs/audits/<YYYY-MM-DD>-<slug>.md`, then landed via
+  `land.sh docs` (agent → validate → save → land).
+- One closing line surfacing the saved path and the landing result.
 - No file modifications outside `docs/audits/`.
-- No commits.
+- No commits outside the land PR, which carries only the audit.
 - User can re-read the audit later (it's durable history) or route
   findings to `/task`.

@@ -58,8 +58,26 @@ user has read (or skimmed) Phase 1 and says go.
   the body.
 - **No narratives, no soft no's, no soft yes's.** "This is mostly
   fine, but…" is banned. Either it's fine or it isn't.
-- **Never auto-commit.** Created docs land in the working tree,
-  uncommitted. The user reviews and commits when ready.
+- **Land what you wrote; never commit it by hand.** Each writing
+  mode (Phase 1, filing the plan, applying Tier 1) ends with one
+  call naming every file it wrote or moved:
+
+  ```bash
+  bash .claude/skills/land/land.sh auto --skill wrangle --title "<mode>: <summary>" -- <every file written>
+  ```
+
+  `auto` splits them. `docs/wrangle/**` (archive moves under
+  `docs/wrangle/archive/` included) and `tasks/triage/*` are docs
+  class: they land by themselves, a PR from the latest trunk that
+  merges after CI. `CLAUDE.md`, `.claude/context/**` and any source
+  file are code class: a PR this skill never merges. Exit 4 (no
+  `gh`): finish with the session's GitHub tooling per
+  `land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never retry
+  blindly. As a step of `/mission`, `/self-heal` or
+  `/self-improve`, skip this: the orchestrator's branch and PR
+  carry the files. The report gets the landing line:
+  `Landed: PR #N merged`, `PR: #N open, never merged by this
+  skill`, or `Not landed: exit N — <message>`.
 
 ## Phase 1 — Read-only audit
 
@@ -377,8 +395,9 @@ Read `CLAUDE.md` at the repo root.
 
   Want me to draft a `CLAUDE.md` from the audit findings?
   Tech stack, conventions, the gotchas surfaced, the
-  rules-of-thumb implied by the code. You'll review and edit
-  before it's the working contract; I won't commit.
+  rules-of-thumb implied by the code. It goes up as a PR I never
+  merge; you review and edit it there before it's the working
+  contract.
   ```
 
   On approval: write a CLAUDE.md grounded in `docs/wrangle/`.
@@ -394,9 +413,23 @@ Read `CLAUDE.md` at the repo root.
   This skill never overwrites a populated CLAUDE.md. Surface
   in the closing summary that CLAUDE.md was preserved as-is.
 
+### Land Phase 1
+
+Once every file is written, land them (Behavior contract), naming
+each file Phase 1 wrote, a drafted `CLAUDE.md` if any, and both
+paths of anything it archived:
+
+```bash
+bash .claude/skills/land/land.sh auto --skill wrangle --title "Phase 1: <scope>" -- docs/wrangle/<each file> .claude/context/project-map.md [CLAUDE.md]
+```
+
+The deep docs land by themselves. `project-map.md` and a drafted
+`CLAUDE.md` go up as a PR this skill never merges: that is where
+the user reviews them.
+
 ### Phase 1 chat response
 
-After writing the files, the chat response is **short**:
+After landing the files, the chat response is **short**:
 
 ```markdown
 # 🪢 Wrangle — Phase 1 complete
@@ -408,7 +441,14 @@ After writing the files, the chat response is **short**:
 - [`.claude/context/project-map.md`](.claude/context/project-map.md)
   — tight Claude-targeted context map
 - *(if applicable)* [`CLAUDE.md`](CLAUDE.md) — drafted from audit
-  findings, awaiting your edits
+  findings, awaiting your edits in the PR
+
+**Landing:**
+- Landed: PR #N merged — `docs/wrangle/`
+- PR: #N open, never merged by this skill — `project-map.md`
+  *(+ `CLAUDE.md`)*
+
+*(Either line may instead read: Not landed: exit N — <message>.)*
 
 **The three things most worth knowing right now:**
 1. <terse, specific>
@@ -505,9 +545,8 @@ understand? Name it and I'll take a look.
 ---
 
 **To act on Tier 1**: tell me which items (e.g. "all of them",
-"items 1, 3, 5", "skip the import cleanup"). I'll apply them to
-the working tree, uncommitted, so you can review with `git diff`
-and commit when ready.
+"items 1, 3, 5", "skip the import cleanup"). I'll apply them and
+open a PR I never merge, so you review the diff there.
 
 **To go deeper on Tier 2**: name the item and I'll route it
 through `/audit` or `/plan`.
@@ -527,7 +566,10 @@ most valuable output of a wrangle the most perishable.
 Filing executes nothing. It converts "here is what I found" into
 "here is what someone could do".
 
-1. **Use the allocator, never hand-written ids.** Per item:
+1. **Use the allocator, never hand-written ids.** Run
+   `bash .claude/skills/land/land.sh sync` first: ids come from the
+   local ledger, and a stale one hands out an id the trunk already
+   used. Then, per item:
 
    ```bash
    .claude/bin/task new --type upkeep --by <who> "<the item's short claim>"    # Tier 1
@@ -561,17 +603,31 @@ Filing executes nothing. It converts "here is what I found" into
    something an agent can close, and it is not. They stay in the
    report.
 
-5. **Report the ids and the count**, so the user can run `/backlog`
-   and see them immediately.
+5. **Land them** (Behavior contract), naming each filed task file
+   plus `tasks/history.tsv` and any ledger file `check-tasks --fix`
+   changed. All docs class, so they land by themselves:
+
+   ```bash
+   bash .claude/skills/land/land.sh auto --skill wrangle --title "File plan: <N> items" -- tasks/triage/<each id>.md tasks/history.tsv
+   ```
+
+6. **Report the ids, the count and the landing line**, so the user
+   can run `/backlog` and see them immediately.
 
 ### Applying Tier 1 items
 
 When (and only when) the user picks specific Tier 1 items:
 
 - Apply them to the working tree.
-- **Do not commit.** The user reviews `git diff` and commits.
-- After applying, render a short summary: what was changed, what
-  was skipped, suggested commit message (one line).
+- **Land them as a PR, never a merge.** Source files are code
+  class, so this opens a PR this skill never merges; the user
+  reviews the diff there:
+
+  ```bash
+  bash .claude/skills/land/land.sh auto --skill wrangle --title "Tier 1: <summary>" -- <each file changed>
+  ```
+- After landing, render a short summary: what was changed, what
+  was skipped, and the landing line.
 - If a "quick win" turns out to be non-trivial once you start
   reading more closely, **stop and surface it** — don't expand
   scope silently. Move it to Tier 2 in the plan.
@@ -609,8 +665,8 @@ When (and only when) the user picks specific Tier 1 items:
 - **Don't apply Tier 1 items en masse without the user picking
   them.** "Apply all" is fine if the user says it; assuming it
   is not.
-- **Don't auto-commit.** Same rule as every other skill that
-  modifies files.
+- **Don't commit or push by hand.** `land.sh auto` lands what each
+  writing mode wrote; name only those files.
 - **Don't pad docs.** A section with nothing real to say gets
   omitted, not stubbed. The reader's time matters.
 - **Don't extrapolate.** If the code doesn't show it, you don't
@@ -634,7 +690,8 @@ When (and only when) the user picks specific Tier 1 items:
   silently overwrite. Surface it: "There's a previous wrangle
   from `<date>`. Update in place, archive it to
   `docs/wrangle/archive/<date>/`, or stop?" Same rule for
-  `.claude/context/project-map.md`.
+  `.claude/context/project-map.md`. An archive move is docs class
+  and lands with Phase 1: name both the old and the new path.
 - **Working tree is dirty.** Warn before writing — the user might
   lose track of which files came from where. Offer to abort.
 - **No source docs at all (no README, no CLAUDE.md).** Wrangle
@@ -661,14 +718,16 @@ When (and only when) the user picks specific Tier 1 items:
 ## What "done" looks like for a /wrangle session
 
 - **After Phase 1:** `docs/wrangle/` exists with an index README
-  and one file per audited area; `.claude/context/project-map.md`
-  exists as the tight Claude-targeted index; if CLAUDE.md was
-  missing/stub, a drafted CLAUDE.md exists (with consent),
-  uncommitted, awaiting user edits. Chat response is a short
-  headline + the three things most worth knowing + an offer to
-  run Phase 2. Future Claude sessions in this project land cold
-  with project context already loaded.
+  and one file per audited area, landed on the trunk;
+  `.claude/context/project-map.md` exists as the tight
+  Claude-targeted index; if CLAUDE.md was missing/stub, a drafted
+  CLAUDE.md exists (with consent). Those two are in an open PR
+  this skill never merges, awaiting user edits. Chat response is
+  a short headline + the landing lines + the three things most
+  worth knowing + an offer to run Phase 2. Future Claude sessions
+  in this project land cold with project context already loaded.
 - **After Phase 2 (if run):** A tailored plan rendered in chat,
-  with Tier 1/2/3 items and open offers. Any approved Tier 1
-  items applied to the working tree, uncommitted. The user knows
-  exactly what changed and what to do next (`git diff` + commit).
+  with Tier 1/2/3 items and open offers. Any filed items landed in
+  `tasks/triage/`. Any approved Tier 1 items applied and in an
+  open PR this skill never merges. The user knows exactly what
+  changed and what to do next (review the PR).

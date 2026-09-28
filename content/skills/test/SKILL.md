@@ -47,6 +47,10 @@ pass". A phase that ran nothing did not pass.
   deploy must pass. Say which suite, and why. Never remove a test from
   a suite, or quarantine one, to get a run green — that is a
   reviewable decision for the user, recorded in `tests/TESTS.md`.
+- **What `/test add` writes goes through a PR it never merges.**
+  Stamps, suite lists, `tests/TESTS.md`, runtime stamps and test
+  files are code class: `land.sh pr` carries them (step 5). Running
+  the test phase lands nothing.
 
 ## Running the test phase
 
@@ -141,7 +145,22 @@ and when it must pass.
 4. **Log it.** Append a row to `tests/TESTS.md`: date, name, suite,
    why.
 
-5. **Prove it gates.** `/build` then `/test` — the new test appears in
+5. **Land it as a PR.** Name the stamp, the suite(s), `tests/TESTS.md`
+   and any runtime stamp or test file you wrote, and nothing else:
+
+   ```bash
+   bash .claude/skills/land/land.sh pr --skill test --title "<what>" [--tasks TASK-NNN] -- <files>
+   ```
+
+   It opens a PR (or updates the open one for the branch) and never
+   merges it. `/build` refuses an uncommitted tree, so land before
+   step 6; a fix found there lands the same way. Exit 4 (no `gh`):
+   finish with the session's GitHub tooling per `land/SKILL.md`
+   "Without `gh`". Exits 5/6/7: report, never retry blindly. As a
+   step of `/mission`, `/self-heal` or `/self-improve`, skip this:
+   the orchestrator's branch and PR carry the files.
+
+6. **Prove it gates.** `/build` then `/test` — the new test appears in
    the run's counts. A test that never ran in a suite is not a gate.
 
 ## Output structure
@@ -162,6 +181,9 @@ build | failed — <the first failure, quoted>>
 
 When there is no `e2e.md`, say so under the table: nothing end to end
 was run.
+
+For `/test add`, add one landing line: `PR: #N open, never merged by
+this skill` or `Not landed: exit N — <message>`.
 
 ## What you must NOT do
 
@@ -185,4 +207,5 @@ A `TST-…` record for HEAD naming the build it tested, with real
 counts per phase, every runtime it started stopped, and a verdict
 the deploy gate will act on — or, for `/test add`, a stamp in
 `tests/stamps/`, its name in the suite that should gate it, a
-`TESTS.md` row, and a run that shows it counted.
+`TESTS.md` row, all in an open PR this skill never merges, and a run
+that shows it counted.

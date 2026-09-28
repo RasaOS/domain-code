@@ -19,7 +19,7 @@ plain one that does.
 
 - **Writes durable docs only.** Output lands at
   `docs/exports/<YYYY-MM-DD>-<repo-name>.md`. No source-code
-  edits. Never auto-commits.
+  edits; the export lands by itself (Step 5).
 - **Pull from canonical sources, in order:**
   1. `README.md` — public identity.
   2. `CLAUDE.md` — working contract, tech stack, conventions.
@@ -89,7 +89,26 @@ Write to `docs/exports/<YYYY-MM-DD>-<repo>.md` using the
 placeholder with real content. Omit sections that genuinely
 don't apply (e.g. no UI layer in a CLI tool); don't stub them.
 
-### Step 5 — Closing summary
+### Step 5 — Land the export
+
+The export is docs class, so it lands by itself (a PR from the
+latest trunk that merges after CI):
+
+```bash
+bash .claude/skills/land/land.sh docs --skill export-project --title "Project export <YYYY-MM-DD>" -- docs/exports/<YYYY-MM-DD>-<repo>.md
+```
+
+Name only the export file. If the project gitignores
+`docs/exports/`, `land.sh` reports the file as ignored
+(`skipped=… ignored by .gitignore`) and does not force-add it;
+say so in the summary — the export stays local. Exit 4 (no
+`gh`): finish with the session's GitHub tooling per
+`land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never retry
+blindly. As a step of `/mission`, `/self-heal` or
+`/self-improve`, skip this: the orchestrator's branch and PR
+carry the export.
+
+### Step 6 — Closing summary
 
 Render in chat (this is short — the artifact is the export
 itself):
@@ -105,9 +124,13 @@ word count> words.
 **Sources.** <list which canonical files were available and which
 were absent>
 
-Review with `git diff`, edit anything that misrepresents the
-project, and commit when ready.
+Landed: PR #N merged
+*(or)* Not landed: exit N — <message>
+*(or)* Not landed: `docs/exports/` is gitignored here; the file stays local
 ```
+
+Edits that correct anything misrepresenting the project land the
+same way.
 
 ## Output structure
 
@@ -306,8 +329,8 @@ this file is regenerable.*
 - **Don't pad sections.** Empty in-flight task list? Section
   shows "Nothing in flight right now." in italic. Don't invent
   filler.
-- **Don't auto-commit.** Same rule as every kit skill that
-  modifies files.
+- **Don't commit or push the export yourself.** `land.sh docs`
+  lands it (Step 5).
 - **Don't overwrite previous exports silently.** Each export is
   date-stamped. Multiple exports per day get suffixed
   `-<YYYY-MM-DD>-2.md`, `-3.md`, etc.
@@ -350,6 +373,8 @@ this file is regenerable.*
 A single polished markdown file at
 `docs/exports/<YYYY-MM-DD>-<repo>.md`, sourced entirely from
 real files in the repo, with visual rhythm that makes it pleasant
-to read top-to-bottom. Uncommitted. The user reviews, optionally
-edits, and commits — or sends the file directly to whoever asked
-for it.
+to read top-to-bottom. Landed with `land.sh docs` (merged PR),
+left to the orchestrator in a composed run, kept local because
+`docs/exports/` is gitignored, or the exit code and what is still
+open reported. The user can send the file directly to whoever
+asked for it.

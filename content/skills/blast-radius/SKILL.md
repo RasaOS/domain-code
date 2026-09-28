@@ -18,8 +18,8 @@ useless; one that overstates confidence is dangerous.
 ## Behavior contract
 
 - **Read-only by default.** This skill produces a report. No
-  edits, no migrations, no commits. Action follows the report,
-  not from the skill.
+  code edits, no migrations; the only thing it lands is the
+  report (Step 8). Action follows the report, not from the skill.
 - **User describes the change first.** The skill needs to know
   what's being changed before it can scan for what depends on
   it. Ask if the user invokes without a description.
@@ -37,7 +37,8 @@ useless; one that overstates confidence is dangerous.
 - **Output saved to disk.** The report lives at
   `docs/blast-radius/<YYYY-MM-DD>-<slug>.md` so it's preserved
   for post-action verification ("did we miss anything?").
-- **Don't auto-commit.** Standard kit rule.
+- **Land it, don't commit it by hand.** Once the report is
+  written, `land.sh docs` lands it (Step 8).
 
 ## Process
 
@@ -140,7 +141,23 @@ user verifies. The skill can't see outside the repo.
 Write to `docs/blast-radius/<YYYY-MM-DD>-<slug>.md` using the
 **Output structure** below.
 
-### Step 8 — Closing summary
+### Step 8 — Land the report
+
+The report is docs class, so it lands by itself (a PR from the
+latest trunk that merges after CI):
+
+```bash
+bash .claude/skills/land/land.sh docs --skill blast-radius --title "Blast radius: <change, terse>" -- docs/blast-radius/<YYYY-MM-DD>-<slug>.md
+```
+
+Name only the report. Don't name `tasks/changes/*` or
+`tasks/CHANGES.md` rows; they ride with the next branch. Exit 4
+(no `gh`): finish with the session's GitHub tooling per
+`land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never retry
+blindly. As a step of `/mission`, `/self-heal` or `/self-improve`,
+skip this: the orchestrator's branch and PR carry the report.
+
+### Step 9 — Closing summary
 
 ```markdown
 # 💥 Blast radius mapped
@@ -150,6 +167,8 @@ Write to `docs/blast-radius/<YYYY-MM-DD>-<slug>.md` using the
 - **Verified:** <count> *(confirmed by reading the code)*
 - **Likely:** <count> *(strong inference)*
 - **Possible:** <count> *(needs human review)*
+
+Landed: PR #N merged *(or: Not landed: exit N — <message>)*
 
 **Highest-leverage worries:**
 1. <terse — the finding most likely to cause trouble>
@@ -327,7 +346,8 @@ under `docs/blast-radius/` for future reference.*
   exists so the user can decide whether to proceed.
 - **Don't expand scope.** Adjacent observations footer is
   one-liners; don't grow into a second blast radius.
-- **Don't auto-commit.** Standard kit rule.
+- **Don't commit or push the report yourself.** `land.sh docs`
+  lands it (Step 8).
 - **Don't fall back to "no findings" for hard targets.** If a
   scan can't run (e.g. binary asset rename), say so explicitly:
   "Couldn't verify references to binary assets via grep —
@@ -373,7 +393,9 @@ under `docs/blast-radius/` for future reference.*
 A dated markdown report at `docs/blast-radius/<date>-<slug>.md`
 with confidence-tagged findings across direct references,
 indirect references, tests, docs, and external surfaces.
-Uncommitted. The user knows the highest-leverage worries and
+Landed with `land.sh docs` (merged PR), left to the orchestrator
+in a composed run, or the exit code and what is still open
+reported. The user knows the highest-leverage worries and
 the two questions worth verifying before proceeding. After the
 change ships, the report is the artifact that lets the team
 verify the radius was mapped correctly.

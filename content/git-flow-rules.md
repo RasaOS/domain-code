@@ -33,40 +33,56 @@ Naming:
 | `feat/<slug>` | Feature work bigger than one task or spanning tasks |
 | `proto/<slug>` | Prototype work (per `/prototype`) |
 | `integration/<range>` | Multi-task integration branch (per Batch handoff) |
+| `land/<skill>-<utc>-<hex>` | Created only by `land.sh docs` — a short-lived docs PR that merges itself after CI (Rule 2 "Docs landing"). Never cut by hand |
+| `spec/<id>` | Superseded by `land/`; no longer cut |
 
-If you can't decide which prefix applies, ask. Don't guess.
+Every branch is cut from the freshly fetched `origin/<trunk>`, never
+a possibly stale local trunk — `land.sh sync`, `open-pr.sh branch`
+and `push.sh` do this.
+
+If no prefix clearly applies, default to `task/` for task work and
+`chore/` otherwise. Don't stop to ask — unattended skills cannot.
 
 ### Rule 2 — Never merge to `main` without explicit user authorization
 
-`main` is the release branch. The protection lives in this rule,
-not in GitHub config (the kit doesn't touch repo settings). User
-authorization can take two forms: **per-invocation confirmation**
-(the default), or **static authorization** (encoded in this rule
-as a named carve-out for a specific user-invoked skill).
+`main` is the release branch. The protection lives in this rule
+and the `land.sh` guard; the server-side ruleset behind them is
+the project's to add (Rule 4) — the Element doesn't touch repo
+settings. User authorization can take two forms:
+**per-invocation confirmation** (the default), or **static
+authorization** (encoded in this rule as a named carve-out for a
+specific user-invoked skill).
 
 - **No skill auto-merges to `main` by default.** Every merge is a
   user-authorized action. The default form is per-invocation
   confirmation in chat. Acceptable phrasings: "yes merge", "ship
   it", "merge integration → main", "go".
-- **No agent runs `git push origin main` without authorization.**
-  Even if the merge has already been approved on GitHub.
-- **No "while you're in there" merges.** If you notice main is
-  behind, don't fast-forward silently. Ask first.
+- **No agent pushes `main` directly — no authorization unlocks it.**
+  The trunk moves only through a merged PR, governed by the
+  confirmation or carve-outs here. A person's push from their own
+  terminal is theirs; Claude's is refused by the `land.sh` pre-push
+  guard (Rule 4).
+- **No "while you're in there" merges.** Fast-forwarding the
+  *local* trunk to `origin/<trunk>` (`land.sh sync`, `land.sh
+  settle`) is not a trunk change and needs no authorization.
 
 #### Static-authorization carve-outs
 
-The following skills have static merge authorization: typing the
-skill name **is** the authorization. The carve-out lives in this
-rule so it is reviewable; the per-skill SKILL.md cites this rule.
+The following have static merge authorization: typing the skill
+name (for docs landing, the file's class) **is** the authorization.
+The carve-out lives in this rule so it is reviewable; the per-skill
+SKILL.md cites this rule.
 
 - **`/release` — invocation is consent.** A `/release` run
-  merges the integration branch into `main` as part of its
-  documented flow (preflight → merge → tag → deploy → push tag).
+  merges the integration branch into `main` through its release
+  PR as part of its documented flow (preflight → release PR → tag
+  → deploy → merge the PR → push tag); it never pushes `main`
+  directly.
   The user's `/release` invocation IS the merge authorization.
   No "deploy now?" prompt; no "confirm version?" prompt. This
   carve-out exists because the prior confirmation-heavy contract
   caused alarm fatigue and missed deploys. See `release-rules.md`
-  and `kit/skills/release/SKILL.md`. The skill still hard-stops
+  and `release/SKILL.md`. The skill still hard-stops
   on real blockers (failed pre-flight, failed tests, missing
   deploy command, branch-protection refusal).
 - **`/peer-review` — accept = approve + merge.** A `/peer-review`
@@ -86,16 +102,19 @@ rule so it is reviewable; the per-skill SKILL.md cites this rule.
   *accepted* PR, and declining to accept needs no authorization.
   The reject is a verdict, never a question: "invocation is
   consent" forbids asking, not stopping.
-- **`/auto-task` and `/auto-phase` — spec-file fast-path.** May
-  auto-merge a PR to `main` *iff* every file in the PR matches
-  the spec-file allowlist (`tasks/**/*.md`, `tasks/PHASES.md`,
-  `tasks/ROADMAP.md`, `tasks/RELEASES.md`, `tasks/history.tsv` —
-  the log `.claude/bin/task` appends to on every filing and move;
-  `tasks/tasks.config.yml` stays excluded) and the working tree
-  is otherwise clean. Push to a short-lived `spec/<id>` branch
-  with a real PR record, merge via `gh pr merge --squash`. Any
-  non-spec dirty file falls back to "leave uncommitted" — same as
-  the pre-v0.32.0 behavior. See `autonomy-rules.md` "Exception 2".
+- **Docs landing (`land.sh docs`) — the class is consent.** Any
+  skill may land its own docs-class outputs (audits, decisions,
+  postmortems, retros, notes, handoffs, exports, the task ledger)
+  through a short-lived `land/` branch PR cut from the freshly
+  fetched trunk, which merges itself after CI via
+  `gh pr merge --squash --delete-branch --match-head-commit <sha>`
+  — never `--admin`. `land.py` alone decides the class; there is
+  no bypass, and `.claude/landing.json` can only narrow it. Code
+  class — everything else, and always CLAUDE.md and what it
+  `@`-imports, `.claude/**`, `.github/**`, `tasks/tasks.config.yml`
+  — goes by `land.sh pr`, a PR the skill never merges. Failing CI
+  or a branch-protection refusal leaves the PR open. See
+  `land/SKILL.md` and `autonomy-rules.md` "Exception 2".
 
 - **`/auto-merge` — enabling is consent, per PR and per project.**
   A `/auto-merge run` merges an open PR to the trunk unattended,
@@ -122,9 +141,9 @@ The list is closed. Adding a new merge-bearing user-invoked
 skill requires adding it here, in this rule, as a named
 carve-out — not silently in the SKILL.md.
 
-The only way `main` updates is: user says yes per-invocation, or
-one of the named carve-outs above applies. Otherwise `main` does
-not move.
+The only way `main` updates is a merged PR: user says yes
+per-invocation, or one of the named carve-outs above applies.
+Otherwise `main` does not move.
 
 ### Rule 3 — Tag every deploy ("tag and bag")
 
@@ -136,11 +155,11 @@ history.
 The phrase **"tag and bag"** is the operational shorthand: tag
 the commit (`git tag -a v<semver>-<sha>-<env>`), bag the app (build the
 container or artifact), deploy it. The full sequence — pre-flight
-→ merge → tag (local) → deploy → push tag → AUDIT entry — is
-what `/release` orchestrates. The tag is created locally before
-deploy so the commit's identity is locked; it is pushed after
-deploy succeeds so a failed deploy doesn't publish a stale
-release tag.
+→ release PR → tag (local) → deploy → merge the PR → push tag →
+AUDIT entry — is what `/release` orchestrates. The tag is created
+locally before deploy so the commit's identity is locked; it is
+pushed after deploy succeeds so a failed deploy doesn't publish a
+stale release tag.
 
 Format, version-bump heuristics, and message body shape: see
 "Production deploy tagging (mandatory)" below.
@@ -157,10 +176,20 @@ with the same care as a deploy:
 - **Never force-push to `main`.** Period. If `main` has a bad
   commit, fix it forward (revert + new commit) — never rewrite
   history. There is no carve-out for force-push.
-- **Any agent action touching `main`** (merge, rebase, push,
-  force) requires user authorization — either per-invocation in
-  chat, or via a Rule 2 carve-out. No agent touches `main`
-  without one of those.
+- **Any agent action moving `main`** (a PR merge) requires user
+  authorization — either per-invocation in chat, or via a Rule 2
+  carve-out. An agent never pushes, rebases or force-pushes
+  `main`; fast-forwarding the local trunk to `origin/<trunk>` does
+  not move it (Rule 2).
+- **The guard.** `land.sh hooks` (run by `bin/init` on every
+  install and `/sync`) arms a git pre-push hook and PreToolUse
+  checks that refuse Claude's trunk pushes and the ways around
+  them (`--no-verify`, `core.hooksPath`, `GIT_GUARD_ALLOW_MAIN`,
+  …). Tags and branch pushes are allowed. A hook sees what a
+  command says, not what it means: the real enforcement is a
+  server-side ruleset requiring a PR on the trunk. `land.sh
+  status` reports whether it exists; `land/SKILL.md` shows how to
+  add it.
 
 ### Rule 5 — Deploys route through `/release`; invocation is consent
 
@@ -184,8 +213,8 @@ What the skill still does:
 - **Compute the version** from the heuristic (or use the arg
   passed: `/release patch`, `/release minor`, `/release major`,
   `/release v1.2.3`), no asking.
-- **Merge integration → main, tag locally, deploy, push tag,
-  record AUDIT and RELEASES.** The full sequence runs
+- **Open the release PR, tag locally, deploy, merge the PR, push
+  tag, land the AUDIT and RELEASES record.** The full sequence runs
   end-to-end without intermediate prompts.
 
 **Non-production preview deploys** have one carve-out: `/mission`
@@ -229,10 +258,11 @@ convergent. They are enforced by the `/git-guard` skill — read on.
 
 ### Pull before you branch
 
-Start every session on a fast-forwarded trunk. Before cutting a
-branch: `git fetch`, then `git pull --ff-only`. `--ff-only` is
-mandatory — it refuses *loudly* instead of silently creating a
-merge commit when history has diverged. Make it the default:
+Start every session on the latest trunk. Before cutting a branch:
+`bash .claude/skills/land/land.sh sync` — it fetches, fast-forwards
+the trunk (on a branch, merges the trunk in), never rebases or
+forces, and refuses *loudly* when history has diverged. By hand,
+`git fetch`, then `git pull --ff-only`; make it the default:
 `git config pull.ff only`.
 
 ### Never end a session with stranded work
@@ -246,7 +276,8 @@ machine-local and does not travel.
 
 Claude's per-machine memory does not travel between machines.
 Anything the next session needs — wherever it runs — must live in
-a git-tracked file: `/handoff` (writes `.claude/welcome.md`),
+a git-tracked file: `/handoff` (its `docs/handoff/` doc lands by
+itself; `.claude/welcome.md` stays local),
 `/inbox @self`, or `CLAUDE.md`. Never rely on memory to carry
 context across machines.
 

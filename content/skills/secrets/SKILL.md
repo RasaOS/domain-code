@@ -120,6 +120,29 @@ the `Get it:` hints, the cursor position. The AI cannot obtain the
 value: an API key lives in a provider dashboard and only the user can
 retrieve it. That boundary is the whole point.
 
+### Land the tracked changes as a PR
+
+Values never land: the store is outside the repo, `.env` is a
+gitignored symlink, and the guard hooks live in
+`.claude/settings.local.json` (per-machine, gitignored). Only metadata
+reaches tracked files — `provision` / `migrate` may append `.env` to
+`.gitignore`, and you may add `Get it:` lines to `env/stamps/*.md`.
+Both are code class. When a run changed either, name those files, and
+nothing else:
+
+```bash
+bash .claude/skills/land/land.sh pr --skill secrets --title "<what>" -- <files>
+```
+
+**It never merges.** Never pass `.env`, the store, or any gitignored
+path. A run that changed neither lands nothing. Exit 4 (no `gh`):
+finish with the session's GitHub tooling per `land/SKILL.md` "Without
+`gh`". Exits 5/6/7: report, never retry blindly. As a step of
+`/mission`, `/self-heal` or `/self-improve`, skip this: the
+orchestrator's branch and PR carry the files. Report one line:
+`PR: #N open, never merged by this skill` or
+`Not landed: exit N — <message>`.
+
 ## The guard hooks (opt-in, per-machine)
 
 `hooks on` installs two Claude Code hooks into

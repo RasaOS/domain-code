@@ -30,11 +30,14 @@ Confirm exact wording with the user before writing anything.
 - **Place in the right section.** Read the target file first;
   find the section where the rule belongs (testing, schema,
   process, etc.). If no section fits, ask before creating one.
-- **Never auto-commit.** Edits land in the working tree. The
-  user reviews with `git diff`.
-- **Kit-level rules go through `/contribute`.** This skill
-  drafts the kit edit; the actual PR happens via `/contribute`.
-  Keeps the kit-write path single-channel.
+- **Land by PR, never merge.** Rule files and `CLAUDE.md` are
+  agent instructions, so code class (`/land`): the approved edit
+  goes up in a PR this skill never merges (Step 7). The user
+  reviews it there.
+- **Kit-level rules go through `/contribute`** from a project.
+  This skill drafts the kit edit; the actual PR happens via
+  `/contribute`. Keeps the kit-write path single-channel. (In
+  the Element repository itself, Step 7 opens that PR.)
 
 ## Process
 
@@ -80,8 +83,8 @@ Default: project.
 
 If the user picks kit-level but the working directory isn't the
 kit repo, that's fine — the skill drafts the edit and routes
-through `/contribute`. If working in the kit repo directly, the
-edit applies in place but still doesn't auto-commit.
+through `/contribute`. If working in the Element repository
+directly, the edit applies in place and goes up in a PR (Step 7).
 
 ### Step 3 — Find the right section
 
@@ -143,14 +146,37 @@ prompted it in the current conversation>.
 
 ### Step 6 — Apply (or route)
 
-- **Project scope** → write the edit to `CLAUDE.md` in the
-  working tree. Don't commit. Tell the user to `git diff` and
-  commit when ready.
-- **Kit scope** → write the edit to the kit-managed file (if
-  in the kit repo) or stage the diff for `/contribute` to
-  package. Either way: don't commit.
+- **Project scope** → write the edit to `CLAUDE.md`, then land
+  it (Step 7).
+- **Kit scope** → in the Element repository, write the edit to
+  the rule file under `content/` and land it (Step 7). In
+  a project, stage the diff for `/contribute` to package; it
+  opens the upstream PR, so skip Step 7.
 
-### Step 7 — Closing summary
+### Step 7 — Land the edit
+
+Rule files and `CLAUDE.md` are code class, so the edit goes up in
+a PR this skill never merges (`land/SKILL.md`). Name only the
+file this run edited. In a project:
+
+```bash
+bash .claude/skills/land/land.sh pr --skill codify --title "<rule>" -- CLAUDE.md
+```
+
+In the Element repository itself, the same command runs by its
+content path, with `RASA_ROOT` set to the repository:
+
+```bash
+RASA_ROOT="$PWD" bash content/skills/land/land.sh pr --skill codify --title "<rule>" -- content/<file>
+```
+
+Exit 4 → finish with the session's GitHub tooling per
+`land/SKILL.md` "Without `gh`". Exits 5, 6, 7 → report, never
+retry blindly. Run as a step of `/mission`, `/self-heal` or
+`/self-improve`, skip this step: the orchestrator's branch and PR
+carry the file.
+
+### Step 8 — Closing summary
 
 ```markdown
 # ✍️ Codified
@@ -159,12 +185,11 @@ prompted it in the current conversation>.
 
 - **Where it landed:** `<path>` *(section: <section>)*
 - **Source.** <one-line context>
-- **Status:** uncommitted in working tree.
+- **PR:** #<N> open, never merged by this skill
+  *(or: Not landed: exit <N> — <message>)*
 
-`git diff <path>` to review. Commit when ready.
-
-*(If kit scope:)* Run `/contribute` to package this as a PR
-upstream.
+*(If kit scope, from a project:)* no PR here; run `/contribute`
+to package this as a PR upstream.
 ```
 
 ## Style rules
@@ -186,7 +211,8 @@ upstream.
   the user has three, run the skill three times.
 - **Don't auto-place.** When section choice is ambiguous, ask.
   Wrong placement = forgotten rule.
-- **Don't auto-commit.** Standard kit rule.
+- **Don't merge the PR or commit to the trunk.** The edit goes
+  up by `land.sh pr` (Step 7) and waits for a reviewer.
 - **Don't infer scope from context.** Ask. The user knows
   whether the rule generalizes; you don't.
 - **Don't promote project rules to kit-level unilaterally.**
@@ -213,7 +239,7 @@ upstream.
   to a normal conversation about the skill.
 - **Working tree is dirty in the file being edited.** Warn
   before writing — the user may be in the middle of an unrelated
-  edit.
+  edit, and the Step 7 PR would carry it too.
 
 ## When NOT to use this skill
 
@@ -230,6 +256,7 @@ upstream.
 
 One rule, exact wording approved by the user, written to the
 right section of either `CLAUDE.md` or a kit-managed file (with
-`/contribute` queued if kit-level). Working tree dirty,
-uncommitted. The user knows where the rule landed and what to
+`/contribute` queued if kit-level from a project). Otherwise in
+an open PR this skill never merges, or the report names the
+`/land` exit. The user knows where the rule landed and what to
 do next.

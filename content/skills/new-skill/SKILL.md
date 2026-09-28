@@ -51,9 +51,10 @@ default to "yes, let's create one".
   SKILL.md with every required section present, populated with
   the user's answers where possible, and `<!-- TODO: ... -->`
   markers everywhere the user still needs to write substance.
-- **Never auto-commit.** Skeleton lands in the working tree,
-  uncommitted. The user fills it out, reviews, and commits when
-  ready.
+- **Land by PR, never merge.** The new skill's files are code
+  class (`/land`): they go up in a PR this skill never merges
+  (Step 8). The user fills in the TODOs on that PR's branch; a
+  person, `/peer-review` or `/auto-merge` merges it.
 - **Never modify other skills.** This skill creates one new
   directory and one new file. That's the whole blast radius.
 
@@ -124,7 +125,7 @@ still owes substance.
 
 If the script-mechanics answer was **partial** or **full**, also
 write a second file: `<dest>/<name>.sh` using the **Script
-skeleton** below. Both files land uncommitted in the working tree.
+skeleton** below. Both files go up in the same PR (Step 8).
 
 Use the **Skeleton template** (below) as the literal output,
 with these substitutions:
@@ -206,6 +207,7 @@ With:
 - Scope: <kit-wide|project-local>
 - Mutation: <report-only|writes-docs|edits-code>
 - Script mechanics: <none|partial|full>
+- Landing: a PR via `/land`, never merged by this skill
 
 This is a skeleton — every required section is present, but
 sections marked `<!-- TODO -->` need your substance before the
@@ -214,24 +216,44 @@ skill is actually useful. Proceed?
 
 On approval: write the file(s). On decline: stop, nothing written.
 
-### Step 8 — Closing pointer
+### Step 8 — Land the files
 
-After writing:
+The new skill's files are code class, so they go up in a PR this
+skill never merges (`land/SKILL.md`). Name only the files written
+in Step 7:
+
+```bash
+bash .claude/skills/land/land.sh pr --skill new-skill --title "add /<name>" -- <path>/SKILL.md [<path>/<name>.sh]
+```
+
+Exit 4 → finish with the session's GitHub tooling per
+`land/SKILL.md` "Without gh". Exits 5, 6, 7 → report, never retry
+blindly. Run as a step of `/mission`, `/self-heal` or
+`/self-improve`, skip this step: the orchestrator's branch and PR
+carry the files.
+
+### Step 9 — Closing pointer
+
+After landing:
 
 ```markdown
 ✅ Skeleton written:
 - `<path>/SKILL.md`
 - `<path>/<name>.sh` *(only if script-mechanics is partial or full)*
 
+PR: #<N> open, never merged by this skill
+*(or: Not landed: exit <N> — <message>)*
+
 Next steps:
 1. Read through the skeleton(s) and replace each `<!-- TODO -->`
-   with substance.
+   with substance, on the PR's branch; the Step 8 command, run
+   again there, updates the same PR.
 2. If a script was scaffolded, read `script-craft.md` and use
    `kit/skills/save/save.sh` as the working reference. Test the
    script in a sandbox repo before wiring it into the SKILL.md
    process.
 3. Once filled, test by invoking the skill on a real task.
-4. If kit-wide: commit + push, then downstream projects pick it
+4. If kit-wide: once the PR merges, downstream projects pick it
    up via `/sync`.
 
 Tip: `/audit kit/skills/<name>/SKILL.md` once it's filled in,
@@ -467,7 +489,8 @@ main "$@"
 - **Don't propagate kit-wide skills from a project repo.**
   Kit-wide skills must be authored in the claude-kit repo
   itself; otherwise they have no path to propagate.
-- **Don't auto-commit.** Skeletons land uncommitted. Always.
+- **Don't merge the PR or commit to the trunk.** Skeletons go up
+  by `land.sh pr` (Step 8) and wait for a reviewer.
 
 ## Edge cases
 
@@ -509,6 +532,7 @@ containing a `SKILL.md` skeleton with the user's name, purpose,
 triggers, mutation-model clause, and script-mode clause filled
 in, and TODO markers everywhere else. If the script-mechanics
 answer was **partial** or **full**, also a `<name>.sh` skeleton
-following `script-craft.md` conventions. Uncommitted. The user
-knows the next step is to fill in the substance, test the script
-(if any) in a sandbox repo, and wire it up.
+following `script-craft.md` conventions. Both in an open PR this
+skill never merges (or the report names the `/land` exit). The
+user knows the next step is to fill in the substance on that PR's
+branch, test the script (if any) in a sandbox repo, and wire it up.

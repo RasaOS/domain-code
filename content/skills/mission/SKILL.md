@@ -52,7 +52,10 @@ turns ran out. Step 6 is where that honesty is enforced.
   (spec a phase's stubs), `auto-develop/SKILL.md` (implement), and
   `auto-test/SKILL.md` (write + run tests). `/mission` does not
   re-specify reconnaissance, spec-writing, or the test-stamp
-  model — it runs those skills' processes.
+  model — it runs those skills' processes. Inside a mission none
+  of them (nor `audit`, `handoff` …) lands on its own: the `feat/`
+  branch and its draft PR carry every file they write, docs
+  included (`land/SKILL.md` "Composed runs").
 - **Clarify before decomposing.** A vague or half-formed goal is
   not a reason to stop. `/mission` follows `instruct/SKILL.md` to
   convert the goal — prose, a brain-dump, a rough list — into a
@@ -67,7 +70,8 @@ turns ran out. Step 6 is where that honesty is enforced.
 - **Branch per the goal's directive.** Honor "start a new branch"
   / "stay on this branch". If unstated, cut a new branch —
   `git-flow-rules.md` Rule 1. A mission spans tasks, so a new
-  branch is `feat/<goal-slug>`. "Stay" onto `main` is a hard stop.
+  branch is `feat/<goal-slug>`, cut from the latest trunk. "Stay"
+  onto `main` is a hard stop.
 - **Commit per task; PR at the end.** `/mission` is one of the
   documented exceptions in `autonomy-rules.md` (Exception 1) —
   the autonomous skill that commits and opens a PR. Each task is
@@ -113,8 +117,11 @@ turns ran out. Step 6 is where that honesty is enforced.
    tests, handoff doc), and the **completion condition**. Decide
    anything unstated and flag it as an assumption. Render this as
    the **mission brief**. Then set up the branch per the
-   directive: new → `feat/<goal-slug>`; stay → confirm the current
-   branch is not `main`, and stop if it is.
+   directive: new → on the trunk, run
+   `bash .claude/skills/land/land.sh sync` (a fast-forward to the
+   latest trunk), then cut `feat/<goal-slug>` from it; stay →
+   confirm the current branch is not `main`, and stop if it is.
+   Report a non-zero sync exit; never retry it blindly.
 
 3. **Instruct the goal into a recipe.** Before decomposing into
    tasks, run the `/instruct` methodology — follow
@@ -172,11 +179,16 @@ turns ran out. Step 6 is where that honesty is enforced.
    mission; a gated file or an external dependency goes into the
    task's `## Blocker`, then `.claude/bin/task block <id>`.
 
-6. **Two-pass verification re-walk.** With every task done,
-   re-walk the *goal*, not the task list. Re-read the changed
-   surface, re-run the project's verification/build, re-run the
-   test suite, and confirm every deliverable in the goal recipe
-   is met.
+6. **Two-pass verification re-walk.** With every task done, first
+   bring the latest trunk in with
+   `bash .claude/skills/land/land.sh sync` (it merges the trunk
+   into `feat/<goal-slug>`, never a rebase). Whenever a sync
+   changes anything, the re-walk counter restarts at zero. A
+   conflict (exit 5) is a hard gate: report it, never retry it
+   blindly. Then re-walk the *goal*, not the task list. Re-read
+   the changed surface, re-run the project's verification/build,
+   re-run the test suite, and confirm every deliverable in the
+   goal recipe is met.
 
    - **Pass 1** — find every gap. Any gap → file it as a new task,
      return to Step 5, and re-enter Step 6 with the counter reset
@@ -202,7 +214,10 @@ turns ran out. Step 6 is where that honesty is enforced.
    converge is a hard finding, not a reason to loop forever.
 
 7. **Deliver — open the PR.** Only once Step 6 has two consecutive
-   clean passes: push the branch and open a **draft PR** (via the
+   clean passes: run `bash .claude/skills/land/land.sh sync` once
+   more, right before pushing, so the PR is proposed on the latest
+   trunk (if it changed anything, the counter restarts: back to
+   Step 6). Then push the branch and open a **draft PR** (via the
    project's GitHub tooling) — title from the goal, body carrying
    the mission summary: the goal and its recipe, the tasks done
    with their commits, the verification result (both passes), how
@@ -215,8 +230,9 @@ turns ran out. Step 6 is where that honesty is enforced.
    (recorded as `gate: <evidence>`),
    then `task-enforce.sh stamp <id> x-outcome shipped` once the
    work is actually in. If the goal asked for a handoff doc,
-   produce it following `handoff/SKILL.md`. Never merge to
-   `main`.
+   produce it following `handoff/SKILL.md`, then commit it to the
+   branch and push, so the draft PR carries it. Never merge to
+   `main`: the merge to `main` is always the user's.
 
 8. **Preview deploy (opt-in only).** *Skip this step unless the
    goal explicitly asks for a preview deploy.* If it does, per

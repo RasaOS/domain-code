@@ -90,6 +90,19 @@ specify" before writing any. The boundaries there are binding.
    it now passes having actually run something. Before this skill,
    that command exited 0 having run nothing.
 
+8. **Land as a PR.** The scripts, stamps and suite membership are
+   code class. Name the files this run wrote, and nothing else:
+
+   ```bash
+   bash .claude/skills/land/land.sh pr --skill pin-behavior --title "pin <behavior>" -- <files>
+   ```
+
+   It never merges. Exit 4 (no `gh`): finish with the session's
+   GitHub tooling per `land/SKILL.md` "Without `gh`". Exits 5/6/7:
+   report, never retry blindly. As a step of `/mission`,
+   `/self-heal` or `/self-improve`, skip this: the orchestrator's
+   branch and PR carry the files.
+
 ## Output structure
 
 ```markdown
@@ -97,6 +110,7 @@ specify" before writing any. The boundaries there are binding.
 
 > **Pinned.** <N> baselines, all passing
 > **Unpinnable.** <N> surfaces — see below
+> **PR.** #N open, never merged by this skill *(or `Not landed: exit N — <message>`)*
 
 ## Baselines written
 

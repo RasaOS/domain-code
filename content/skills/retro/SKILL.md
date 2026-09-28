@@ -24,8 +24,8 @@ nothing.
 ## Behavior contract
 
 - **Writes durable docs only.** Output at
-  `docs/retros/<YYYY-MM-DD>-<window>.md`. No source-code edits,
-  no commits.
+  `docs/retros/<YYYY-MM-DD>-<window>.md`. No source-code edits;
+  the retro doc lands by itself (Step 6).
 - **Date window is required.** Default to **2 weeks** if not
   given (typical sprint-ish cadence). User can override with
   `1w`, `2w`, `3w`, `1m`, or `<N>d`.
@@ -47,7 +47,8 @@ nothing.
 - **Pairs with `/loop`.** Recurring retros are the use case;
   the user can schedule with `/loop 1w /retro 1w` or
   `/loop 2w /retro 2w`. Document this in the closing summary.
-- **Never auto-commit.** Standard kit rule.
+- **Land it, don't commit it by hand.** Once the user says
+  "write it", `land.sh docs` lands the retro doc (Step 6).
 
 ## Process
 
@@ -239,13 +240,30 @@ If `docs/retros/` has prior retros, briefly compare:
 cadence, schedule with `/loop <window> /retro <window>`.*
 ```
 
-### Step 6 — Closing summary
+### Step 6 — Land the retro
+
+The retro is docs class, so it lands by itself (a PR from the
+latest trunk that merges after CI):
+
+```bash
+bash .claude/skills/land/land.sh docs --skill retro --title "Retro <window> ending <YYYY-MM-DD>" -- docs/retros/<YYYY-MM-DD>-<window>.md
+```
+
+Name only the retro file. Exit 4 (no `gh`): finish with the
+session's GitHub tooling per `land/SKILL.md` "Without `gh`".
+Exits 5/6/7: report, never retry blindly. As a step of
+`/mission`, `/self-heal` or `/self-improve`, skip this: the
+orchestrator's branch and PR carry the retro.
+
+### Step 7 — Closing summary
 
 ```markdown
 # 🔁 Retro captured
 
 `docs/retros/<YYYY-MM-DD>-<window>.md` — <count> items across
 <sections> sections.
+
+Landed: PR #N merged *(or `Not landed: exit N — <message>`)*
 
 **Bottom line.** <one sentence.>
 
@@ -302,7 +320,8 @@ recurring ones lean on prior retros for comparison.
 - **Don't reach beyond the window.** A retro for the last
   2 weeks doesn't reference last quarter's work, even if
   tempting. The window is the contract.
-- **Don't auto-commit.** Standard kit rule.
+- **Don't commit or push the retro yourself.** `land.sh docs`
+  lands it (Step 6).
 
 ## Edge cases
 
@@ -366,7 +385,9 @@ A dated markdown retro at
 all in-window sources, with concrete recurring themes (each
 with a frequency count) and action candidates routed to
 specific skills. Optionally: the user picks one or two
-action candidates to route immediately. Uncommitted.
-Future retros build on this one — the comparison section
-in the next retro starts to show resolved themes vs
-chronic ones.
+action candidates to route immediately. Landed with
+`land.sh docs` (merged PR), left to the orchestrator in a
+composed run, or the exit code and what is still open
+reported. Future retros build on this one — the
+comparison section in the next retro starts to show
+resolved themes vs chronic ones.

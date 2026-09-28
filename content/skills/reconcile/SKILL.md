@@ -1,6 +1,6 @@
 ---
 name: reconcile
-description: Clean the task ledger against reality — compare every open task (triage, backlog, active, review, blocked) with its branch, its commits, its pull request and how long it has sat, then move it where the evidence says. Evidence-certain moves happen without asking (a merged PR → run the done-gate and pass; a PR closed unmerged → reject; an open ready PR → submit); judgment calls (stale active work, long-blocked tasks, old triage items and stubs) are proposed in one batch for the user to approve. Every transition lands through one ledger pull request, never a direct commit to the trunk. Pairs with the enforcement that keeps it clean: the session-start staleness report, the `task start` guard, and the /release ledger gate. Triggered when the backlog needs cleaning — e.g. "/reconcile", "clean up the backlog", "what's stale", "close out merged tasks", "why is TASK-042 still in review", "tidy the task ledger".
+description: Clean the task ledger against reality — compare every open task (triage, backlog, active, review, blocked) with its branch, its commits, its pull request and how long it has sat, then move it where the evidence says. Evidence-certain moves happen without asking (a merged PR → run the done-gate and pass; a PR closed unmerged → reject; an open ready PR → submit); judgment calls (stale active work, long-blocked tasks, old triage items and stubs) are proposed in one batch for the user to approve. Every transition from a run lands through one self-landing docs PR (/land), never a direct commit to the trunk. Pairs with the enforcement that keeps it clean: the session-start staleness report, the `task start` guard, and the /release ledger gate. Triggered when the backlog needs cleaning — e.g. "/reconcile", "clean up the backlog", "what's stale", "close out merged tasks", "why is TASK-042 still in review", "tidy the task ledger".
 ---
 
 # /reconcile — make the ledger say what actually happened
@@ -44,10 +44,11 @@ closing it made a number smaller.
   `scan` infers merges from trunk commit subjects and marks them
   judgment; confirm each with the session's GitHub tooling (e.g.
   `mcp__github__pull_request_read`) before treating it as certain.
-- **Through a pull request.** The trunk changes only through a merged PR
-  (`git-flow-rules.md`). Every transition from one run is committed on
-  `chore/ledger-reconcile-<YYYYMMDD>` and opened as one PR. Never commit
-  ledger moves to the trunk.
+- **Through a self-landing docs PR.** The trunk changes only through a
+  merged PR (`git-flow-rules.md`). The ledger is docs class: every
+  transition from one run lands together through `land.sh docs` — one PR
+  from the latest trunk that merges itself after CI. Never a direct
+  commit to the trunk.
 - **`bin/task` moves tasks.** Never `mv` a task file or write `status:`.
   Run `.claude/bin/check-tasks --fix` after editing any task body.
 
@@ -68,9 +69,12 @@ For each `pass-after-gate` row marked judgment ("no gh: merge not
 proven"), look the PR up with the session's GitHub tooling. Merged → it
 is certain. Not merged, or no PR → keep it in the judgment batch.
 
-### Step 3 — Branch
+### Step 3 — Sync
 
-From an up-to-date trunk: `git checkout -b chore/ledger-reconcile-<YYYYMMDD>`.
+Decide on the latest ledger: `bash .claude/skills/land/land.sh sync`.
+If it brought anything in, re-run `scan` before moving anything. The
+moves below are made in the working tree with `.claude/bin/task`;
+Step 6 lands them.
 
 ### Step 4 — Apply the certain moves
 
@@ -105,17 +109,26 @@ One table, recommended action first:
 
 Ask once for the batch. Apply exactly what the user approved.
 
-### Step 6 — Validate, commit, open the PR
+### Step 6 — Validate, land
 
 Follow `validate/SKILL.md` at the **short** tier: re-run `scan` — every
 certain row must now be `ok`, and every approved judgment row applied as
-approved. Then `.claude/bin/check-tasks` (must pass), commit
-`tasks/` (`Ledger: reconcile <date> — <n> transitions`), push, and open the
-PR (`gh pr create`, or the session's GitHub tooling). The body opens
-with a merge manifest (`.claude/skills/auto-merge/pr-manifest.sh block
---kind chore --merge manual --on-merge hold`; list the passed tasks in
-`--tasks`), then the evidence table: each task, from → to, and why, and
-then the merger's sections that `pr-manifest.sh check` requires.
+approved. Then `.claude/bin/check-tasks` (must pass), and land the run.
+The ledger is docs class, so it lands by itself (a PR from the latest
+trunk that merges after CI):
+
+```bash
+bash .claude/skills/land/land.sh docs --skill reconcile --title "reconcile <date>: <n> transitions" --tasks "<ids>" -- <task files> tasks/history.tsv tasks/ROADMAP.md
+```
+
+Name every task file this run moved or edited — both its old and new
+path — plus `tasks/history.tsv`, and `tasks/ROADMAP.md` only when it
+changed; `--tasks` lists the moved tasks. `land.sh` writes the PR body;
+the evidence table (each task, from → to, and why) goes in the report.
+Exit 4 (no `gh`): finish with the session's GitHub tooling per
+`land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never retry
+blindly. As a step of `/mission`, `/self-heal` or `/self-improve`, skip
+the landing: the orchestrator's branch and PR carry the files.
 
 ## The enforcement that keeps it clean
 
@@ -148,7 +161,8 @@ then the merger's sections that `pr-manifest.sh check` requires.
 | Task | Stage · age | Finding | Recommend |
 |---|---|---|---|
 
-**Gate:** <TST-… passed | commands + counts> · **PR:** [#N](url)
+**Gate:** <TST-… passed | commands + counts>
+Landed: PR [#N](url) merged | Not landed: exit N — <message>
 ```
 
 ## What you must NOT do
@@ -156,7 +170,8 @@ then the merger's sections that `pr-manifest.sh check` requires.
 - **Don't pass without the gate.** Merged is not done.
 - **Don't close to shrink the list.** Every close names a resolution, and
   `superseded`/`duplicate` name the other task.
-- **Don't commit ledger moves to the trunk.** One PR per run.
+- **Don't commit ledger moves to the trunk directly.** One `land.sh
+  docs` landing per run.
 - **Don't turn off `block_start` to get past the guard.** Reconcile.
 
 ## When NOT to use this skill
@@ -170,4 +185,5 @@ then the merger's sections that `pr-manifest.sh check` requires.
 `reconcile.sh scan` shows only `ok` rows (or the user deliberately kept a
 flagged task, with a note in it saying why), every merged task passed on
 real gate evidence or rejected with the failing gate named, and one
-ledger PR open carrying every move and its evidence.
+ledger PR carrying every move merged (or still open, with the exit and
+the reason named), its evidence table in the report.

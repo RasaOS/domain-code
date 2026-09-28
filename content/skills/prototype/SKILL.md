@@ -71,13 +71,43 @@ Two parts:
   main `tasks/` is a deliberate user action via `/prototype
   graduate`. Until then, none of the prototype's work is visible
   to `/roadmap`, `/backlog`, `/status`, etc.
-- **Never auto-merge to main.** Per git-flow Rule 2, no path in
-  this skill merges to `main`. Graduation stages file moves;
-  the user merges through the normal path (their feature branch,
-  per Rule 2).
-- **Never auto-commit.** All file writes land in the working
-  tree uncommitted. The user reviews with `git diff` and commits
-  when ready.
+- **The prototype never merges to main.** Per git-flow Rule 2,
+  no path in this skill merges the prototype's work to `main`;
+  the user routes it through the normal path (their feature
+  branch, per Rule 2). Graduation's main-ledger writes are the
+  one thing that lands (see Saving and landing).
+- **Save to `proto/<slug>`, never the trunk.** Each writing verb
+  ends with `/push` on the proto branch (see Saving and landing).
+
+## Saving and landing
+
+`tasks/proto/**` and `docs/proto/**` are code class on purpose:
+prototype scope never lands on the trunk. Each writing verb
+(`start`, `add`, `spec`, `move`, `graduate`, `shelve`) ends by
+saving the `proto/<slug>` branch:
+
+```bash
+bash .claude/skills/push/push.sh run --message "proto <slug>: <what this verb wrote>"
+```
+
+Only on `proto/<slug>`, never on the trunk — there `push.sh` would
+cut a new branch instead; stop and `resume` the prototype.
+
+The only writes that land are `/prototype graduate`'s main-ledger
+ones (the filed `tasks/<stage>/TASK-NNN-*.md`, `tasks/ROADMAP.md`,
+`tasks/history.tsv`, `tasks/PHASES.md` if a phase was declared,
+`tasks/AUDIT.md`). They are docs class and land by themselves (a PR
+from the latest trunk that merges after CI), before the `/push` that
+saves the proto side:
+
+```bash
+bash .claude/skills/land/land.sh docs --skill prototype --title "Graduate prototype <slug>" --tasks "TASK-NNN ..." -- <each main tasks/ file written> tasks/AUDIT.md
+```
+
+Exit 4 (no `gh`): finish with the session's GitHub tooling per
+`land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never retry
+blindly. As a step of `/mission`, `/self-heal` or `/self-improve`,
+skip the landing: the orchestrator's branch and PR carry the files.
 
 ## Output structure
 
@@ -301,7 +331,8 @@ The flow mirrors that operation:
    overwriting the stub.
 6. Show the rendered spec; wait for sign-off; write.
 
-This step writes ONE file (the spec). No commits. No branch
+This step writes ONE file (the spec), saved to `proto/<slug>`
+with `/push` like every writing verb. No branch
 creation — implementation happens on a separate
 `task/TASK-NNN-<slug>` sub-branch off `proto/<slug>` per Rule 1,
 which the user creates when starting the work.
@@ -396,6 +427,9 @@ action — confirm scope before moving anything.
    existing phase or a new phase to be created. Ask the user to
    confirm: *"Graduating N tasks → Phase X. Confirm?"*
 3. **On confirm:**
+   - Bring the latest trunk in first
+     (`bash .claude/skills/land/land.sh sync`), so the allocator
+     sees every id the trunk has used.
    - For each task, file it into main — never `git mv` it:
      `.claude/bin/task new --type <type> --phase <P> "<title>"`
      (plus `--target` if the project declares targets). The
@@ -408,14 +442,16 @@ action — confirm scope before moving anything.
      `.claude/bin/task start` for work the prototype started or
      finished, `block` (with its `## Blocker`) for blocked work —
      never further than `active/`: nothing is done in main until
-     the graduation PR merges and its done-gate passes.
+     the prototype code's PR merges and its done-gate passes.
    - Delete the graduated proto file, so it is not graduated twice.
    - Add an entry to main `tasks/AUDIT.md`:
      `🏗 Graduated prototype <slug> — <N> tasks → Phase <name>.`
      with each old proto id → new main id.
-4. **Don't merge.** Per Rule 2, the user owns any merge-to-main
-   step. Graduation produces uncommitted file moves; the user
-   commits and routes through the normal review/merge flow.
+4. **Land the ledger, not the code.** The main-ledger writes
+   land with `land.sh docs`, then `/push` saves the proto-side
+   deletions and brief update (see Saving and landing). Per
+   Rule 2, the user routes the prototype's code through the
+   normal review/merge flow; this skill never merges it.
 5. **Optionally drop the proto branch + dir + brief** if the
    user explicitly says so (`/prototype drop` after graduate).
    Don't auto-drop.
@@ -435,13 +471,16 @@ Render §1 Hero completion card:
 │                                                             │
 │      tasks/proto/<slug>/  →  tasks/                         │
 │      AUDIT entry appended                                   │
-│      working tree dirty — review and commit                 │
+│      Landed: PR #N merged                                   │
 │                                                             │
 │   →  next: implement per main task pipeline                 │
 │                                                             │
 ╰─────────────────────────────────────────────────────────────╯
 ```
 ````
+
+When `land.sh docs` did not merge, the landing line reads
+`Not landed: exit N — <message>` instead.
 
 ### Step 9 — shelve
 
@@ -514,9 +553,9 @@ Destructive. Confirm twice.
 - **Don't touch main `tasks/`.** Not its ROADMAP, not its PHASES,
   not its AUDIT, not its stage directories or `history.tsv`. The
   prototype is invisible to main task planning by design.
-- **Don't merge to `main`** during a prototype session. Per
-  git-flow Rule 2, every merge to main is user-confirmed.
-  Graduation only stages tasks; it doesn't merge.
+- **Don't merge the prototype's work to `main`.** Per git-flow
+  Rule 2, that merge is user-confirmed. Graduation lands only
+  its main-ledger writes, through `land.sh docs`.
 - **Don't auto-graduate.** Graduation is explicit user action.
 - **Don't infer slugs.** If the user says "/prototype add a thing"
   but the current branch isn't `proto/<slug>`, ask which
@@ -526,8 +565,9 @@ Destructive. Confirm twice.
 - **Don't skip the brief.** `docs/proto/<slug>.md` is part of
   the prototype's identity — created on `start`, updated on
   `shelve` / `graduate`.
-- **Don't auto-commit.** All file writes land in the working
-  tree uncommitted. The user reviews and commits.
+- **Don't commit or push by hand, and never on the trunk.**
+  Writing verbs save `proto/<slug>` with `/push`; only
+  graduation's main-ledger writes land, with `land.sh docs`.
 - **Don't refactor adjacent code** the prototype touches. Note
   smells in the brief's "Iteration log" if relevant; leave the
   code alone.
@@ -572,12 +612,14 @@ The user leaves with one of:
   task work.
 - A new task in the prototype's backlog (or active, blocked, or completed).
 - A clear status read of the current prototype.
-- A graduated prototype, with tasks now staged in main `tasks/`
-  (uncommitted), ready for the user to review and merge per the
+- A graduated prototype, with tasks filed in main `tasks/` and
+  landed (`Landed: PR #N merged`, or the exit code and what is
+  still open), and its code left for the user to merge per the
   normal flow.
 - A shelved or dropped prototype with a clear paper trail.
 
-The deliverable is filesystem state plus the §-templated chat
-output. No commits unless the user committed; no merges to
-`main` ever (without the explicit user-confirm path of
-`graduate` → user-driven merge per Rule 2).
+The deliverable is the `proto/<slug>` branch, saved with `/push`
+after every writing verb, plus the §-templated chat output.
+Nothing in prototype scope reaches `main`; only graduation's
+main-ledger writes land, and the prototype's code merges only
+through the user-driven path per Rule 2.

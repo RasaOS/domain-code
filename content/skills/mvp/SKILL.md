@@ -61,7 +61,8 @@ deliberate pace or hand off:
 - **Write the full bundle.** When the session converges, write
   all four artifacts atomically: `docs/mvp/<slug>.md`,
   `tasks/ROADMAP.md`, `tasks/PHASES.md`, and stub files in
-  `tasks/backlog/`. Show the user the diff. Don't auto-commit.
+  `tasks/backlog/`. Show the user the diff, validate, then land
+  it (end of Step 4).
 - **Stubs, not specs.** The task files written by `/mvp` are
   one-line stubs per `code-task-rules.md` §11 (stub first). Full
   specs are `/spec-phase` or `/task` Expand work, done later when
@@ -73,8 +74,10 @@ deliberate pace or hand off:
 - **No code, ever.** This skill produces planning artifacts only.
   Implementation work happens via `/task` and friends, after the
   bundle exists.
-- **No commits.** All artifacts land in the working tree dirty.
-  The user reviews and commits.
+- **Land with `land.sh auto`, never by hand.** At the end of
+  Step 4 and after each accepted revision, the files written
+  land: `docs/mvp/` and `tasks/` by themselves; `CLAUDE.md` and
+  `.claude/` edits in a PR this skill never merges.
 - **Marketable is a real word.** Don't let the user define
   "shippable" as just "it doesn't crash" and skip the
   marketability check. If users won't pay attention to it, it
@@ -283,7 +286,8 @@ Surface what was written:
 **CLAUDE.md**: <untouched | additions proposed, awaiting consent>
 **Rule updates**: <none | proposed: /codify recommended for X>
 
-**Uncommitted.** Review the diff. Commit when satisfied.
+Landed: PR #N merged *(or `Not landed: exit N — <message>`)*
+PR: #N open, never merged by this skill *(only if CLAUDE.md or .claude/ was edited)*
 
 **Next move**: pick a phase. Use `/spec-phase <N>` to expand
 its stubs into full specs, or `/task` to spec a single
@@ -296,8 +300,26 @@ whole bundle — MVP doc, ROADMAP, PHASES, stubs — read together;
 the original ask is what Step 1 gathered. The gaps worth hunting
 are between the files: an "In v1.0" capability no phase delivers,
 a phase with no stub, a "shippable" definition no task makes
-true. Fill them in the uncommitted bundle and render the
+true. Fill them in the bundle before it lands and render the
 validation block under the bundle summary.
+
+**Land the bundle.** After validation, name every file this step
+wrote — the MVP doc, `tasks/ROADMAP.md`, `tasks/PHASES.md`,
+`tasks/history.tsv`, each stub, and `CLAUDE.md` or
+`.claude/wont-do.md` if the user consented to edits:
+
+```bash
+bash .claude/skills/land/land.sh auto --skill mvp --title "<mvp name>" -- docs/mvp/<slug>.md tasks/ROADMAP.md tasks/PHASES.md tasks/history.tsv tasks/backlog/TASK-NNN-slug.md
+```
+
+`auto` splits them: the docs (`docs/mvp/`, `tasks/`) land by
+themselves (a PR from the latest trunk that merges after CI);
+`CLAUDE.md` and `.claude/` edits open a PR this skill never
+merges. Exit 4 (no `gh`): finish with the session's GitHub
+tooling per `land/SKILL.md` "Without `gh`". Exits 5/6/7: report,
+never retry blindly. As a step of `/mission`, `/self-heal` or
+`/self-improve`, skip this: the orchestrator's branch and PR
+carry the files. Put the result in the summary's landing lines.
 
 ### Step 5 — Iterate or close
 
@@ -305,10 +327,12 @@ The user reviews the bundle on disk. Three branches from here:
 
 - **Tweaks needed** → stay in `/mvp`. Re-do the affected step
   (usually Step 2 boundary or Step 3 phase structure), re-write
-  the affected files. Keep iterating until the user is happy.
-- **Looks good** → exit. The user commits. `/mvp` is done. The
-  next session is normal kit flow (`/spec-phase`, `/task`,
-  `/plan`, etc.).
+  the affected files. Land each accepted revision the same way
+  (`land.sh auto`, naming the files it changed). Keep iterating
+  until the user is happy.
+- **Looks good** → exit. The bundle landed in Step 4. `/mvp` is
+  done. The next session is the normal flow (`/spec-phase`,
+  `/task`, `/plan`, etc.).
 - **This isn't working** → exit and recommend a different
   starting point (`/wrangle` if there's an existing codebase
   worth understanding first; `/brainstorm` if the product
@@ -389,7 +413,9 @@ should have a designated answer-by date or trigger.>
 
 - **Don't write code.** Implementation is `/task` work, done
   after the bundle exists.
-- **Don't commit.** The user owns the commit gate.
+- **Don't commit or push the bundle yourself.** `land.sh auto`
+  lands it (Step 4, and each accepted revision); the
+  `CLAUDE.md` / `.claude/` PR is never merged by this skill.
 - **Don't auto-overwrite an existing `docs/mvp/<slug>.md`** or
   blow away an existing roadmap. Read first; merge with
   explicit consent.
@@ -438,6 +464,9 @@ should have a designated answer-by date or trigger.>
   flagged what to revise.
 - The next concrete move is on the table — typically
   "`/spec-phase 0`" or "`/task` for TASK-001".
-- The worktree is dirty with the new artifacts; the user
-  holds the commit gate.
+- The bundle's docs are on the trunk (the `land.sh auto` docs PR
+  merged) and any `CLAUDE.md` / `.claude/` edit is in an open PR
+  this skill never merges — or, in a composed run, carried by the
+  orchestrator's PR, or the report names the exit code and what
+  is still open.
 - No code was written.

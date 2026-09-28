@@ -33,7 +33,8 @@ terms have ambiguous use, surface that.
 - **Surface ambiguity, don't bury it.** If a term has
   conflicting uses across the codebase, the glossary entry
   flags it explicitly. Don't pick one definition silently.
-- **Don't auto-commit.** Same rule as every kit-write skill.
+- **Land it, don't commit it by hand.** Once the file is
+  written, `land.sh auto` lands it (Step 6).
 - **Don't edit anything but `docs/glossary.md`.**
 
 ## Process
@@ -195,15 +196,35 @@ longer found in the code/docs. Confirm before removing.
 file is regenerable but curated entries are preserved.*
 ```
 
-### Step 6 — Surface uncertain entries
+### Step 6 — Land the glossary
 
-After writing the file, render in chat:
+`docs/glossary.md` is docs class unless CLAUDE.md `@`-imports it
+(`land.sh classify` decides). `auto` covers both: a plain glossary
+lands by itself (a PR from the latest trunk that merges after CI);
+an imported one goes by a PR the skill never merges.
+
+```bash
+bash .claude/skills/land/land.sh auto --skill glossary --title "Glossary: <bootstrap | sync>, <count> terms" -- docs/glossary.md
+```
+
+Name only `docs/glossary.md`. Exit 4 (no `gh`): finish with the
+session's GitHub tooling per `land/SKILL.md` "Without `gh`".
+Exits 5/6/7: report, never retry blindly. As a step of
+`/mission`, `/self-heal` or `/self-improve`, skip this: the
+orchestrator's branch and PR carry the file.
+
+### Step 7 — Surface uncertain entries
+
+After landing the file, render in chat:
 
 ```markdown
 # 📖 Glossary written
 
 `docs/glossary.md` — <count> terms across <category count>
 categories.
+
+Landed: PR #N merged *(or: PR: #N open, never merged by this
+skill — or: Not landed: exit N — <message>)*
 
 **Confirmed entries:** <count>
 **Need your eyes:** <count>
@@ -214,8 +235,7 @@ couldn't pin down the definition with confidence:
 - **<term>** — <one-line — what I'm uncertain about>
 - …
 
-Reply with definitions and I'll update. Otherwise, `git diff
-docs/glossary.md` to review and commit when ready.
+Reply with definitions and I'll update.
 ```
 
 If sync mode also surfaced removals:
@@ -228,6 +248,9 @@ If sync mode also surfaced removals:
   - (K)eep — historical reference, leave it
   - (A)rchive — move to a "former terms" section
 ```
+
+Edits the user asks for afterwards (definitions, stale-term
+calls) land the same way (Step 6).
 
 ## Style rules
 
@@ -256,7 +279,8 @@ If sync mode also surfaced removals:
 - **Don't auto-resolve ambiguous terms.** If a term has two
   uses, the entry shows both. Picking one is a project decision,
   not a glossary skill's call.
-- **Don't auto-commit.** Same rule as every kit-write skill.
+- **Don't commit or push the glossary yourself.**
+  `land.sh auto` lands it (Step 6).
 - **Don't sprawl into multiple glossary files.** One file.
   Categorize internally.
 - **Don't overwrite curated entries.** Read first; preserve
@@ -301,6 +325,8 @@ If sync mode also surfaced removals:
 A single `docs/glossary.md` with categorized terms, each citing
 its primary location. Bootstrap mode: file freshly generated.
 Sync mode: existing entries preserved, new candidates added,
-possibly-stale entries surfaced for the user's call. Uncommitted.
-The user knows what's confirmed and what needs their definition
-to fill in.
+possibly-stale entries surfaced for the user's call. Landed with
+`land.sh auto` (merged PR, or an open PR when CLAUDE.md imports
+it), left to the orchestrator in a composed run, or the exit code
+and what is still open reported. The user knows what's confirmed
+and what needs their definition to fill in.

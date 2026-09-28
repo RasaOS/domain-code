@@ -18,8 +18,8 @@ surface the data and let them decide. The data is the argument.
 
 ## Behavior contract
 
-- **Read-only.** Scope-check is a scanner. No edits, no
-  commits, no migrations.
+- **Read-only.** Scope-check is a scanner. No code edits, no
+  migrations; the only thing it lands is the report (Step 8).
 - **User describes the change first.** And ideally states an
   estimated size ("a few files", "small refactor", "a day's
   work"). The skill tests that estimate against measured
@@ -38,7 +38,8 @@ surface the data and let them decide. The data is the argument.
   `docs/scope/<YYYY-MM-DD>-<slug>.md`. Useful for retrospective
   ("I estimated 1 day; scope-check said 47 files; reality was
   35 files. My estimate was off by 35×.").
-- **Don't auto-commit.** Standard kit rule.
+- **Land it, don't commit it by hand.** Once the report is
+  written, `land.sh docs` lands it (Step 8).
 
 ## Process
 
@@ -143,7 +144,22 @@ user decides.
 Output to `docs/scope/<YYYY-MM-DD>-<slug>.md` per the
 **Output structure** below.
 
-### Step 8 — Closing summary
+### Step 8 — Land the report
+
+The report is docs class, so it lands by itself (a PR from the
+latest trunk that merges after CI):
+
+```bash
+bash .claude/skills/land/land.sh docs --skill scope-check --title "Scope check: <change, terse>" -- docs/scope/<YYYY-MM-DD>-<slug>.md
+```
+
+Name only the report. Exit 4 (no `gh`): finish with the
+session's GitHub tooling per `land/SKILL.md` "Without `gh`".
+Exits 5/6/7: report, never retry blindly. As a step of
+`/mission`, `/self-heal` or `/self-improve`, skip this: the
+orchestrator's branch and PR carry the report.
+
+### Step 9 — Closing summary
 
 ```markdown
 # 📏 Scope-check complete
@@ -155,6 +171,8 @@ Output to `docs/scope/<YYYY-MM-DD>-<slug>.md` per the
 | Your estimate | <Tiny/Small/Medium/Large> |
 | Measured | <category — files=<N>, symbols=<N>, tests=<N>> |
 | Drift | <none / N tiers> |
+
+Landed: PR #N merged *(or: Not landed: exit N — <message>)*
 
 **The numbers worth knowing:**
 - <count> files touched
@@ -328,7 +346,8 @@ estimate. Saved under `docs/scope/` for retrospectives.*
 - **Don't expand scope.** If during scanning you spot
   something concerning unrelated, footer it. Don't grow the
   report.
-- **Don't auto-commit.** Standard kit rule.
+- **Don't commit or push the report yourself.** `land.sh docs`
+  lands it (Step 8).
 - **Don't skip estimate vs. measured comparison.** That's
   the whole point of the skill. A report without it is just
   a grep dump.
@@ -369,6 +388,8 @@ estimate. Saved under `docs/scope/` for retrospectives.*
 A dated report at `docs/scope/<date>-<slug>.md` with concrete
 counts across files / symbols / tests / docs / public API,
 a measured-vs-estimated drift assessment, and an optional
-rechunking suggestion if scope drifted materially. Uncommitted.
+rechunking suggestion if scope drifted materially. Landed with
+`land.sh docs` (merged PR), left to the orchestrator in a
+composed run, or the exit code and what is still open reported.
 The user has the data they need to decide whether to proceed,
 chunk, or replan — without the skill making the call for them.
