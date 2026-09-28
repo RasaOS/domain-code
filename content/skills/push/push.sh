@@ -235,6 +235,11 @@ cmd_run() {
     if has_remote && git fetch -q origin "+refs/heads/$trunk:refs/remotes/origin/$trunk" 2>/dev/null; then
       fresh_base="origin/$trunk"
     fi
+    # Only when nothing committed here would be left behind: a local trunk
+    # ahead of origin, or commits on a detached HEAD, must ride the branch.
+    if [ -n "$fresh_base" ] && ! git merge-base --is-ancestor HEAD "$fresh_base" 2>/dev/null; then
+      fresh_base=""
+    fi
     if [ -n "$fresh_base" ] && git checkout -q --no-track -b "$target" "$fresh_base" 2>/dev/null; then
       echo "push: on the trunk → moved work onto new branch '$target', cut from the latest $fresh_base."
     elif git checkout -q -b "$target" 2>/dev/null; then
@@ -252,6 +257,20 @@ cmd_run() {
     git commit -q -m "$message" || {
       echo "✗ push: commit failed." >&2; return 1; }
     echo "push: committed — \"$message\""
+  fi
+
+  # Someone else (e.g. /auto-merge's sync-pr) may have pushed to this branch:
+  # take their commits first, by a merge, so the push is a fast-forward.
+  if has_remote && [ "$branch" != "$trunk" ] \
+     && git fetch -q origin "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null \
+     && ! git merge-base --is-ancestor "origin/$branch" HEAD 2>/dev/null; then
+    if git merge -q --no-edit "origin/$branch" >/dev/null 2>&1; then
+      echo "push: took the commits pushed to '$branch' elsewhere."
+    else
+      git merge --abort >/dev/null 2>&1 || true
+      echo "✗ push: '$branch' on origin has commits that conflict with yours — merge origin/$branch by hand, then /push." >&2
+      return 1
+    fi
   fi
 
   # Bring the latest trunk in before the branch goes up: a merge, never a
@@ -277,8 +296,9 @@ cmd_run() {
   if perr="$(git push -q -u origin "$branch" 2>&1)"; then
     echo "push: pushed → origin/$branch"
   else
-    echo "push: commit is safe locally, but the push failed: $(printf '%s' "$perr" | tail -2 | tr '\n' ' ')" >&2
-    echo "      Re-run /push when the remote accepts it (a rejection is not 'offline': run land.sh sync first)." >&2
+    echo "push: commit is safe locally, but the push failed:" >&2
+    printf '%s\n' "$perr" | grep -E '^( ?!|error:|fatal:|remote:|hint:)' | head -6 | sed 's/^/      /' >&2
+    echo "      Re-run /push once the cause above is fixed (a refused push to the trunk means: use a branch and a PR)." >&2
     return 1
   fi
 

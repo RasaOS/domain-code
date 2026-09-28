@@ -181,8 +181,11 @@ cmd_branch() {
   # Cut from the freshly fetched trunk, carrying the uncommitted work, so the
   # PR starts from the latest code. If the trunk moved under those files,
   # cut from here; `open` then refuses until `land.sh sync` brings it in.
+  # Only when HEAD holds nothing origin lacks: commits on a local trunk that
+  # is ahead of origin (or on a detached HEAD) must come along.
   if git remote get-url origin >/dev/null 2>&1 \
      && git fetch -q origin "+refs/heads/$trunk:refs/remotes/origin/$trunk" 2>/dev/null \
+     && git merge-base --is-ancestor HEAD "origin/$trunk" 2>/dev/null \
      && git checkout -q --no-track -b "$target" "origin/$trunk" 2>/dev/null; then
     echo "branch=$target"
     echo "base=origin/$trunk (fetched)"

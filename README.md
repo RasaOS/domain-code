@@ -574,8 +574,12 @@ Or pin to an older commit by editing `.claude/rasa.lock.json`'s
 - **Honest reporting both ways.** Same ethos as [Anthropic's CLAUDE.md
   conventions]. Skills report failures plainly; sync surfaces conflicts
   rather than silently merging.
-- **Never auto-commit.** Every skill that modifies files leaves changes
-  staged or unstaged for the human to review.
+- **Nothing lost, nothing straight in.** A skill's outputs never stay
+  stranded in a working tree, and `main` only moves through a merged
+  PR built on the latest `main`. Doc outputs (audits, decisions, plans,
+  the task ledger) land by themselves once CI passes; code, and
+  anything agents load as instructions, goes up in a PR the skill
+  never merges (`/land`).
 - **Solo-dev-friendly first.** No team-mode features (codeowners,
   required reviewers, multi-author workflows) until they're actually
   needed.

@@ -195,8 +195,8 @@ diff" was satisfied, in the authoring session, by memory of having written it.
 
    - **Accept** (auditor clean, checks `pass`) → first **make sure the
      PR contains the latest trunk**, then **pass the task inside the
-     PR**, then merge. Keep the head SHA `checks` printed with its pass
-     (`<sha>`) and gate on freshness:
+     PR**, then merge. Keep the `head_sha=` line `checks` printed with its
+     pass (`<sha>`, the commit those checks ran on) and gate on freshness:
 
      ```bash
      bash .claude/skills/land/land.sh fresh --sha <sha> --pr <N>
@@ -219,7 +219,7 @@ diff" was satisfied, in the authoring session, by memory of having written it.
         <evidence>"`; commit `TASK-NNN: pass the done-gate`; push once
         (the trunk merge, if any, goes up with it);
      3. `peer-review.sh checks <N> --wait 900` — the push restarted CI.
-        `pass` → continue, and its head SHA becomes `<sha>`; failing →
+        `pass` → continue, and its `head_sha=` becomes `<sha>`; failing →
         the review becomes a reject; still pending → HELD, report, and
         re-run later.
 
@@ -240,8 +240,8 @@ diff" was satisfied, in the authoring session, by memory of having written it.
      ```
 
      With no valid manifest, merge with `--squash`, and name the missing
-     manifest in the report as a non-blocking note. `<sha>` is the SHA
-     printed when checks passed — never a fresh read of `headRefOid`,
+     manifest in the report as a non-blocking note. `<sha>` is the
+     `head_sha=` printed when checks passed — never a fresh read of `headRefOid`,
      which would pin whatever was pushed after them. `--match-head-commit`
      makes GitHub refuse the merge if anything was pushed after the
      checks were read. The task reaches `completed/` in the same merge

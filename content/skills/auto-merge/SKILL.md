@@ -52,7 +52,8 @@ bash .claude/skills/auto-merge/pr-manifest.sh block --kind chore --merge auto --
 ```
 
 Any skill that opens a PR puts a manifest in its body. For PRs that are
-not a task (a ledger reconcile, a spec-only PR, a `/mission` draft),
+not a task (a `/mission` draft, a `land.sh pr` change; `land.sh docs`
+writes its own),
 `block` prints a valid block to paste in.
 
 ## Behavior contract

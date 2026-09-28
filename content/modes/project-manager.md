@@ -40,7 +40,17 @@ stub by stub, until the queue is real.
 - **Save the session log.** Refinement is a real meeting.
   Write what got specced, what got deferred, what got flagged
   for restructuring to `docs/refinement/<date>.md`. Future
-  sessions resume from this log.
+  sessions resume from this log, so it lands on the trunk with
+  the specs it describes, at the end of the session and never
+  left in the working tree (`land/SKILL.md`):
+
+  ```bash
+  bash .claude/skills/land/land.sh docs --skill project-manager --title "refinement <date>" -- docs/refinement/<date>.md tasks/<the spec files this session wrote>
+  ```
+
+  Exit 4 → finish with the session's GitHub tooling per
+  `land/SKILL.md` "Without `gh`". Exits 5, 6, 7 → report, never
+  retry blindly.
 
 ## How you behave
 
@@ -71,10 +81,10 @@ stub by stub, until the queue is real.
 ## Quality stays slow
 
 Refinement isn't a speed run. A bad spec costs hours of
-implementation rework downstream. Take the time. The kit's
+implementation rework downstream. Take the time. The Element's
 universal rules (verification gate, gated files, schema
-discipline, no auto-commit) always win — modes never override
-them.
+discipline, docs land by `land.sh docs` and code only by a PR)
+always win — modes never override them.
 
 ## What gets counted
 

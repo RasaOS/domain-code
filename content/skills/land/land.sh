@@ -17,12 +17,15 @@
 #   land.sh docs --skill S --title T [--summary X] [--tasks "IDS"] [--wait SECS] -- <path>...
 #                                       land doc outputs by themselves
 #   land.sh pr   --skill S --title T [--summary X] [--tasks "IDS"] [--draft]
-#                [--verified X] [--risk X] [--branch B] [--message M] -- <path>...
-#                                       commit, sync with the trunk, push, open a
-#                                       PR. Never merges.
+#                [--verified X] [--risk X] [--branch B] [--message M] [--switch] -- <path>...
+#                                       open (or update) a PR, synced with the
+#                                       trunk. Never merges. On a branch: commits
+#                                       there. On the trunk: builds the branch
+#                                       aside, checkout untouched (--switch moves
+#                                       the checkout onto it instead)
 #   land.sh auto --skill S --title T [...] -- <path>...
 #                                       split by class: docs land, code → pr
-#   land.sh merge  --pr N --sha SHA [--checks-json FILE]... [--wait SECS]
+#   land.sh merge  --pr N --sha SHA [--pr-json FILE] [--checks-json FILE]... [--wait SECS]
 #                                       finish a docs landing (verify, checks,
 #                                       merge pinned to SHA, settle)
 #   land.sh verify --pr N --sha SHA     the pushed-artifact gate, by git alone
@@ -35,7 +38,7 @@
 #   land.sh sync-pr --branch B          merge the trunk into a PR's branch, push
 #   land.sh status                      guards, landings in flight, trunk rules
 #   land.sh hooks                       install the guards (idempotent)
-#   land.sh session | guard-bash | guard-mcp | guard-push
+#   land.sh session | guard-bash | guard-edit | guard-mcp | guard-push
 #                                       hook entry points (stdin: hook payload)
 #
 # Exit: 0 ok · 1 error · 2 usage · 3 refused (class, precondition, credential)
@@ -62,19 +65,28 @@ case "$verb" in
   -h|--help|help|"") usage; exit 0 ;;
 
   guard-bash)
-    # Every Bash call passes here: most leave before python starts.
+    # Every Bash call passes here: most leave before python starts. Quotes
+    # and backslashes are dropped first, so g\it or gi''t cannot slip past.
     payload="$(cat)"
-    case "$payload" in
-      *git*|*gh\ *|*GIT_GUARD*|*hooks*) ;;
+    norm="$(printf '%s' "$payload" | tr -d "\\\\\"'")"
+    case "$norm" in
+      *git*|*gh*|*GIT_GUARD*|*hooks*|*CLAUDECODE*|*GIT_CONFIG*|*pre-push*|*.git/*) ;;
       *) exit 0 ;;
     esac
     if ! command -v python3 >/dev/null 2>&1; then
-      case "$payload" in
-        *push*) deny_json "python3 is missing, so this git push cannot be checked against the trunk guard. Refused." ;;
+      case "$norm" in
+        *push*|*send-pack*) deny_json "python3 is missing, so this git push cannot be checked against the trunk guard. Refused." ;;
       esac
       exit 0
     fi
     printf '%s' "$payload" | python3 "$LAND_PY" guard-bash
+    exit 0 ;;
+
+  guard-edit)
+    payload="$(cat)"
+    case "$payload" in *.git*) ;; *) exit 0 ;; esac
+    command -v python3 >/dev/null 2>&1 || { deny_json "python3 is missing, so a write under .git/ cannot be checked. Refused."; exit 0; }
+    printf '%s' "$payload" | python3 "$LAND_PY" guard-edit
     exit 0 ;;
 
   guard-mcp)

@@ -152,17 +152,21 @@ behavior contract. Use exactly one.
 
 > **Writes durable docs only.** This skill creates `.md` files
 > under `docs/<TODO: subdirectory>/`. It does not edit source
-> code, config, or any other path. Files land in the working
-> tree, uncommitted; the user reviews with `git diff` and commits
-> when ready.
+> code, config, or any other path. It ends by landing them with
+> `land.sh docs` (`land/SKILL.md`): a docs PR from the latest trunk
+> that merges itself after CI. The subdirectory must be in the docs
+> class (`land.sh classify`); otherwise the files go by `land.sh pr`.
+> Composed under `/mission`, `/self-heal` or `/self-improve`, it
+> does not land on its own.
 
 **(c) Edits source code (consent-gated):**
 
 > **Edits are consent-gated.** This skill proposes changes
 > first. The user picks which to apply, item by item. Approved
-> edits land in the working tree, uncommitted. Never
-> auto-commits. Never applies edits the user didn't explicitly
-> approve.
+> edits go up with `land.sh pr` (`land/SKILL.md`): a PR from the
+> latest trunk that this skill never merges. Never applies edits
+> the user didn't explicitly approve. Composed under `/mission`,
+> `/self-heal` or `/self-improve`, it does not land on its own.
 
 ### Step 6 — Pick the script-mechanics clause
 
@@ -226,6 +230,14 @@ in Step 7:
 bash .claude/skills/land/land.sh pr --skill new-skill --title "add /<name>" -- <path>/SKILL.md [<path>/<name>.sh]
 ```
 
+For Element scope, in the Element repository (which is never
+installed into itself), run the shipped script by its source path and
+register the new files in `rasa.json` first (`bin/check-manifest`):
+
+```bash
+RASA_ROOT="$PWD" bash content/skills/land/land.sh pr --skill new-skill --title "add /<name>" -- content/skills/<name>/SKILL.md [content/skills/<name>/<name>.sh]
+```
+
 Exit 4 → finish with the session's GitHub tooling per
 `land/SKILL.md` "Without gh". Exits 5, 6, 7 → report, never retry
 blindly. Run as a step of `/mission`, `/self-heal` or
@@ -253,8 +265,8 @@ Next steps:
    script in a sandbox repo before wiring it into the SKILL.md
    process.
 3. Once filled, test by invoking the skill on a real task.
-4. If kit-wide: once the PR merges, downstream projects pick it
-   up via `/sync`.
+4. If Element-wide: once the PR merges, downstream projects pick
+   it up via `/sync`.
 
 Tip: `/audit kit/skills/<name>/SKILL.md` once it's filled in,
 to get a critical read before it propagates.
@@ -288,8 +300,9 @@ narratives, no soft no's, etc.>
 - **<TODO: rule>** — <TODO: one-line rationale>
 - **<TODO: rule>** — <TODO: one-line rationale>
 - **<TODO: rule>** — <TODO: one-line rationale>
-- **Never auto-commit.** Standard kit rule. Apply edits to the
-  working tree; the user reviews with `git diff` and commits.
+- **Land through `/land`, never straight in.** Standard Element
+  rule: docs with `land.sh docs`, anything else with `land.sh pr`,
+  which never merges.
 - **Stay in scope.** <TODO: define what "in scope" means for
   this skill. Adjacent observations go in a footer at most.>
 
@@ -356,7 +369,8 @@ the kit's design language for structured deliverables.>
 
 - **<TODO: anti-pattern this skill is most likely to drift
   into>** — <TODO: why it's wrong>
-- **Don't auto-commit.** Standard kit rule.
+- **Don't commit or push to the trunk.** Standard Element rule:
+  outputs go through `land.sh` (`land/SKILL.md`).
 - **Don't expand scope unilaterally.** If something out-of-scope
   catches your eye, footer it; don't grow the skill's
   responsibility silently.

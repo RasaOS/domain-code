@@ -21,7 +21,8 @@ without nuance — write so they survive that.
 - **Writes durable docs only.** Output lands at
   `docs/notes/<YYYY-MM-DD>-<task-slug>.md` plus an updated
   `docs/notes/INDEX.md`. No source-code edits; the note lands by
-  itself, the INDEX.md row rides with the next branch/PR (Step 6).
+  itself, the INDEX.md row goes up in a rolling PR this skill
+  never merges (Step 6).
 - **Sub-agent does the introspection.** Spawn an `Agent`
   (subagent_type: `general-purpose` is fine; `Explore` if the
   conversation references a lot of code) to read conversation
@@ -50,7 +51,7 @@ without nuance — write so they survive that.
 - **Land the note, don't commit it by hand.** Once the user says
   "write it", `land.sh docs` lands the dated note (Step 6).
   `docs/notes/INDEX.md` is code class (CLAUDE.md `@`-imports it),
-  so it never goes to `land.sh docs`.
+  so it never goes to `land.sh docs`: `land.sh pr` proposes it.
 
 ## Process
 
@@ -252,15 +253,31 @@ the latest trunk that merges after CI), in both modes:
 bash .claude/skills/land/land.sh docs --skill lessons --title "Lessons: <task title>" -- docs/notes/<YYYY-MM-DD>-<task-slug>.md
 ```
 
-Name only the note. **Never pass `docs/notes/INDEX.md`**: the
-seeded CLAUDE.md `@`-imports it, so every session loads it, which
-makes it code class (`land.sh docs` refuses it, exit 3). Its new
-row stays in the working tree and rides with the next branch/PR;
-the note is what must not be lost, and it is landed. Exit 4 (no
-`gh`): finish with the session's GitHub tooling per
+Name only the note. **Never pass `docs/notes/INDEX.md` to
+`land.sh docs`**: the seeded CLAUDE.md `@`-imports it, so every
+session loads it as instructions, which makes it code class
+(`land.sh docs` refuses it, exit 3). When this run added an
+INDEX row, propose it by PR, with this exact title so every
+capture updates the same PR:
+
+```bash
+bash .claude/skills/land/land.sh pr --skill lessons --title "notes index" -- docs/notes/INDEX.md
+```
+
+From the trunk this builds the stable branch
+`chore/lessons-notes-index` from the latest trunk without touching
+the checkout, and reuses its open PR; on a feature branch the row
+is committed there and rides that branch's PR. The skill never
+merges it. Until a reviewer does, this checkout keeps the edited
+INDEX.md; its content is on the PR branch, so
+`git checkout -- docs/notes/INDEX.md` loses nothing when a clean
+tree is needed, and `land.sh settle --pr <N>` brings the merged
+version in.
+
+Exit 4 (no `gh`): finish with the session's GitHub tooling per
 `land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never retry
 blindly. As a step of `/mission`, `/self-heal` or
-`/self-improve`, skip this: the orchestrator's branch and PR
+`/self-improve`, skip this step: the orchestrator's branch and PR
 carry the note and the INDEX.md row.
 
 ### Step 7 — Surface graduation candidates
@@ -275,8 +292,9 @@ After writing, render in chat:
 
 Landed: PR #N merged *(or `Not landed: exit N — <message>`)*
 
-[`docs/notes/INDEX.md`](docs/notes/INDEX.md) updated (working
-tree; rides with the next branch/PR).
+[`docs/notes/INDEX.md`](docs/notes/INDEX.md) updated: PR #N open
+(the rolling `notes index` PR), never merged by this skill
+*(or `Not proposed: exit N — <message>`)*.
 
 **Graduation candidates worth routing:**
 - "<lesson>" → run `/codify` to land in CLAUDE.md
@@ -338,8 +356,9 @@ See per-task note + INDEX.md shapes in Step 4.
   route (`/codify`, `/decision`, etc.) and let the user pick.
 - **Don't commit or push the note yourself.** `land.sh docs`
   lands it (Step 6).
-- **Don't pass `docs/notes/INDEX.md` to `land.sh docs`.** It is
-  code class; its row rides with the next branch/PR.
+- **Don't pass `docs/notes/INDEX.md` to `land.sh docs`, and don't
+  merge its PR.** It is code class: `land.sh pr` with the title
+  `notes index` (Step 6).
 - **Don't write empty sections.** A category with zero items
   is omitted, not stubbed.
 - **Don't backdate.** The date in the note is today's, not the
@@ -438,8 +457,9 @@ categorized learnings (only the categories that had material),
 and `docs/notes/INDEX.md` updated with a one-line headline
 linking to the new note. The note landed with `land.sh docs`
 (merged PR), left to the orchestrator in a composed run, or the
-exit code and what is still open reported; the INDEX.md row stays
-in the working tree for the next branch/PR. Optionally: a `/codify`
-prompt for the highest-leverage graduation candidate.
+exit code and what is still open reported; the INDEX.md row is in
+the rolling `notes index` PR, never merged by this skill.
+Optionally: a `/codify` prompt for the highest-leverage graduation
+candidate.
 Future Claude sessions read `INDEX.md` via the CLAUDE.md
 reference and pick up where the prior session left off.

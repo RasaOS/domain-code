@@ -286,7 +286,13 @@ push:
 RELEASE_SHA=$(git rev-parse HEAD)
 ```
 
-The PR is merged in Step 6, after the deploy succeeds.
+The PR is merged in Step 6, after the deploy succeeds — so check now,
+before anything ships, that it **can** be: the repository allows merge
+commits (`gh api repos/{owner}/{repo} --jq .allow_merge_commit`), and
+the PR is not blocked (`gh pr view <N> --json mergeStateStatus,reviewDecision`:
+`DIRTY` is a conflict, `BLOCKED` a missing review or required check).
+Either is a hard blocker here, not after production is live. Without
+`gh`, read the same fields with the session's GitHub tooling.
 
 ### Step 4 — Tag the release commit (local)
 
@@ -407,7 +413,9 @@ a record of the attempt.
 
 After deploy success:
 
-1. **The trunk must not have moved.** Run
+1. **The trunk must not have moved** (only when there is a release
+   PR; on the nothing-to-merge path `RELEASE_SHA` is already on
+   `main`, and a later commit there is not part of this release). Run
    `bash .claude/skills/land/land.sh fresh --sha "$RELEASE_SHA"`.
    Exit 5 means `main` moved while the release ran, so merging now
    would put undeployed code on the trunk: hard-stop with a

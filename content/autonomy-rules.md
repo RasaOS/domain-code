@@ -148,15 +148,17 @@ The carve-out:
   `land.py` classify every file, and nothing else does. Docs class
   is the `tasks/**` ledger (`tasks/**/*.md`, `tasks/history.tsv`)
   and the records
-  (`docs/{audits,decisions,postmortems,retros,notes,handoff,blast-radius,scope,exports,regrets,mvp,wrangle}/**/*.md`,
+  (`docs/{audits,decisions,postmortems,retros,notes,handoff,blast-radius,scope,exports,regrets,mvp,wrangle,refinement}/**/*.md`,
   `docs/glossary.md`); the full table is in `land/SKILL.md`.
   Never docs class, whatever the path: any `CLAUDE.md` /
-  `AGENTS.md`, anything `CLAUDE.md` `@`-imports (e.g.
-  `docs/notes/INDEX.md`), `.claude/**`, `.github/**`, and
+  `CLAUDE.local.md` / `AGENTS.md`, anything `CLAUDE.md`
+  `@`-imports (e.g. `docs/notes/INDEX.md`), a `.claude/` or
+  `.github/` folder at any depth, prototype scope (`tasks/proto/**`,
+  `docs/proto/**`), symlinks, submodules and executable files, and
   `tasks/tasks.config.yml`, which declares the ledger's actors and
-  targets and is a decision, not a record. A code-class file refuses the landing (exit 3), with no
-  bypass; project config can make docs wait for a person, never
-  widen the class.
+  targets and is a decision, not a record. A code-class file
+  refuses the landing (exit 3), with no bypass; project config can
+  make docs wait for a person, never widen the class.
 - **By class, not by name.** Any autonomous skill's docs-class
   outputs land this way. `/auto-task`, `/auto-phase`, `/auto-bug`,
   `/auto-hotfix` and `/reconcile` land their specs, ledger lines

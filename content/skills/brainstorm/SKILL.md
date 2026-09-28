@@ -38,7 +38,10 @@ decisions when grounding.
 - **Cite real things.** Prior decisions, regrets, postmortems,
   code locations. A brainstorm grounded in real artifacts is
   more honest than abstract pro/con theatre.
-- **No auto-commit.** Standard kit rule.
+- **Propose by PR, never merge.** The file sits under `.claude/`,
+  so it is code class (`/land`): at the end of each session it
+  goes up with `land.sh pr` in one rolling PR per topic, which
+  this skill never merges (Step 8).
 
 ## Process
 
@@ -152,13 +155,34 @@ Some brainstorms don't converge — and that's fine. Options:
 
 Don't pretend a brainstorm converged when it didn't.
 
-### Step 8 — Closing chat summary
+### Step 8 — Propose the file
+
+At the end of the session (not after every pass), propose the
+file, with this exact title so every session on the topic updates
+the same PR:
+
+```bash
+bash .claude/skills/land/land.sh pr --skill brainstorm --title "tradeoffs <slug>" -- .claude/tradeoffs/<slug>.md
+```
+
+From the trunk this builds the stable branch
+`chore/brainstorm-tradeoffs-<slug>` from the latest trunk without
+touching the checkout and reuses its open PR; on a feature branch
+the file is committed there and rides that branch's PR. Never
+merge it. Exit 4 (no `gh`): finish with the session's GitHub
+tooling per `land/SKILL.md` "Without `gh`". Exits 5/6/7: report,
+never retry blindly. As a step of `/mission`, `/self-heal` or
+`/self-improve`, skip this step: the orchestrator's branch and PR
+carry the file.
+
+### Step 9 — Closing chat summary
 
 ```markdown
 # 🧠 Brainstorm — <topic>
 
 **Status.** <new status>
-**File.** `.claude/tradeoffs/<slug>.md`
+**File.** `.claude/tradeoffs/<slug>.md` — PR #N open (rolling,
+never merged by this skill) *(or `Not proposed: exit N — <message>`)*
 
 <one-line summary of the session — what was added, what's
 open, what's next>
@@ -288,7 +312,8 @@ was added, what was challenged, what's still open.>
 - **Don't extrapolate past the user.** If the user says
   "ready to decide", don't pre-write the decision doc. Hand
   off to `/decision`.
-- **Don't auto-commit.** Standard kit rule.
+- **Don't commit to the trunk or merge the tradeoffs PR.**
+  `land.sh pr` proposes the file (Step 8).
 - **Don't bury real history.** If a prior decision or regret
   is relevant, link it explicitly in "Prior history".
 
@@ -334,7 +359,9 @@ was added, what was challenged, what's still open.>
 A live `.claude/tradeoffs/<slug>.md` file with the current
 brainstorming state — options, pros/cons, open questions,
 session log. Status field reflects reality (active / paused /
-promoted-to-decision / closed). Uncommitted. The user knows
-the next move (continue thinking, run `/decision`, or pause).
+promoted-to-decision / closed), in the topic's rolling PR that
+this skill never merges, or the `/land` exit reported. The user
+knows the next move (continue thinking, run `/decision`, or
+pause).
 Future sessions can resume mid-thought without re-explaining
 context.

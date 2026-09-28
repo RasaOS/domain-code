@@ -96,6 +96,7 @@ cat > "$T/shim/gh" <<EOF
 T="$T"; R="$R"
 echo "gh \$*" >> "\$T/gh/calls"
 case "\$1 \$2" in
+  "auth status") exit 0 ;;
   "label create") exit 0 ;;
   "pr create")
     head=""; prev=""; for a in "\$@"; do [ "\$prev" = --head ] && head="\$a"; prev="\$a"; done
@@ -107,6 +108,9 @@ case "\$1 \$2" in
   "pr view")
     who="\$3"
     case "\$*" in
+      *baseRefName*)
+        b="main"; [ -f "\$T/gh/base-\$who" ] && b="\$(cat "\$T/gh/base-\$who")"
+        printf '{"baseRefName":"%s"}' "\$b"; exit 0 ;;
       *statusCheckRollup*)
         f="\$T/gh/rollup-\$who.json"; [ -f "\$f" ] || f="\$T/gh/rollup.json"
         [ -f "\$f" ] && printf '{"statusCheckRollup":%s}' "\$(cat "\$f")" || printf '{"statusCheckRollup":[{"__typename":"CheckRun","name":"ci","status":"COMPLETED","conclusion":"SUCCESS"}]}'
@@ -188,7 +192,22 @@ done
 printf '# Project\n@docs/retros/team-norms.md\n' > CLAUDE.md
 out="$(bash "$L" classify docs/retros/team-norms.md 2>&1)"; rc=$?
 expect "a file CLAUDE.md imports is code, even under a docs folder" 3 "$rc" "imported by CLAUDE.md" "$out"
+printf '# Project\nFollow the norms in @docs/decisions/0001-norms.md when you plan.\nMail a@b.com; `@docs/audits/code-span.md`\n' > CLAUDE.md
+out="$(bash "$L" classify docs/decisions/0001-norms.md 2>&1)"; rc=$?
+expect "an import written mid-sentence is still an import (code)" 3 "$rc" "imported by CLAUDE.md" "$out"
+out="$(bash "$L" classify docs/audits/code-span.md 2>&1)"; rc=$?
+expect "an @path inside a code span is not an import" 0 "$rc" "^docs" "$out"
 git checkout -q -- CLAUDE.md 2>/dev/null || rm -f CLAUDE.md
+printf '@docs/retros/local-norms.md\n' > CLAUDE.local.md
+out="$(bash "$L" classify docs/retros/local-norms.md 2>&1)"; rc=$?
+expect "CLAUDE.local.md imports count too" 3 "$rc" "imported by CLAUDE.md" "$out"
+rm -f CLAUDE.local.md
+for pth in tasks/.claude/skills/x/SKILL.md docs/audits/.github/workflows/x.md docs/audits/sub/.claude/commands/x.md; do
+  out="$(bash "$L" classify "$pth" 2>&1)"; rc=$?
+  expect "code at any depth: $pth" 3 "$rc" "^code" "$out"
+done
+out="$(bash "$L" classify docs/refinement/2026-09-28.md 2>&1)"; rc=$?
+expect "docs: docs/refinement (the project-manager mode's log)" 0 "$rc" "^docs" "$out"
 ln -s ../../README.md docs/audits/link.md
 out="$(bash "$L" classify docs/audits/link.md 2>&1)"; rc=$?
 expect "a symlink is code" 3 "$rc" "symlink" "$out"
@@ -204,6 +223,7 @@ clean() {
   git fetch -q origin 2>/dev/null
   git reset -q --hard origin/main
   git clean -fdq -- docs tasks src feat.txt 2>/dev/null
+  mkdir -p docs/audits docs/decisions
 }
 
 echo "docs — the happy path, from a stale checkout"
@@ -244,6 +264,7 @@ $TASK new --type change --phase P1 --by tester "Second" >/dev/null 2>&1
 TF2="$(ls tasks/backlog/TASK-002-*.md 2>/dev/null)"
 out="$(PATH="$GHPATH" bash "$L" docs --skill audit --title two -- docs/audits/2026-09-28-two.md "$TF2" tasks/history.tsv tasks/ROADMAP.md 2>&1)"; rc=$?
 expect "a second landing merges" 0 "$rc" "merged=#2" "$out"
+expect "  the checkout settles after a line-merged ledger" 0 0 "settle=main now carries" "$out"
 dates="$(git --git-dir="$R" show main:tasks/history.tsv | sed 1d | cut -f1)"
 [ "$dates" = "$(printf '%s\n' "$dates" | sort)" ] && ok "  dates never run backwards" || bad "  dates never run backwards" "$(printf '%s' "$dates" | tr '\n' ' ')"
 git --git-dir="$R" show main:tasks/history.tsv | grep -q TASK-900 && ok "  the trunk's row is kept" || bad "  the trunk's row is kept" "gone"
@@ -275,7 +296,13 @@ expect "the trunk changed the same doc: conflict (exit 5)" 5 "$rc" "docs/glossar
 rm -f docs/glossary.md docs/audits/c.md
 out="$(PATH="$GHPATH" bash "$L" docs --skill audit --title x -- docs/audits/2026-09-28-first.md 2>&1)"; rc=$?
 expect "content already on the trunk: nothing to land" 0 "$rc" "already on the trunk" "$out"
-printf 'docs/exports/\n' >> .gitignore; git add .gitignore; git commit -qm ignore; git push -q origin main 2>/dev/null; mkdir -p docs/exports; printf 'x\n' > docs/exports/e.md
+TFX="$(ls tasks/*/TASK-001-*.md | head -1)"; sed 's/^title: .*/title: A different task, same id/' "$TFX" > tasks/backlog/TASK-001-imposter.md
+out="$(PATH="$GHPATH" bash "$L" docs --skill task --title dup -- tasks/backlog/TASK-001-imposter.md 2>&1)"; rc=$?
+expect "a task id the trunk already has breaks the ledger: refused (exit 5)" 5 "$rc" "ledger would break" "$out"
+remote_has tasks/backlog/TASK-001-imposter.md && bad "  not landed" "landed" || ok "  not landed"
+rm -f tasks/backlog/TASK-001-imposter.md
+git pull -q --ff-only origin main 2>/dev/null
+printf 'docs/exports/\n' >> .gitignore; git add .gitignore; git commit -qm ignore; git push -q origin main; mkdir -p docs/exports; printf 'x\n' > docs/exports/e.md
 out="$(PATH="$GHPATH" bash "$L" docs --skill export-project --title e -- docs/exports/e.md 2>&1)"; rc=$?
 expect "an ignored path is reported, never force-added" 0 "$rc" "ignored" "$out"
 
@@ -307,6 +334,28 @@ printf '# m\n' > docs/audits/moving.md; touch "$T/gh/move-trunk-once"
 out="$(PATH="$GHPATH" bash "$L" docs --skill audit --title m -- docs/audits/moving.md 2>&1)"; rc=$?
 expect "the trunk moves while CI runs: synced by a merge, then merged" 0 "$rc" "synced=land/" "$out"
 expect "  and merged" 0 0 "merged=#" "$out"
+clean
+WITH_CI="$(git rev-parse HEAD)"
+git rm -q -r .github/workflows && git commit -qm "no CI" && git push -q origin main
+printf '[]' > "$T/gh/rollup.json"
+printf '# nowf\n' > docs/audits/nowf.md
+out="$(PATH="$GHPATH" bash "$L" docs --skill audit --title nowf --wait 20 -- docs/audits/nowf.md 2>&1)"; rc=$?
+expect "no checks where the trunk runs no PR workflows: merged after a grace period" 0 "$rc" "merged=#" "$out"
+rm -f "$T/gh/rollup.json"
+clean
+git checkout -q "$WITH_CI" -- .github/workflows
+git add .github && git commit -qm "CI back" && git push -q origin main
+echo "docs — a project can hold docs for a person"
+clean
+printf '{"docs":"pr"}\n' > .claude/landing.json
+printf '# held\n' > docs/audits/held.md
+out="$(PATH="$GHPATH" bash "$L" docs --skill audit --title held -- docs/audits/held.md 2>&1)"; rc=$?
+expect "landing.json docs=pr: the PR opens and waits" 0 "$rc" "merge=held" "$out"
+remote_has docs/audits/held.md && bad "  not merged" "merged" || ok "  not merged"
+HN="$(printf '%s\n' "$out" | sed -n 's|^pr=https://github.com/o/r/pull/||p')"; HS="$(git --git-dir="$R" rev-parse "refs/pull/$HN/head")"
+out="$(PATH="$GHPATH" bash "$L" merge --pr "$HN" --sha "$HS" 2>&1)"; rc=$?
+expect "  and land.sh merge will not merge it either" 3 "$rc" "held for a person" "$out"
+git checkout -q -- .claude/landing.json
 
 echo "no gh — hand-offs, and a program-checked gate"
 clean
@@ -315,18 +364,27 @@ out="$(PATH="$NOGH" bash "$L" docs --skill audit --title cloud -- docs/audits/cl
 expect "no gh: exit 4 after the push, with the next step" 4 "$rc" "next=open-pr" "$out"
 CB="$(printf '%s\n' "$out" | sed -n 's/^branch=//p')"; CS="$(printf '%s\n' "$out" | sed -n 's/^head=//p')"
 N="$(open_pr "$CB")"
+printf '{"number":%s,"base":{"ref":"main"},"head":{"sha":"%s"}}' "$N" "$CS" > "$T/prj.json"
+printf '{"number":%s,"base":{"ref":"release/1.x"}}' "$N" > "$T/prj-other.json"
 out="$(PATH="$NOGH" bash "$L" verify --pr "$N" --sha "$CS" 2>&1)"; rc=$?
 expect "verify: a docs-only PR at the pushed head passes, by git alone" 0 "$rc" "verified=docs-only" "$out"
 out="$(PATH="$NOGH" bash "$L" verify --pr "$N" --sha 0123456789abcdef0123456789abcdef01234567 2>&1)"; rc=$?
 expect "verify: a different head is refused" 3 "$rc" "not 0123456789ab" "$out"
 printf '{"total_count":0,"check_runs":[]}' > "$T/cr-empty.json"
-out="$(PATH="$NOGH" bash "$L" merge --pr "$N" --sha "$CS" --checks-json "$T/cr-empty.json" 2>&1)"; rc=$?
+out="$(PATH="$NOGH" bash "$L" merge --pr "$N" --sha "$CS" --checks-json "$T/cr-ok.json" 2>&1)"; rc=$?
+expect "merge without gh needs a read of the PR (its base is checked)" 3 "$rc" "pr-json" "$out"
+printf '{"total_count":1,"check_runs":[{"name":"ci","status":"completed","conclusion":"success"}]}' > "$T/cr-ok.json"
+out="$(PATH="$NOGH" bash "$L" merge --pr "$N" --sha "$CS" --pr-json "$T/prj-other.json" --checks-json "$T/cr-ok.json" 2>&1)"; rc=$?
+expect "merge refuses a PR whose base is not the trunk" 3 "$rc" "targets release/1.x" "$out"
+out="$(PATH="$NOGH" bash "$L" merge --pr "$N" --sha "$CS" --pr-json "$T/prj.json" --checks-json "$T/cr-empty.json" 2>&1)"; rc=$?
 expect "merge --checks-json: an empty read is never a pass" 6 "$rc" "none reported" "$out"
 printf '{"nonsense":true}' > "$T/cr-bad.json"
-out="$(PATH="$NOGH" bash "$L" merge --pr "$N" --sha "$CS" --checks-json "$T/cr-bad.json" 2>&1)"; rc=$?
+out="$(PATH="$NOGH" bash "$L" merge --pr "$N" --sha "$CS" --pr-json "$T/prj.json" --checks-json "$T/cr-bad.json" 2>&1)"; rc=$?
 expect "merge --checks-json: an unknown shape is refused" 3 "$rc" "no shape" "$out"
-printf '{"total_count":1,"check_runs":[{"name":"ci","status":"completed","conclusion":"success"}]}' > "$T/cr-ok.json"
-out="$(PATH="$NOGH" bash "$L" merge --pr "$N" --sha "$CS" --checks-json "$T/cr-ok.json" 2>&1)"; rc=$?
+printf '{"total_count":1,"check_runs":[{"name":"ci","status":"completed","conclusion":"success","head_sha":"0123456789abcdef0123456789abcdef01234567"}]}' > "$T/cr-stale.json"
+out="$(PATH="$NOGH" bash "$L" merge --pr "$N" --sha "$CS" --pr-json "$T/prj.json" --checks-json "$T/cr-stale.json" 2>&1)"; rc=$?
+expect "merge --checks-json: green checks of another commit are no checks" 6 "$rc" "none reported" "$out"
+out="$(PATH="$NOGH" bash "$L" merge --pr "$N" --sha "$CS" --pr-json "$T/prj.json" --checks-json "$T/cr-ok.json" 2>&1)"; rc=$?
 expect "merge --checks-json: green → exit 4, merge with expectedHeadSha" 4 "$rc" "expectedHeadSha=$CS" "$out"
 out="$(PATH="$NOGH" bash "$L" settle --pr "$N" 2>&1)"; rc=$?
 expect "settle before the merge does nothing" 6 "$rc" "not on main yet" "$out"
@@ -341,19 +399,77 @@ expect "  and deletes the land branch" 0 0 "deleted=$CB" "$out"
 EN="$(open_pr land/evil)"; ES="$(git --git-dir="$R" rev-parse land/evil)"
 out="$(PATH="$NOGH" bash "$L" verify --pr "$EN" --sha "$ES" 2>&1)"; rc=$?
 expect "verify: a code file in a land/ PR is refused" 3 "$rc" "evil.sh" "$out"
+printf '{"base":{"ref":"main"}}' > "$T/prj-evil.json"
+out="$(PATH="$NOGH" bash "$L" merge --pr "$EN" --sha "$ES" --pr-json "$T/prj-evil.json" --checks-json "$T/cr-ok.json" 2>&1)"; rc=$?
+expect "merge: a code file in the PR is refused" 3 "$rc" "evil.sh" "$out"
 rm -rf "$T/ren"; git clone -q "$R" "$T/ren" 2>/dev/null
 ( cd "$T/ren" && git config user.email r@x && git config user.name r && git checkout -q -b land/ren \
   && mkdir -p docs/notes && git mv .github/workflows/ci.yml docs/notes/ci.md && git commit -qm ren && git push -q origin land/ren 2>/dev/null )
 RN="$(open_pr land/ren)"; RS="$(git --git-dir="$R" rev-parse land/ren)"
 out="$(PATH="$NOGH" bash "$L" verify --pr "$RN" --sha "$RS" 2>&1)"; rc=$?
 expect "verify: renaming a workflow into docs/ is refused (both sides are classified)" 3 "$rc" ".github" "$out"
+rm -rf "$T/ren2"; git clone -q "$R" "$T/ren2" 2>/dev/null
+( cd "$T/ren2" && git config user.email r@x && git config user.name r && git checkout -q -b land/ren2 \
+  && mkdir -p .github/workflows && git mv tasks/ROADMAP.md .github/workflows/evil.yml && git commit -qm ren2 && git push -q origin land/ren2 2>/dev/null )
+R2N="$(open_pr land/ren2)"; R2S="$(git --git-dir="$R" rev-parse land/ren2)"
+out="$(PATH="$NOGH" bash "$L" verify --pr "$R2N" --sha "$R2S" 2>&1)"; rc=$?
+expect "verify: renaming a doc into .github/ is refused" 3 "$rc" ".github/workflows/evil.yml" "$out"
+rm -rf "$T/lnk"; git clone -q "$R" "$T/lnk" 2>/dev/null
+( cd "$T/lnk" && git config user.email r@x && git config user.name r && git checkout -q -b land/link \
+  && ln -s ../../README.md docs/audits/link.md && git add docs/audits/link.md && git commit -qm link && git push -q origin land/link 2>/dev/null )
+LN="$(open_pr land/link)"; LS="$(git --git-dir="$R" rev-parse land/link)"
+out="$(PATH="$NOGH" bash "$L" verify --pr "$LN" --sha "$LS" 2>&1)"; rc=$?
+expect "verify: a symlink in a land/ PR is refused" 3 "$rc" "link.md" "$out"
+
+echo "settle — never loses a byte"
+clean
+printf '# edit\n' > docs/audits/edit.md
+out="$(PATH="$NOGH" bash "$L" docs --skill audit --title edit -- docs/audits/edit.md 2>&1)"
+EB="$(printf '%s\n' "$out" | sed -n 's/^branch=//p')"; EPN="$(open_pr "$EB")"
+printf 'my later edit\n' >> docs/audits/edit.md
+bash "$T/squash.sh" "$EPN" >/dev/null 2>&1
+out="$(PATH="$NOGH" bash "$L" settle --branch "$EB" 2>&1)"; rc=$?
+expect "settle keeps a file changed since it landed" 0 "$rc" "changed since it landed" "$out"
+grep -q 'my later edit' docs/audits/edit.md && ok "  the later edit is still there" || bad "  the later edit is still there" "$(cat docs/audits/edit.md)"
+clean
+printf '# staged\n' > docs/audits/staged.md; git add docs/audits/staged.md
+out="$(PATH="$NOGH" bash "$L" docs --skill audit --title staged -- docs/audits/staged.md 2>&1)"
+SB="$(printf '%s\n' "$out" | sed -n 's/^branch=//p')"; SPN="$(open_pr "$SB")"
+bash "$T/squash.sh" "$SPN" >/dev/null 2>&1
+out="$(PATH="$NOGH" bash "$L" settle --branch "$SB" 2>&1)"; rc=$?
+expect "settle handles a staged doc" 0 "$rc" "main now carries" "$out"
+[ -f docs/audits/staged.md ] && [ -z "$(git status --porcelain -- docs/audits/staged.md)" ] \
+  && ok "  the file is there and clean" || bad "  the file is there and clean" "$(git status --porcelain -- docs/audits/staged.md) exists=$([ -f docs/audits/staged.md ] && echo y || echo n)"
+out="$(PATH="$NOGH" bash "$L" settle --branch chore/no-such-landing 2>&1)"; rc=$?
+expect "settle --branch with no such landing is refused, nothing deleted" 2 "$rc" "no landing on record" "$out"
 
 echo "pr — code goes by PR, synced, never merged"
 clean
 advance
+mkdir -p src && printf 'print("iso")\n' > src/iso.py
+out="$(PATH="$GHPATH" bash "$L" pr --skill setup-deploy --title "iso tool" -- src/iso.py 2>&1)"; rc=$?
+expect "pr from the trunk (default): the branch is built aside" 0 "$rc" "checkout=untouched" "$out"
+[ "$(git symbolic-ref --short HEAD)" = main ] && ok "  the checkout stays on main" || bad "  the checkout stays on main" "$(git symbolic-ref --short HEAD)"
+git --git-dir="$R" cat-file -e chore/setup-deploy-iso-tool:src/iso.py 2>/dev/null && ok "  the branch carries the file, cut from the latest trunk" || bad "  the branch carries the file" "missing"
+printf 'print("iso 2")\n' > src/iso.py
+out="$(PATH="$GHPATH" bash "$L" pr --skill setup-deploy --title "iso tool" -- src/iso.py 2>&1)"; rc=$?
+expect "  a second run updates the same branch and PR" 0 "$rc" "already open" "$out"
+rm -f src/iso.py
+printf 'k="AKIAABCDEFGHIJKLMNOP"\n' > src/leak.py
+out="$(PATH="$GHPATH" bash "$L" pr --skill auto-develop --title leak -- src/leak.py 2>&1)"; rc=$?
+expect "pr: a credential is refused" 3 "$rc" "credential" "$out"
+git --git-dir="$R" for-each-ref --format='%(refname)' refs/heads | grep -q leak && bad "  nothing pushed" "pushed" || ok "  nothing pushed"
+rm -f src/leak.py
+printf '# auto\n' > docs/audits/auto.md; printf 'x = 1\n' > src/auto.py
+out="$(PATH="$GHPATH" bash "$L" auto --skill update-docs --title "auto split" -- docs/audits/auto.md src/auto.py 2>&1)"; rc=$?
+expect "auto: the doc lands" 0 "$rc" "merged=#" "$out"
+remote_has docs/audits/auto.md && ok "  the doc is on the trunk" || bad "  the doc is on the trunk" "missing"
+remote_has src/auto.py && bad "  the code is not on the trunk" "it is" || ok "  the code is not on the trunk"
+expect "  the code went to a PR branch" 0 0 "pushed=chore/update-docs-auto-split" "$out"
+clean
 mkdir -p src && printf 'print("hi")\n' > src/app.py
-out="$(PATH="$GHPATH" bash "$L" pr --skill auto-develop --title "greet" --tasks TASK-001 --draft -- src/app.py 2>&1)"; rc=$?
-expect "pr from the trunk: a task branch cut from the fresh trunk" 0 "$rc" "branch=task/TASK-001-greet" "$out"
+out="$(PATH="$GHPATH" bash "$L" pr --skill auto-develop --title "greet" --tasks TASK-001 --draft --switch -- src/app.py 2>&1)"; rc=$?
+expect "pr --switch from the trunk: a task branch cut from the fresh trunk" 0 "$rc" "branch=task/TASK-001-greet" "$out"
 expect "  a draft PR is opened" 0 0 "pr=https://github.com/o/r/pull/" "$out"
 [ "$(git symbolic-ref --short HEAD)" = "task/TASK-001-greet" ] && ok "  the checkout is on the task branch" || bad "  the checkout is on the task branch" "$(git symbolic-ref --short HEAD)"
 git merge-base --is-ancestor "$(remote_main)" HEAD && ok "  the branch contains the latest trunk" || bad "  the branch contains the latest trunk" "behind"
@@ -373,18 +489,28 @@ advance
 out="$(bash "$L" sync 2>&1)"; rc=$?
 expect "sync on the trunk fast-forwards" 0 "$rc" "fast-forwarded" "$out"
 git checkout -q -b feature/x; printf 'x\n' > feat.txt; git add feat.txt; git commit -qm feat
+BEFORE="$(git rev-parse HEAD)"
 advance
 out="$(bash "$L" sync 2>&1)"; rc=$?
 expect "sync on a branch merges the trunk in" 0 "$rc" "now contains main" "$out"
+git merge-base --is-ancestor "$BEFORE" HEAD && ok "  the branch's own commit is kept (no rewrite)" || bad "  the branch's own commit is kept" "rewritten"
 ( cd "$O" && git pull -q --ff-only origin main 2>/dev/null && printf 'theirs\n' > feat.txt && git add feat.txt && git commit -qm clash && git push -q origin main 2>/dev/null )
 printf 'mine\n' > feat.txt; git commit -qam mine
 out="$(bash "$L" sync 2>&1)"; rc=$?
 expect "a conflicting sync is undone (exit 5)" 5 "$rc" "feat.txt" "$out"
 [ -f .git/MERGE_HEAD ] && bad "  no merge left in progress" "MERGE_HEAD" || ok "  no merge left in progress"
 git checkout -q main
+git reset -q --hard origin/main
 git commit -q --allow-empty -m "local only"
 out="$(bash "$L" sync 2>&1)"; rc=$?
-expect "local trunk commits not on origin: refused, they need a PR" 3 "$rc" "through a PR" "$out"
+expect "local trunk ahead of origin: refused, not 'up to date'" 3 "$rc" "through a PR" "$out"
+git reset -q --hard origin/main
+git --git-dir="$R" update-ref refs/heads/land/stale "$(git --git-dir="$R" rev-parse main~1)"
+advance
+out="$(bash "$L" sync-pr --branch land/stale 2>&1)"; rc=$?
+expect "sync-pr merges the trunk into a PR branch" 0 "$rc" "synced=land/stale" "$out"
+git --git-dir="$R" merge-base --is-ancestor main land/stale && ok "  the branch now contains the trunk" || bad "  the branch now contains the trunk" "behind"
+git fetch -q origin
 git reset -q --hard origin/main
 out="$(bash "$L" fresh --sha "$(git rev-parse HEAD~1)" 2>&1)"; rc=$?
 expect "fresh: an old commit is not fresh" 5 "$rc" "fresh=no" "$out"
@@ -393,7 +519,7 @@ echo "guards"
 bash "$L" hooks >/dev/null 2>&1
 out="$(bash "$L" hooks 2>&1)"
 expect "hooks are idempotent" 0 0 "prepush: present" "$out"
-n="$(python3 -c 'import json;d=json.load(open(".claude/settings.json"));print(sum(1 for g in d["hooks"]["PreToolUse"] for h in g["hooks"] if "land.sh guard-bash" in h["command"]))')"
+n="$(python3 -c 'import json;d=json.load(open(".claude/settings.json"));print(sum(1 for g in d["hooks"]["PreToolUse"] for h in g["hooks"] if "guard-bash" in h["command"] and "land.sh" in h["command"]))')"
 [ "$n" = 1 ] && ok "  one guard-bash entry after two installs" || bad "  one guard-bash entry after two installs" "$n"
 gb() { python3 -c 'import json,sys; print(json.dumps({"tool_input":{"command":sys.argv[1]},"cwd":sys.argv[2]}))' "$1" "$P" | bash "$L" guard-bash; }
 denied() { printf '%s' "$1" | grep -q '"deny"'; }
@@ -401,13 +527,22 @@ for c in "git push origin main" "git push origin HEAD:main" "git push origin fea
          "git push --mirror" "git push" "git push -u origin HEAD" "git -c core.hooksPath=/dev/null push origin feat" \
          "git config core.hooksPath /tmp/x" "GIT_GUARD_ALLOW_MAIN=1 git push" "git commit --no-verify -m x" \
          "git commit -nm x" "git push --no-verify origin feat" "rm .git/hooks/pre-push" "bash -c 'git push origin main'" \
-         "gh api -X PUT repos/o/r/pulls/5/merge" "gh api repos/o/r/merges -f base=main -f head=feat" "git push origin :main"; do
+         "gh api -X PUT repos/o/r/pulls/5/merge" "gh api repos/o/r/merges -f base=main -f head=feat" "git push origin :main" \
+         "git push origin HEAD:heads/main" "CLAUDECODE= git push origin feat" "env -u CLAUDECODE git push origin feat" \
+         "git remote set-head origin feat" "git send-pack ../r HEAD:refs/heads/main" "git --config-env=core.hooksPath=X push origin feat" \
+         "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git push origin feat" \
+         "git push --no-ver origin feat" "timeout 60 git push --no-verify origin feat" "gh api --method=PUT repos/o/r/pulls/5/merge" \
+         "gh api graphql -f query='mutation { mergeBranch(input:{}) { clientMutationId } }'" "cd .git && rm hooks/pre-push" \
+         "git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/feat"; do
   out="$(gb "$c")"
   denied "$out" && ok "deny: $c" || bad "deny: $c" "allowed: $out"
 done
 for c in "git push origin land/x" "git push origin v1.0.0" "git push --tags origin" "git push -n origin feat" \
          "echo 'git push origin main'" "git commit -m 'use -n flag'" "ls .git/hooks" "gh pr merge 5 --squash --match-head-commit abc" \
-         "git config --get core.hooksPath" "bash .claude/skills/land/land.sh docs --skill a --title t -- x.md" "git pull --ff-only origin main"; do
+         "git config --get core.hooksPath" "bash .claude/skills/land/land.sh docs --skill a --title t -- x.md" "git pull --ff-only origin main" \
+         "git config --unset core.hooksPath" "git commit -F - <<'EOF'
+Don't run git push origin main or --no-verify
+EOF" "git log --oneline --grep 'push main'"; do
   out="$(gb "$c")"
   denied "$out" && bad "allow: $c" "denied: $out" || ok "allow: $c"
 done
@@ -416,6 +551,9 @@ denied "$(gm mcp__github__push_files main)" && ok "deny: MCP push_files to main"
 denied "$(gm mcp__plugin_x_github__create_or_update_file main)" && ok "deny: a differently named server's create_or_update_file to main" || bad "deny: renamed server" "allowed"
 denied "$(gm mcp__github__delete_file '')" && ok "deny: MCP delete_file with no branch (the default branch)" || bad "deny: delete_file no branch" "allowed"
 denied "$(gm mcp__github__push_files land/x)" && bad "allow: MCP push_files to land/x" "denied" || ok "allow: MCP push_files to land/x"
+ge() { python3 -c 'import json,sys; print(json.dumps({"tool_name":"Write","tool_input":{"file_path":sys.argv[1]}}))' "$1" | bash "$L" guard-edit; }
+denied "$(ge "$P/.git/hooks/pre-push")" && ok "deny: Write into .git/hooks" || bad "deny: Write into .git/hooks" "allowed"
+denied "$(ge "$P/docs/audits/x.md")" && bad "allow: Write a doc" "denied" || ok "allow: Write a doc"
 git checkout -q main; git commit -q --allow-empty -m "try the trunk"
 out="$(CLAUDECODE=1 git push origin main 2>&1)"; rc=$?
 [ "$rc" != 0 ] && has "refused" "$out" && ok "pre-push: Claude cannot move the trunk" || bad "pre-push: Claude cannot move the trunk" "rc=$rc $out"
@@ -424,9 +562,36 @@ out="$(CLAUDECODE=1 git push origin HEAD:refs/heads/land/probe 2>&1)"; rc=$?
 git remote add mirror "$R"
 out="$(CLAUDECODE=1 git push mirror main 2>&1)"; rc=$?
 [ "$rc" != 0 ] && ok "pre-push: a second remote name for the same URL is caught" || bad "pre-push: second remote" "rc=$rc"
-out="$(git push -q origin HEAD:refs/heads/human-branch 2>&1)"; rc=$?
-[ "$rc" = 0 ] && ok "pre-push: a human (no CLAUDECODE) is not constrained" || bad "pre-push: human" "rc=$rc $out"
+out="$(git push -q origin main 2>&1)"; rc=$?
+[ "$rc" = 0 ] && ok "pre-push: a human (no CLAUDECODE) pushing the trunk is not refused" || bad "pre-push: human" "rc=$rc $out"
+git commit -q --allow-empty -m "try again"
+git remote set-head origin land/probe >/dev/null 2>&1
+out="$(CLAUDECODE=1 git push origin main 2>&1)"; rc=$?
+[ "$rc" != 0 ] && ok "pre-push: re-pointing origin/HEAD does not unguard main" || bad "pre-push: set-head bypass" "rc=$rc $out"
+git remote set-head origin main >/dev/null 2>&1
 git reset -q --hard origin/main
+# Another tool's hook: a python pre-push is kept whole, chained, and gets
+# stdin byte for byte (empty when nothing is pushed).
+H="$(git rev-parse --git-common-dir)/hooks"
+printf '#!/usr/bin/env python3\nimport sys\nopen("%s/py-hook.log","a").write("[%%s]" %% sys.stdin.read())\n' "$T" > "$H/pre-push.py-tmp"
+mv "$H/pre-push" "$H/pre-push.land-saved"; mv "$H/pre-push.py-tmp" "$H/pre-push"; chmod +x "$H/pre-push"
+bash "$L" hooks >/dev/null 2>&1
+[ -x "$H/pre-push.land-chained" ] && grep -q python3 "$H/pre-push.land-chained" && ok "hooks: a python pre-push is kept as a chained hook" || bad "hooks: python hook chained" "$(ls "$H")"
+git push -q origin main 2>/dev/null
+[ "$(cat "$T/py-hook.log" 2>/dev/null)" = "[]" ] && ok "  it gets empty stdin on an up-to-date push" || bad "  empty stdin" "$(cat "$T/py-hook.log" 2>/dev/null)"
+# A foreign block written into our hook (git-guard on) survives a re-install.
+printf '# >>> git-guard >>>\n# git-guard pre-push block\n# <<< git-guard <<<\n' >> "$H/pre-push"
+bash "$L" hooks >/dev/null 2>&1; bash "$L" session >/dev/null 2>&1
+grep -q "git-guard pre-push block" "$H/pre-push" && ok "hooks/session keep another tool's block in pre-push" || bad "foreign block kept" "$(cat "$H/pre-push")"
+
+echo "push.sh — never drops commits when it cuts from the fresh trunk"
+clean
+advance
+git commit -q --allow-empty -m "local trunk commit"
+LOCAL="$(git rev-parse HEAD)"
+out="$(bash .claude/skills/push/push.sh run --message x 2>&1)"; rc=$?
+git merge-base --is-ancestor "$LOCAL" HEAD && ok "push.sh keeps an unpushed trunk commit on the new branch" || bad "push.sh keeps the local commit" "$out"
+git checkout -q main; git reset -q --hard origin/main
 
 echo
 echo "$pass passed, $fail failed"

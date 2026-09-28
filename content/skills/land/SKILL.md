@@ -23,12 +23,13 @@ the latest trunk.** Every landing fetches first, cuts from
 
 `land.py` decides, and nothing else does. Project config
 (`.claude/landing.json`) can make docs wait for a person
-(`"docs": "pr"`); it can never widen the class.
+(`"docs": "pr"`, or per skill): the PR opens and stops, and
+`land.sh merge` refuses it too. It can never widen the class.
 
 | Class | Paths | How it lands |
 |---|---|---|
-| **docs** | `docs/{audits,decisions,postmortems,retros,notes,handoff,blast-radius,scope,exports,regrets,mvp,wrangle}/**/*.md`, `docs/glossary.md`, `tasks/**/*.md`, `tasks/history.tsv` | `land.sh docs`: merges itself after CI |
-| **code** | everything else, and always: any `CLAUDE.md` / `AGENTS.md`, anything CLAUDE.md `@`-imports (e.g. `docs/notes/INDEX.md`), `.claude/**`, `.github/**`, `tasks/tasks.config.yml`, `tasks/proto/**`, `docs/proto/**`, symlinks | `land.sh pr`: a PR the skill never merges |
+| **docs** | `docs/{audits,decisions,postmortems,retros,notes,handoff,blast-radius,scope,exports,regrets,mvp,wrangle,refinement}/**/*.md`, `docs/glossary.md`, `tasks/**/*.md`, `tasks/history.tsv` | `land.sh docs`: merges itself after CI |
+| **code** | everything else, and always: any `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md`, anything they `@`-import (anywhere in their prose; e.g. `docs/notes/INDEX.md`, `.claude/welcome.md`), a `.claude/` or `.github/` folder at any depth, `tasks/tasks.config.yml`, `tasks/proto/**`, `docs/proto/**`, symlinks, executable files | `land.sh pr`: a PR the skill never merges |
 
 `bash .claude/skills/land/land.sh classify <path>...` shows the class and
 the reason for any path.
@@ -37,10 +38,10 @@ the reason for any path.
 
 ```text
 bash .claude/skills/land/land.sh docs --skill <name> --title "<what>" [--summary "<why>"] [--tasks "TASK-NNN ..."] -- <file>...
-bash .claude/skills/land/land.sh pr   --skill <name> --title "<what>" [--tasks TASK-NNN] [--draft] [--summary "<why>"] [--verified "<commands + results>"] -- <file>...
+bash .claude/skills/land/land.sh pr   --skill <name> --title "<what>" [--tasks TASK-NNN] [--draft] [--switch] [--summary "<why>"] [--verified "<commands + results>"] -- <file>...
 bash .claude/skills/land/land.sh auto --skill <name> --title "<what>" [...] -- <file>...
 bash .claude/skills/land/land.sh sync            # latest trunk into this checkout
-bash .claude/skills/land/land.sh merge  --pr <N> --sha <sha> [--checks-json <file>]
+bash .claude/skills/land/land.sh merge  --pr <N> --sha <sha> [--pr-json <file>] [--checks-json <file>]
 bash .claude/skills/land/land.sh settle --pr <N>
 bash .claude/skills/land/land.sh status
 ```
@@ -95,9 +96,11 @@ The hand-off is exact:
    `title=`, `body_file=`. Open the PR with the session's GitHub tooling
    (base the trunk, head the branch, that title and body); add the
    `docs-land` label.
-2. Read the PR's check runs (e.g. `pull_request_read` `get_check_runs`,
-   and `get_status`) into files, then
-   `land.sh merge --pr <N> --sha <head> --checks-json <file> [--checks-json <file>]`.
+2. Read the PR (`pull_request_read` `get`) and its check runs
+   (`get_check_runs`, and `get_status`) into files, then
+   `land.sh merge --pr <N> --sha <head> --pr-json <pr file> --checks-json <file> [--checks-json <file>]`.
+   The PR read is how its base is checked (it must be the trunk); a
+   check result that names another commit (`head_sha`) does not count.
    Exit 6 → not green yet (or the branch was synced: read the checks
    again with the new `head`). Exit 4 with `next=merge` → merge the PR
    with the session's tooling, `merge_method: squash`, and
@@ -107,13 +110,21 @@ The hand-off is exact:
 
 ## What `land.sh pr` does
 
-On the trunk it cuts a branch from the fresh trunk and carries your
-uncommitted changes onto it (`task/<ID>-<slug>` with `--tasks`, else
-`chore/<skill>-<slug>-<utc>`); on a branch it stays. It commits only the
-named files, merges the latest trunk in (a merge, never a rebase or a
-force), pushes, and opens a PR (`--draft` for autonomous skills) with a
-merge manifest saying `merge: manual`. An open PR for the branch is
-reused. **It never merges.** `/peer-review`, `/auto-merge` or a person
+**On a branch** it commits only the named files there, merges the latest
+trunk in (a merge, never a rebase or a force), pushes, and opens a PR
+(`--draft` for autonomous skills) with a merge manifest saying
+`merge: manual`. An open PR for the branch is reused.
+
+**On the trunk** it builds the PR branch aside and leaves your checkout
+alone: the named files' changes are replayed onto the latest trunk in a
+scratch worktree and pushed to `task/<ID>-<slug>` (with `--tasks`) or
+`chore/<skill>-<slug>` — a stable name, so running it again updates the
+same branch and PR. Your files stay as they are; after the PR merges,
+`land.sh settle --pr <N>` brings the checkout up to date. `--switch`
+instead moves the checkout onto the new branch, carrying your
+uncommitted work, for when you will keep working there.
+
+**It never merges.** `/peer-review`, `/auto-merge` or a person
 does. For task work, `/open-pr` owns the ready PR (§10 body) and marks a
 draft ready.
 
@@ -132,18 +143,36 @@ without touching the checkout.
 `bin/init` runs `land.sh hooks` on every install and `/sync`:
 
 - **git pre-push** (armed again at every session start, so fresh cloud
-  clones have it): refuses a push that would move the trunk on origin
-  (matched by URL, so another remote name is caught) when `CLAUDECODE=1`.
-  People pushing from their own terminal are not constrained here.
-  The first push of the trunk to an empty remote is allowed.
+  clones have it): refuses a push that would move the trunk on origin,
+  on `upstream`, or on any remote that names the same repository, when
+  `CLAUDECODE=1`. "The trunk" is never taken from local state alone:
+  the remote's own default branch, `main` and `master` are always
+  protected, so re-pointing `origin/HEAD` changes nothing. People
+  pushing from their own terminal are not constrained here; the first
+  push of the trunk to an empty remote is allowed; a push to a
+  different repository (a deploy remote) is untouched. A hook another
+  tool already had is kept and still runs, with the same input. If
+  land.sh has gone missing, a Claude push is refused, not waved through.
+  **Not armed** where `core.hooksPath` points into the repository
+  (husky) or at a shared folder outside it: `status` and every session
+  start say so, and the Bash layer and a server ruleset carry the load.
 - **PreToolUse Bash**: refuses what would switch that off or go around
-  it — `--no-verify`, `commit -n`, `core.hooksPath`,
-  `GIT_GUARD_ALLOW_MAIN`, writes under `.git/hooks`, `git push
-  --all/--mirror`, repository writes through `gh api` — and the plain
-  trunk pushes (`git push origin main`, a bare push on the trunk).
-  Tags, branch pushes and PR merges pass.
+  it — `--no-verify` (and its abbreviations), `commit -n`,
+  `core.hooksPath`, `--config-env` / `GIT_CONFIG_*`, `GIT_GUARD_ALLOW_MAIN`,
+  clearing `CLAUDECODE`, writes to the hooks or to land.sh's state,
+  `git remote set-head` and other re-pointing of `origin/HEAD`,
+  `git send-pack`, `git push --all/--mirror`, and repository writes
+  through `gh api` (merges, refs, contents, GraphQL branch mutations) —
+  plus the trunk pushes it can read (`git push origin main`,
+  `HEAD:heads/main`, a bare push on the trunk), also inside `bash -c`,
+  `timeout …` and other wrappers. Heredoc text is data and is not
+  parsed. Tags, branch pushes and PR merges pass.
+- **PreToolUse Edit/Write**: nothing is written inside `.git/`.
 - **PreToolUse GitHub tools**: `push_files`, `create_or_update_file`
   and `delete_file` on the trunk (or with no branch) are refused.
+
+Hook commands run through `$CLAUDE_PROJECT_DIR`, so a `cd` does not
+switch them off.
 
 **The honest ceiling.** A hook sees what a tool call says, not what it
 means; a determined enough command can get around it. The server is the

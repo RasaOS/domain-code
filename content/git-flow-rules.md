@@ -110,9 +110,11 @@ SKILL.md cites this rule.
   `gh pr merge --squash --delete-branch --match-head-commit <sha>`
   — never `--admin`. `land.py` alone decides the class; there is
   no bypass, and `.claude/landing.json` can only narrow it. Code
-  class — everything else, and always CLAUDE.md and what it
-  `@`-imports, `.claude/**`, `.github/**`, `tasks/tasks.config.yml`
-  — goes by `land.sh pr`, a PR the skill never merges. Failing CI
+  class — everything else, and always CLAUDE.md / AGENTS.md and
+  what CLAUDE.md `@`-imports, a `.claude/` or `.github/` folder at
+  any depth, `tasks/proto/**`, `docs/proto/**`, symlinks and
+  executable files, `tasks/tasks.config.yml` — goes by `land.sh
+  pr`, a PR the skill never merges. Failing CI
   or a branch-protection refusal leaves the PR open. See
   `land/SKILL.md` and `autonomy-rules.md` "Exception 2".
 
@@ -277,9 +279,9 @@ machine-local and does not travel.
 Claude's per-machine memory does not travel between machines.
 Anything the next session needs — wherever it runs — must live in
 a git-tracked file: `/handoff` (its `docs/handoff/` doc lands by
-itself; `.claude/welcome.md` stays local),
-`/inbox @self`, or `CLAUDE.md`. Never rely on memory to carry
-context across machines.
+itself; `.claude/welcome.md` goes up in a rolling PR),
+`/inbox @self` (a PR), or `CLAUDE.md` (a PR). Never rely on memory
+to carry context across machines.
 
 ### Automate it — `/git-guard`
 

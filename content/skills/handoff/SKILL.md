@@ -26,9 +26,9 @@ proportional to its honesty about the messy parts.
 
   No source-code edits. The dated handoff doc is docs class and
   lands by itself (Step 5). `.claude/welcome.md` is code class
-  (CLAUDE.md `@`-imports it, so every session loads it) and is
-  never landed: it stays a local pointer, and nothing is lost
-  because the dated doc holds the content.
+  (CLAUDE.md `@`-imports it, so every session loads it), so it
+  goes up in a PR this skill never merges: one rolling PR that
+  every handoff updates (Step 5).
 - **Read multiple sources, synthesize one doc.** A handoff is
   not a doc dump — it's a curated synthesis. Pull from git
   state, tasks/, docs/decisions/, docs/postmortems/, and
@@ -136,8 +136,8 @@ This is what future Claude sessions read on start.
 ```
 
 If `.claude/welcome.md` doesn't exist yet (project pre-dates the
-welcome.md template), create it. It stays in this checkout only;
-Step 5 lands the dated doc, never this file.
+welcome.md template), create it. Step 5 proposes it by PR; it
+never lands by itself.
 
 ### Step 5 — Land the handoff doc
 
@@ -149,16 +149,30 @@ bash .claude/skills/land/land.sh docs --skill handoff --title "Handoff <YYYY-MM-
 ```
 
 Name only the dated doc this run wrote (the `<date>-2.md` file if
-date-suffixed). **Never pass `.claude/welcome.md`**, to `land.sh
-docs` or `land.sh pr`: CLAUDE.md `@`-imports it, so every session
-loads it, which makes it code class, and it is rewritten on every
-handoff. It stays a local pointer; nothing is lost, because the
-dated doc holds the content. Exit 4 (no `gh`): finish with the
-session's GitHub tooling per `land/SKILL.md` "Without `gh`".
-Exits 5/6/7: report, never retry blindly. As a step of
-`/mission`, `/self-heal` or `/self-improve`, skip this: the
-orchestrator's branch and PR carry the handoff doc
-(`.claude/welcome.md` still stays local).
+date-suffixed). **Never pass `.claude/welcome.md` to `land.sh
+docs`**: CLAUDE.md `@`-imports it, so every session loads it as
+instructions, which makes it code class. It goes by PR instead,
+with this exact title so every handoff updates the same PR:
+
+```bash
+bash .claude/skills/land/land.sh pr --skill handoff --title "welcome pointer" -- .claude/welcome.md
+```
+
+From the trunk this builds the stable branch
+`chore/handoff-welcome-pointer` from the latest trunk without
+touching the checkout, and reuses its open PR; on a feature
+branch the file is committed there and rides that branch's PR.
+The skill never merges it. Until a reviewer does, this checkout
+keeps the edited file. Its content is on the PR branch, so
+`git checkout -- .claude/welcome.md` loses nothing when a clean
+tree is needed (`./build/build`, `/release`); after the merge,
+`land.sh settle --pr <N>` brings the merged version in.
+
+Exit 4 (no `gh`): finish with the session's GitHub tooling per
+`land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never retry
+blindly. As a step of `/mission`, `/self-heal` or
+`/self-improve`, skip this step: the orchestrator's branch and PR
+carry both files.
 
 ### Step 6 — Closing summary
 
@@ -168,8 +182,9 @@ orchestrator's branch and PR carry the handoff doc
 - **Deep snapshot.** `docs/handoff/<YYYY-MM-DD>.md` — <line count> lines.
   Landed: PR #N merged *(or `Not landed: exit N — <message>`)*
 - **Welcome.** `.claude/welcome.md` — rewritten (~<line count> lines).
-  Local pointer, never landed. Future sessions in this checkout
-  read this on start.
+  PR #N open (updated), never merged by this skill
+  *(or `Not proposed: exit N — <message>`)*. Future sessions
+  read it on start once it merges.
 
 **The three things most worth knowing:**
 1. <terse>
@@ -371,9 +386,9 @@ handoff is dated and additive.*
   they put it in a secret-manager note or password vault.
 - **Don't commit or push the handoff doc yourself.** `land.sh
   docs` lands it (Step 5).
-- **Don't land `.claude/welcome.md`.** It is code class (CLAUDE.md
-  `@`-imports it) and rewritten on every handoff; it stays a
-  local pointer, and the dated doc holds the content.
+- **Don't pass `.claude/welcome.md` to `land.sh docs`, and don't
+  merge its PR.** It is code class (CLAUDE.md `@`-imports it):
+  `land.sh pr` with the title `welcome pointer` (Step 5).
 - **Don't fabricate state.** If `tasks/active/` is empty,
   say so.
 - **Don't spam the project's CLAUDE.md.** This skill writes one
@@ -422,7 +437,8 @@ Two artifacts:
    reported.
 2. A rewritten `.claude/welcome.md` (~15 lines) that future
    Claude sessions auto-load on start via the CLAUDE.md
-   `@`-import. Local only, never landed.
+   `@`-import, in the rolling `welcome pointer` PR this skill
+   never merges.
 
 The user knows the next session in this checkout can read
 `.claude/welcome.md` for the quick orient, and the next person
