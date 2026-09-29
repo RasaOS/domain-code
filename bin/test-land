@@ -1093,6 +1093,67 @@ has "held for a person" "$out" && has "chore/" "$out" && bad "session does not c
 NG2="$T/nogit2"; mkdir -p "$NG2"; out="$("$ELEMENT/bin/init" "$NG2" </dev/null 2>&1)"
 has "could not install the trunk guard" "$out" && bad "bin/init outside git reports a deferral, not a failure" "$out" || ok "bin/init outside git reports a deferral, not a failure"
 
+echo "guard table — what must be refused and what must pass"
+out="$(python3 -B - "$P" <<'PYTABLE'
+import json, subprocess, sys
+cwd = sys.argv[1]
+DENY = [
+ "git push origin main", "git push origin HEAD:main", "git push origin +HEAD:main", "git push -f origin main",
+ "git push --force-with-lease origin main", "git push origin HEAD:refs/heads/main", "git push origin heads/main",
+ "git push origin feat:main", "git push origin :main", "git push --delete origin main", "git push -d origin main",
+ "git push origin master", "git push origin @:main", "git push origin main:main", "git push", "git push -u origin HEAD",
+ "git push --all origin", "git push --mirror origin", "git push --branches origin",
+ "git -C . push origin main", "git --git-dir=.git push origin main", "cd . && git push origin main",
+ "bash -c 'git push origin main'", "sh -c \"git push origin main\"", "eval git push origin main", "eval 'git push origin main'",
+ "timeout 30 git push origin main", "env GIT_TRACE=1 git push origin main", "nohup git push origin main", "command git push origin main",
+ "git commit --no-verify -m x", "git commit --no-veri -m x", "git commit -nm x", "git commit -a -n -m x", "git push --no-verify origin feat",
+ "git merge --no-verify feat", "git -c core.hooksPath=/dev/null push origin feat", "git config core.hooksPath /tmp/x",
+ "git config --local core.hooksPath x", "git --config-env=core.hooksPath=X push origin feat",
+ "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git push origin feat",
+ "GIT_GUARD_ALLOW_MAIN=1 git push origin main", "CLAUDECODE= git push origin feat", "unset CLAUDECODE; git push origin feat",
+ "env -u CLAUDECODE git push origin feat", "env -i git push origin feat",
+ "git -c alias.p='push --no-verify' p origin feat", "git -c alias.p=push p origin main", "git config alias.pp 'push --no-verify'",
+ "git config --global alias.cn 'commit -n'",
+ "git remote set-head origin feat", "git remote set-head origin -a", "git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/feat",
+ "git update-ref refs/remotes/origin/HEAD feat",
+ "git send-pack ../r HEAD:refs/heads/main", "git http-push x main",
+ "rm .git/hooks/pre-push", "echo x > .git/hooks/pre-push", "chmod -x .git/hooks/pre-push", "mv .git/hooks/pre-push /tmp/",
+ "cd .git && rm hooks/pre-push", "rm -rf .git/land", "sed -i s/x/y/ .git/hooks/pre-push",
+ "gh api -X PUT repos/o/r/pulls/5/merge", "gh api --method=PUT repos/o/r/pulls/5/merge", "gh api repos/o/r/merges -f base=main -f head=feat",
+ "gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc", "gh api repos/o/r/contents/x.md -X PUT -f message=m -f content=Y",
+ "gh api graphql -f query='mutation { mergeBranch(input:{}) { clientMutationId } }'", "GH_TOKEN=x gh api -X PUT repos/o/r/pulls/5/merge",
+ "git checkout main && git push", "git switch main; git push",
+]
+ALLOW = [
+ "git push origin feat", "git push -u origin feat", "git push origin HEAD:refs/heads/feat", "git push origin land/x", "git push origin v1.0.0",
+ "git push --tags origin", "git push origin --tags", "git push -n origin feat", "git push --force-with-lease origin feat",
+ "git checkout -b feat-new && git push -u origin HEAD", "git switch -c fix/x && git push", "git fetch origin", "git pull --ff-only origin main",
+ "git log --oneline", "git diff main...feat", "git show HEAD", "git status", "git commit -m 'use -n flag'", "git commit -m 'no --no-verify here'",
+ "echo 'git push origin main'", "printf '%s' 'git push origin main'", "ls .git/hooks", "cat .git/hooks/pre-push",
+ "git config --get core.hooksPath", "git config --unset core.hooksPath", "git config --get alias.pp", "git -c alias.x=log x -3",
+ "git commit -F - <<'EOF'\nDon't run git push origin main or --no-verify\nEOF",
+ "gh pr create --base main --head feat --title t --body b", "gh pr view 5", "gh pr merge 5 --squash --match-head-commit abc",
+ "gh api repos/o/r/pulls/5", "gh api repos/o/r/rules/branches/main",
+ "bash .claude/skills/land/land.sh docs --skill a --title t -- x.md", "bash .claude/skills/land/land.sh pr --rolling --skill s --title t -- x",
+ "bash .claude/skills/land/land.sh hooks", "bash .claude/skills/push/push.sh run --message x",
+ "grep -r main .", "git branch -D feat", "git tag -a v1 -m v1", "git stash", "git rebase origin/main", "git merge origin/main",
+ "git worktree add ../trunk-land origin/main",
+]
+def run(c):
+    p = json.dumps({"tool_input": {"command": c}, "cwd": cwd})
+    r = subprocess.run(["bash", ".claude/skills/land/land.sh", "guard-bash"], input=p, capture_output=True, text=True, cwd=cwd)
+    return '"deny"' in r.stdout
+bad = []
+for c in DENY:
+    if not run(c): bad.append(("should DENY", c))
+for c in ALLOW:
+    if run(c): bad.append(("should ALLOW", c))
+print("cases=%d misclassified=%d" % (len(DENY) + len(ALLOW), len(bad)))
+for b in bad: print("  %s: %r" % b)
+PYTABLE
+)"
+expect "the Bash guard classifies all of the table" 0 0 "misclassified=0" "$out"
+
 echo
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
