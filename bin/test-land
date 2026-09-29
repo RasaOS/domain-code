@@ -1109,7 +1109,7 @@ git checkout -q -f main; git branch -q -D task/TASK-902-own-welcome; clean
 
 echo "round four — appends, stale bases, failed syncs, planning worktrees"
 clean
-out="$(python3 -B - "$P/.claude/skills/land" <<'PY' 2>&1
+cat > "$T/round4-1.py" <<'PY'
 import os, sys; sys.path.insert(0, sys.argv[1]); import land
 repo = land.Repo(os.getcwd()); os.makedirs(repo.state, exist_ok=True)
 m = lambda b, o, t: land.merge_bytes(repo, b, o, t, union=True)
@@ -1134,9 +1134,9 @@ cases.append(("the same under a user's diff3 conflict style", m(b"a\n", b"a\nn10
 bad = [name for name, good in cases if not good]
 print("union_rules=%s %s" % (not bad, bad))
 PY
-)"
+out="$(python3 -B "$T/round4-1.py" "$P/.claude/skills/land" 2>&1)"
 expect "a union keeps both sides' appends and never doubles or drops a line" 0 0 "union_rules=True" "$out"
-out="$(python3 -B - "$P/.claude/skills/land" <<'PY' 2>&1
+cat > "$T/round4-2.py" <<'PY'
 import base64, os, subprocess, sys; sys.path.insert(0, sys.argv[1]); import land
 repo = land.Repo(os.getcwd())
 data = ("a start copy gc pruned %s\n" % os.urandom(8).hex()).encode()
@@ -1152,7 +1152,7 @@ cases += [("HEAD moved under it: dropped", land.record_base(repo, entry, "f" * 4
 bad = [name for name, good in cases if not good]
 print("record_rules=%s %s" % (not bad, bad))
 PY
-)"
+out="$(python3 -B "$T/round4-2.py" "$P/.claude/skills/land" 2>&1)"
 expect "a saved start copy is used only while it describes this checkout, and survives gc" 0 0 "record_rules=True" "$out"
 mkdir -p .claude/inbox
 PATH="$GHPATH" bash "$L" pending --skill inbox --title "msgs for fay" -- .claude/inbox/fay.md >/dev/null 2>&1
@@ -1249,7 +1249,7 @@ expect "a failed sync (untracked file in the way)" 5 "$rc" "" "$out"
 rm -f clash2.txt; git reset -q; bash "$L" sync >/dev/null 2>&1; clean
 
 clean
-out="$(python3 -B - "$P/.claude/skills/land" "$P" <<'PY' 2>&1
+cat > "$T/round4-3.py" <<'PY'
 import os, sys, time, queue, multiprocessing
 sys.path.insert(0, sys.argv[1]); import land
 repo = land.Repo(sys.argv[2])
@@ -1286,7 +1286,7 @@ for trial in range(3):
     if bad: print("crash=%s" % bad)
 print("overlaps=%d" % over)
 PY
-)"
+out="$(python3 -B "$T/round4-3.py" "$P/.claude/skills/land" "$P" 2>&1)"
 expect "a stale lock taken over by 8 waiters that pause after judging it stale: never two holders, no crash" 0 0 "^overlaps=0$" "$out"
 has "crash=" "$out" && bad "  no crash" "$out" || true
 
