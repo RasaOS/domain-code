@@ -890,7 +890,7 @@ expect "  and its push updates the same PR" 0 "$rc" "already open" "$out"
 S3="$T/third"; git clone -q "$R" "$S3" 2>/dev/null; (cd "$S3" && git config user.email t3@x && git config user.name t3)
 mkdir -p "$S3/.claude/inbox"; printf '# Inbox\n\n## #3 from a third who skipped pending\nyo\n' > "$S3/.claude/inbox/michael.md"
 out="$(cd "$S3" && PATH="$GHPATH" bash .claude/skills/land/land.sh pr --rolling --skill inbox --title "messages for michael" -- .claude/inbox/michael.md 2>&1)"; rc=$?
-expect "  a session that skipped pending is merged line by line, not an overwrite" 0 "$rc" "merged=.claude/inbox/michael.md" "$out"
+expect "  a session that skipped pending is merged line by line, not an overwrite" 0 "$rc" "combined=.claude/inbox/michael.md" "$out"
 body="$(git --git-dir="$R" show "$IB:.claude/inbox/michael.md" 2>/dev/null)"
 has "#1 from tester" "$body" && has "#2 from other" "$body" && has "#3 from a third" "$body" && ok "  all three messages are on the PR" || bad "  all three messages" "$body"
 INN="$(grep -l "^$IB\$" "$T"/gh/pr-*.head | head -1 | sed 's/.*pr-\([0-9]*\)\.head/\1/')"
@@ -966,6 +966,132 @@ out="$(CLAUDECODE=1 bash .claude/skills/push/push.sh run --message ta --branch c
 git merge-base --is-ancestor "$TA" HEAD && [ "$(git rev-parse main)" = "$(git rev-parse origin/main)" ] \
   && ok "push.sh carries a local trunk commit and moves main back to origin" || bad "push.sh carries and moves main back" "$out"
 git checkout -q -f main; git reset -q --hard origin/main
+
+echo "aside PRs — one rule: the checkout's change, merged into the branch's copy"
+clean
+printf 'l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\n' > src/g.py; git add src/g.py; git commit -qm "g base"; git push -q origin main 2>/dev/null
+sed 's/^l2$/l2 mine/' src/g.py > "$T/g"; cp "$T/g" src/g.py
+PATH="$GHPATH" bash "$L" pr --skill auto-develop --title "g work" -- src/g.py >/dev/null 2>&1
+RV="$T/reviewer"; rm -rf "$RV"; git clone -q "$R" "$RV" 2>/dev/null
+( cd "$RV" && git config user.email rv@x && git config user.name rv && git checkout -q chore/auto-develop-g-work \
+  && sed 's/^l7$/l7 reviewer fix/' src/g.py > g.tmp && mv g.tmp src/g.py && git commit -qam "reviewer fix" && git push -q origin chore/auto-develop-g-work 2>/dev/null )
+sed 's/^l4$/l4 v2/' src/g.py > "$T/g"; cp "$T/g" src/g.py
+out="$(PATH="$GHPATH" bash "$L" pr --skill auto-develop --title "g work" -- src/g.py 2>&1)"; rc=$?
+expect "a reviewer's commit on the PR branch is combined with the next run" 0 "$rc" "combined=src/g.py" "$out"
+sed 's/^l5$/l5 v3/' src/g.py > "$T/g"; cp "$T/g" src/g.py
+out="$(PATH="$GHPATH" bash "$L" pr --skill auto-develop --title "g work" -- src/g.py 2>&1)"; rc=$?
+body="$(git --git-dir="$R" show chore/auto-develop-g-work:src/g.py 2>/dev/null)"
+has "l7 reviewer fix" "$body" && has "l5 v3" "$body" && has "l2 mine" "$body" && ok "  and the run after that still keeps it" || bad "  the reviewer's fix survives the next run" "$(printf '%s' "$body" | tr '\n' '|')"
+clean
+printf 'x = 2\n' > src/mod.py; git add src/mod.py; git commit -qm "local change to mod"
+out="$(PATH="$GHPATH" bash "$L" pr --skill auto-develop --title "mod tool" -- src/mod.py 2>&1)"; rc=$?
+expect "pr from a local trunk ahead of origin proposes the committed change" 0 "$rc" "pushed=chore/auto-develop-mod-tool" "$out"
+git --git-dir="$R" show chore/auto-develop-mod-tool:src/mod.py 2>/dev/null | grep -q "x = 2" && ok "  the branch carries it" || bad "  the branch carries it" "missing"
+git reset -q --hard origin/main
+out="$(PATH="$GHPATH" bash "$L" pr --skill auto-develop --title direct --branch main -- src/mod.py 2>&1)"; rc=$?
+expect "pr --branch main is refused" 3 "$rc" "names the trunk" "$out"
+out="$(PATH="$GHPATH" bash "$L" settle --branch main 2>&1)"; rc=$?
+expect "settle --branch main is refused" 3 "$rc" "names the trunk" "$out"
+
+echo "rolling PRs — idempotent, per worktree, no gh, the trunk appending too"
+clean
+PATH="$GHPATH" bash "$L" pending --skill handoff --title "welcome pointer" -- .claude/welcome.md >/dev/null 2>&1
+printf '# Welcome back\n\nidempotent check\n' > .claude/welcome.md
+PATH="$GHPATH" bash "$L" pr --rolling --skill handoff --title "welcome pointer" -- .claude/welcome.md >/dev/null 2>&1
+out="$(PATH="$GHPATH" bash "$L" pr --rolling --skill handoff --title "welcome pointer" -- .claude/welcome.md 2>&1)"; rc=$?
+git --git-dir="$R" show chore/handoff-welcome-pointer:.claude/welcome.md 2>/dev/null | grep -q "idempotent check" \
+  && ok "pr --rolling again with no edit keeps the PR's content" || bad "pr --rolling again keeps the content" "$out"
+clean
+PATH="$GHPATH" bash "$L" pending --skill inbox --title "msgs for eve" -- .claude/inbox/eve.md >/dev/null 2>&1
+mkdir -p .claude/inbox; printf '# Inbox\n\n## #1 from A\n' > .claude/inbox/eve.md
+PATH="$GHPATH" bash "$L" pr --rolling --skill inbox --title "msgs for eve" -- .claude/inbox/eve.md >/dev/null 2>&1
+PATH="$GHPATH" bash "$L" pending --skill inbox --title "msgs for eve" -- .claude/inbox/eve.md >/dev/null 2>&1
+WB="$T/wtB"; rm -rf "$WB"; git worktree add -q --detach "$WB" origin/main 2>/dev/null
+( cd "$WB" && PATH="$GHPATH" bash .claude/skills/land/land.sh pending --skill inbox --title "msgs for eve" -- .claude/inbox/eve.md >/dev/null 2>&1 \
+  && printf '\n## #2 from B\n' >> .claude/inbox/eve.md && PATH="$GHPATH" bash .claude/skills/land/land.sh pr --rolling --skill inbox --title "msgs for eve" -- .claude/inbox/eve.md >/dev/null 2>&1 )
+printf '\n## #3 from A\n' >> .claude/inbox/eve.md
+out="$(PATH="$GHPATH" bash "$L" pr --rolling --skill inbox --title "msgs for eve" -- .claude/inbox/eve.md 2>&1)"; rc=$?
+body="$(git --git-dir="$R" show chore/inbox-msgs-for-eve:.claude/inbox/eve.md 2>/dev/null)"
+has "#2 from B" "$body" && has "#3 from A" "$body" && [ "$(printf '%s\n' "$body" | grep -c '#1 from A')" = 1 ] \
+  && ok "two worktrees' rolling edits are both kept, nothing doubled" || bad "two worktrees both kept" "$(printf '%s' "$body" | tr '\n' '|') :: $out"
+git worktree remove --force "$WB" 2>/dev/null
+out="$(PATH="$GHPATH" bash "$L" show --skill inbox --title "msgs for eve" -- .claude/inbox/eve.md 2>&1)"; rc=$?
+expect "show prints the PR's copy" 0 "$rc" "#2 from B" "$out"
+[ -z "$(git status --porcelain -- .claude/inbox)" ] && ok "  and leaves the checkout alone" || bad "  show leaves the checkout alone" "$(git status --porcelain)"
+( cd "$O" && git checkout -q main && git pull -q --ff-only origin main 2>/dev/null && mkdir -p .claude/inbox \
+  && printf '# Inbox\n\n## #9 merged another way\n' > .claude/inbox/eve.md && git add .claude/inbox/eve.md && git commit -qm "eve another way" && git push -q origin main 2>/dev/null )
+out="$(PATH="$GHPATH" bash "$L" pending --skill inbox --title "msgs for eve" -- .claude/inbox/eve.md 2>&1)"; rc=$?
+expect "the trunk also appending to the inbox does not wedge its rolling PR" 0 "$rc" "source=pr" "$out"
+git checkout -q -- . 2>/dev/null; clean
+EVN="$(grep -l '^chore/inbox-msgs-for-eve$' "$T"/gh/pr-*.head | head -1 | sed 's/.*pr-\([0-9]*\)\.head/\1/')"
+echo closed > "$T/gh/pr-$EVN.state"
+out="$(PATH="$NOGH" bash "$L" pending --skill inbox --title "msgs for eve" -- .claude/inbox/eve.md 2>&1)"; rc=$?
+expect "without gh, a closed PR's state is unknown and said so" 0 "$rc" "pr_state=unknown" "$out"
+git checkout -q -- . 2>/dev/null; clean
+out="$(PATH="$NOGH" bash "$L" pending --skill inbox --title "msgs for eve" --pr-state closed -- .claude/inbox/eve.md 2>&1)"; rc=$?
+expect "  --pr-state closed starts from the trunk" 0 "$rc" "source=trunk" "$out"
+git checkout -q -- . 2>/dev/null; clean
+
+echo "sync — a failed sync leaves the checkout as it was; rescue once"
+clean
+printf '# not settled\n' > docs/audits/ns.md
+out="$(PATH="$NOGH" bash "$L" docs --skill audit --title ns -- docs/audits/ns.md 2>&1)"
+NB="$(printf '%s\n' "$out" | sed -n 's/^branch=//p')"; NN="$(open_pr "$NB")"; bash "$T/squash.sh" "$NN" >/dev/null 2>&1
+( cd "$O" && git pull -q --ff-only origin main 2>/dev/null && printf 'theirs\n' > clash.txt && git add clash.txt && git commit -qm clash && git push -q origin main 2>/dev/null )
+printf 'mine\n' > clash.txt
+out="$(bash "$L" sync 2>&1)"; rc=$?
+expect "a sync that cannot fast-forward fails" 5 "$rc" "could not fast-forward" "$out"
+[ -f docs/audits/ns.md ] && ok "  and puts back the landed doc it had aligned" || bad "  the landed doc is back" "gone"
+rm -f clash.txt; bash "$L" sync >/dev/null 2>&1; clean
+printf 'v1\n' > loc.txt; git add loc.txt; git commit -qm "local loc"; printf 'v2 uncommitted\n' > loc.txt
+advance
+out="$(bash "$L" sync 2>&1)"; rc=$?
+expect "a rescue whose reset cannot proceed moves nothing" 5 "$rc" "Nothing moved" "$out"
+[ -z "$(git for-each-ref refs/heads/rescue/ --points-at HEAD)" ] && ! git --git-dir="$R" for-each-ref refs/heads/rescue/ --format='%(objectname)' | grep -q "$(git rev-parse HEAD)" \
+  && ok "  and leaves no rescue branch behind" || bad "  no rescue branch left" "$(git for-each-ref refs/heads/rescue/)"
+grep -q 'v2 uncommitted' loc.txt && ok "  the uncommitted edit is untouched" || bad "  the uncommitted edit" "$(cat loc.txt)"
+git checkout -q -- loc.txt; git reset -q --hard origin/main; rm -f loc.txt
+
+echo "ledger — planning moves land from a trunk checkout"
+clean
+$TASK new --type change --phase P1 --by tester "Branch work" >/dev/null 2>&1
+BWF="$(ls tasks/backlog/*branch-work*.md | head -1)"
+PATH="$GHPATH" bash "$L" docs --skill auto-task --title "file branch work" -- "$BWF" tasks/history.tsv tasks/ROADMAP.md >/dev/null 2>&1
+clean
+BWID="$(basename "$BWF" | cut -d- -f1-2)"
+git checkout -q -b "task/$BWID-work"
+$TASK start "$BWID" --by tester >/dev/null 2>&1; git add -A tasks; git commit -qm "start" >/dev/null 2>&1
+$TASK new --type change --phase P1 --by tester "Reviewer idea" >/dev/null 2>&1
+RIF="$(ls tasks/backlog/*reviewer-idea*.md | head -1)"
+out="$(PATH="$GHPATH" bash "$L" docs --skill task --title "file reviewer idea" -- "$RIF" tasks/history.tsv tasks/ROADMAP.md 2>&1)"; rc=$?
+expect "a ledger landing from a task branch whose ledger carries its own transitions is refused" 3 "$rc" "ride that branch's PR" "$out"
+git checkout -q -f main; git branch -q -D "task/$BWID-work"; clean
+
+clean
+git checkout -q -b wip/ledger-1
+$TASK new --type change --phase P1 --by tester "Wip filed" >/dev/null 2>&1
+WFF="$(ls tasks/backlog/*wip-filed*.md | head -1)"; git add -A tasks; git commit -qm "wip: autosave" >/dev/null 2>&1
+( cd "$O" && git checkout -q main && git pull -q --ff-only origin main 2>/dev/null \
+  && TASK_ID=TASK-990 && printf '%s\t%s\t-\tbacklog\tother\ta row the trunk adds meanwhile\n' "$(date +%Y-%m-%d)" "$TASK_ID" >> tasks/history.tsv \
+  && git commit -qam "the trunk's ledger moves" && git push -q origin main 2>/dev/null ) >/dev/null 2>&1
+out="$(PATH="$GHPATH" bash "$L" docs --skill auto-task --title "wip filed" -- "$WFF" tasks/history.tsv tasks/ROADMAP.md 2>&1)"; rc=$?
+expect "a ledger landing from a wip/ branch lands" 0 "$rc" "merged=#" "$out"
+has "not on main yet" "$out" && bad "  and settle sees it on the trunk (measured from the fork point)" "$out" || ok "  and settle sees it on the trunk (measured from the fork point)"
+git checkout -q -f main; git branch -q -D wip/ledger-1
+( cd "$O" && git pull -q --ff-only origin main 2>/dev/null && grep -v 'TASK-990' tasks/history.tsv > "$T/h2.tsv" \
+  && cp "$T/h2.tsv" tasks/history.tsv && git commit -qam "drop the stand-in row" && git push -q origin main 2>/dev/null ) >/dev/null 2>&1
+clean
+
+echo "gates, session, init"
+clean
+printf -- '---\nmode: task\n---\n' > .claude/mode.md; printf 'stats\n' > .claude/mode-stats.md
+out="$(ENV_CLASS=prod bash build/gates/git-clean.sh 2>&1)"; rc=$?
+expect "the clean-tree gate ignores the checkout's own mode files" 0 "$rc" "" "$out"
+rm -f .claude/mode.md .claude/mode-stats.md
+out="$(bash "$L" session 2>&1)"
+has "held for a person" "$out" && has "chore/" "$out" && bad "session does not call code PRs held" "$out" || ok "session does not call code PRs held for a person"
+NG2="$T/nogit2"; mkdir -p "$NG2"; out="$("$ELEMENT/bin/init" "$NG2" </dev/null 2>&1)"
+has "could not install the trunk guard" "$out" && bad "bin/init outside git reports a deferral, not a failure" "$out" || ok "bin/init outside git reports a deferral, not a failure"
 
 echo
 echo "$pass passed, $fail failed"

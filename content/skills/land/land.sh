@@ -26,9 +26,13 @@
 #                                       the checkout onto it instead). --rolling:
 #                                       aside from any branch, then the checkout
 #                                       goes back to HEAD for those files
-#   land.sh pending --skill S --title T -- <path>...
+#   land.sh pending --skill S --title T [--pr-state S] -- <path>...
 #                                       before editing files a rolling PR carries:
 #                                       bring the PR's copy into the checkout
+#   land.sh show    --skill S --title T [--pr-state S] -- <path>...
+#                                       print that copy; the checkout is untouched
+#                                       (--pr-state open|closed|merged: the PR's
+#                                       state, read with other tooling, no gh)
 #   land.sh auto --skill S --title T [...] -- <path>...
 #                                       split by class: docs land, code → pr
 #   land.sh merge  --pr N --sha SHA [--pr-json FILE] [--checks-json FILE]... [--wait SECS]
@@ -63,7 +67,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 LAND_PY="$here/land.py"
 
-usage() { sed -n '2,57p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,61p' "$0" | sed 's/^# \{0,1\}//'; }
 
 deny_json() {
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$1"
@@ -128,7 +132,7 @@ case "$verb" in
       root="$(rasa_root 2>/dev/null || true)"
     fi
     LAND_ROOT="${root:-$PWD}" exec python3 "$LAND_PY" classify "$@" ;;
-  docs|pr|auto|pending|merge|verify|settle|sync|fresh|sync-pr|status|hooks|session) ;;
+  docs|pr|auto|pending|show|merge|verify|settle|sync|fresh|sync-pr|status|hooks|session) ;;
   *) echo "error: unknown verb: $verb" >&2; usage >&2; exit 2 ;;
 esac
 

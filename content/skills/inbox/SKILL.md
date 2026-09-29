@@ -83,7 +83,16 @@ Parse the user's invocation:
 
 For every file under `.claude/inbox/` where I'm the recipient
 (filename = my handle, or the file's "addressed to" frontmatter
-matches me):
+matches me). Messages still waiting in that inbox's rolling PR (self-
+notes included) are not in the checkout until a reviewer merges it;
+read them without touching the checkout:
+
+```bash
+bash .claude/skills/land/land.sh show --skill inbox --title "messages for <my-handle>" -- .claude/inbox/<my-handle>.md
+```
+
+It prints the PR's copy when one is open (else the trunk's). Show its
+messages too, marked *(waiting to merge)*.
 
 ```markdown
 # 📬 Inbox — @<my-handle>
@@ -125,8 +134,17 @@ Parse `/inbox to <name>: <message body>`:
 - Message body: everything after the colon.
 - Sender: my handle (Step 1).
 - Timestamp: `YYYY-MM-DD HH:MM` local time.
+
+Before drafting, bring in that inbox's rolling PR, if one is open:
+it holds messages other senders wrote that nobody has merged yet, and
+the new message's id must follow theirs.
+
+```bash
+bash .claude/skills/land/land.sh pending --skill inbox --title "messages for <recipient>" -- .claude/inbox/<recipient>.md
+```
+
 - Message ID: 4-digit incrementing per recipient file (next
-  unused number).
+  unused number in the file as `pending` left it).
 
 **Confirm before writing:**
 
@@ -142,17 +160,9 @@ Parse `/inbox to <name>: <message body>`:
 Apply? *(yes / edit / cancel)*
 ```
 
-On confirm, first bring in that inbox's rolling PR, if one is
-open: it holds messages other senders wrote that nobody has
-merged yet, and the new message's `#<id>` must follow theirs.
-
-```bash
-bash .claude/skills/land/land.sh pending --skill inbox --title "messages for <recipient>" -- .claude/inbox/<recipient>.md
-```
-
-Then append to `.claude/inbox/<recipient>.md` (create it if it
-doesn't exist), and propose it in the same rolling PR (the same
-title):
+On confirm, append to `.claude/inbox/<recipient>.md` (create it if
+it doesn't exist), and propose it in the same rolling PR (the same
+title as the `pending` above):
 
 ```bash
 bash .claude/skills/land/land.sh pr --rolling --skill inbox --title "messages for <recipient>" -- .claude/inbox/<recipient>.md
@@ -199,7 +209,10 @@ PR along with any messages still waiting there.
 ### Step 7 — Sent mode
 
 Read every `.claude/inbox/*.md` (skip my own); surface messages
-where sender = my handle:
+where sender = my handle. A message still waiting in an inbox's
+rolling PR is not in the checkout; `land.sh show --skill inbox --title
+"messages for <name>" -- .claude/inbox/<name>.md` prints that inbox's
+waiting copy:
 
 ```markdown
 # 📤 Sent — @<my-handle>

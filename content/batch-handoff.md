@@ -37,13 +37,16 @@ clicking through tabs to find a URL.
 Wait for the reviewer's verdict. While waiting:
 
 - **Do** accept new task ideas, bug reports, or notes the reviewer
-  surfaces during testing. File them with `/task`
-  (`.claude/bin/task new` — `tasks/triage/`, or `tasks/backlog/`
-  with `--phase`), draft the specs there, and land them with
-  `land.sh docs` (the task files, `tasks/history.tsv` and
-  `tasks/ROADMAP.md`). Never commit them to the integration branch
-  by hand: that keeps its worktree clean for the reviewer's session,
-  and the specs still reach the trunk.
+  surfaces during testing. File them with `/task` from a checkout of
+  the trunk, not the integration branch (its ledger carries the
+  batch's own transitions, which ride its PR, so `land.sh docs`
+  refuses a ledger landing from it): `git worktree add ../trunk-land
+  origin/<trunk>`, then in that worktree `.claude/bin/task new`
+  (`tasks/triage/`, or `tasks/backlog/` with `--phase`), draft the
+  specs, and land them with `land.sh docs` (the task files,
+  `tasks/history.tsv` and `tasks/ROADMAP.md`). The integration
+  worktree stays clean for the reviewer's session, and the specs
+  reach the trunk.
 - **Do** answer questions about what's in the integration branch.
 - **Do not** start new feature work. Don't speculatively merge more
   PRs. Don't auto-deploy. Don't kill the running process.

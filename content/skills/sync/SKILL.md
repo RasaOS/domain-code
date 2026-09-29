@@ -136,10 +136,11 @@ seed and printed the command to finish). Then:
 - Pin: `<old>` → `<new>`
 
 Next: review `git diff`, then propose it (a PR, never a commit on the
-trunk). The ledger migration first, on its own:
-`bash .claude/skills/land/land.sh pr --switch --skill sync --title "migrate the task ledger" -- <the tasks/ files it changed>`,
-then the rest in a second PR:
-`bash .claude/skills/land/land.sh pr --switch --skill sync --title "sync to <name> v<version>" -- <the other files it changed>`.
+trunk). The ledger migration in one PR, the rest in another, each
+built aside from the trunk (run both from the trunk; the checkout keeps
+the files until the PRs merge):
+`bash .claude/skills/land/land.sh pr --skill sync --title "migrate the task ledger" -- <the tasks/ files it changed>`
+`bash .claude/skills/land/land.sh pr --skill sync --title "sync to <name> v<version>" -- <the other files it changed>`
 ```
 
 ## What you must NOT do

@@ -82,9 +82,13 @@ vl_source_dirty() {
   local top pfx
   top="$(git rev-parse --show-toplevel 2>/dev/null)" || return 0
   pfx="$(git rev-parse --show-prefix 2>/dev/null)"
+  # .claude/mode*.md and .claude/inbox/_me.md: this checkout's own state
+  # (the active drive, who "me" is), never part of what a build ships.
   ( cd "$top" && git status --porcelain -- . \
       ":(exclude)${pfx}builds/" ":(exclude)${pfx}tests/runs/" ":(exclude)${pfx}deploys/" \
-      ":(exclude)${pfx}build/deploy-log.md" ":(exclude)${pfx}tasks/" 2>/dev/null
+      ":(exclude)${pfx}build/deploy-log.md" ":(exclude)${pfx}tasks/" \
+      ":(exclude)${pfx}.claude/mode.md" ":(exclude)${pfx}.claude/mode.md.last" ":(exclude)${pfx}.claude/mode-stats.md" \
+      ":(exclude)${pfx}.claude/inbox/_me.md" 2>/dev/null
     git ls-files -v 2>/dev/null | awk '/^(S|[a-z]) / { print "hidden " substr($0, 3) }' )
 }
 

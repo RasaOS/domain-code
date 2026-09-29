@@ -77,7 +77,11 @@ STRICT="${BOOKKEEPING_STRICT:-${TASK_CHURN_STRICT:-0}}"
 # Anchored to the install's own path: in a monorepo the project lives at
 # app/, and its records at app/deploys/ — an exclusion of the repo root's
 # deploys/ left them counted, so a sub-directory install failed its own gate.
-PIPELINE_OWN=(":(exclude)${PFX}deploys/" ":(exclude)${PFX}build/deploy-log.md" ":(exclude)${PFX}builds/" ":(exclude)${PFX}tests/runs/")
+# The checkout's own state the Element writes (the active mode, the inbox's
+# "me") is never part of what ships.
+PIPELINE_OWN=(":(exclude)${PFX}deploys/" ":(exclude)${PFX}build/deploy-log.md" ":(exclude)${PFX}builds/" ":(exclude)${PFX}tests/runs/"
+              ":(exclude)${PFX}.claude/mode.md" ":(exclude)${PFX}.claude/mode.md.last" ":(exclude)${PFX}.claude/mode-stats.md"
+              ":(exclude)${PFX}.claude/inbox/_me.md")
 TASK_CHURN=(":(exclude)${PFX}tasks/")
 
 DIRTY=""

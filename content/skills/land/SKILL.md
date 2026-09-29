@@ -43,6 +43,7 @@ the reason for any path.
 bash .claude/skills/land/land.sh docs --skill <name> --title "<what>" [--summary "<why>"] [--tasks "TASK-NNN ..."] -- <file>...
 bash .claude/skills/land/land.sh pr   --skill <name> --title "<what>" [--tasks TASK-NNN] [--draft] [--switch | --rolling] [--summary "<why>"] [--verified "<commands + results>"] -- <file>...
 bash .claude/skills/land/land.sh pending --skill <name> --title "<what>" -- <file>...   # before editing what a rolling PR carries
+bash .claude/skills/land/land.sh show    --skill <name> --title "<what>" -- <file>...   # print that copy; the checkout is untouched
 bash .claude/skills/land/land.sh auto --skill <name> --title "<what>" [...] -- <file>...
 bash .claude/skills/land/land.sh sync            # latest trunk into this checkout
 bash .claude/skills/land/land.sh merge  --pr <N> --sha <sha> [--pr-json <file>] [--checks-json <file>]
@@ -69,7 +70,10 @@ Exit 0 has more than one meaning, so report from the output keys:
 | `merge=held` (with `pr=`) | PR open, held for a person by `.claude/landing.json` |
 | `landed=nothing` | Nothing to land (every file already on the trunk, or unchanged) |
 | `landed=already` | Already on the trunk |
-| `pr=` without `merged=` (`land.sh pr`) | PR open, never merged by this skill |
+| `pr=` (`land.sh pr`) | PR open, never merged by this skill |
+| `combined=<path>` (`land.sh pr`) | That file also carries changes another session or a reviewer made on the PR branch |
+| `unchanged=<branch>` (`land.sh pr`) | The PR already carries these files |
+| `result=nothing to propose` (`land.sh pr`) | Nothing to propose: the files would match the trunk |
 
 ## What `land.sh docs` does
 
@@ -80,7 +84,10 @@ Exit 0 has more than one meaning, so report from the output keys:
    now hold against the point where this checkout left the trunk (so a
    doc committed on a branch, a `wip/` autosave included, lands too), as
    a commit made with plumbing, replayed onto the fresh trunk in a
-   hook-less scratch worktree. Ledger files
+   hook-less scratch worktree. Ledger files that carry commits of a work
+   branch (a task branch's `start`/`submit` rows ride its PR) are refused
+   (exit 3): planning moves land from a checkout of the trunk, such as a
+   worktree (`git worktree add ../trunk-land origin/<trunk>`). Ledger files
    (`tasks/history.tsv`, `ROADMAP.md`, `AUDIT.md`) merge line by line;
    `history.tsv` is kept in date order. A conflict stops here (exit 5)
    with nothing pushed. A change that would add a `check-tasks` error
@@ -144,19 +151,28 @@ If someone else pushed to the branch (`sync-pr` from `/peer-review` or
 alone, on `task/<ID>-<slug>` (with `--tasks`) or `chore/<skill>-<slug>`
 (plus a short hash when the title does not survive as a slug) — a
 stable name, so running it again updates the same branch and PR. Each
-named file is resolved on its own: a copy on the branch that this
-checkout has seen (its own push, its HEAD's) gives way to the
-checkout's, so a revert is a revert; one it has not seen (another
-session's, a reviewer's) is merged with it, and overlapping edits stop
-the run (exit 5). Once the branch's PR has merged or been closed, the
-next run starts again from the trunk and opens a new PR; a rejected
-change is not carried forward. Your files stay as they are; after the
+named file is resolved on its own, by one rule: this checkout's
+change — what its copy holds now against the copy it started from — is
+merged into the branch's copy. "Started from" is recorded per worktree:
+what `land.sh pending` brought in, or what the checkout held after its
+last push to that branch; with no record, the file where this checkout
+left the trunk (so a change committed on a local trunk ahead of origin
+is proposed too). A revert is a revert; a change someone else made on
+the branch (a reviewer, the trunk, another session or worktree) is kept,
+and overlapping edits stop the run (exit 5, `land.sh pending` then redo).
+Once the branch's PR has merged or been closed, the next run starts
+again from the trunk and opens a new PR; a rejected change is not
+carried forward. Without `gh` the PR's state cannot be read: pass it
+with `--pr-state open|closed|merged` (read with the session's GitHub
+tooling); left out, the branch is treated as an open PR and the output
+says so (`pr_state=unknown`). Your files stay as they are; after the
 PR merges, `land.sh settle --branch <b>` (or `--pr <N>`) brings the
 checkout up to date. `--switch` instead moves the checkout onto the new
 branch, carrying your uncommitted work, for when you will keep working
 there, or when verification (`./build/build`, `./build/test`) must run
-on the committed change. A local trunk that has commits origin lacks is
-carried: the branch is cut from it, and the trunk goes back to origin.
+on the committed change; from a local trunk that has commits origin
+lacks, `--switch` carries those commits onto the branch and moves the
+trunk back to origin. `--branch` never names the trunk.
 
 ### Rolling PRs — side files a skill updates on every run
 
@@ -176,7 +192,12 @@ one rolling PR, keyed by `--skill` and `--title`:
 3. The checkout's copy goes back to its committed version (a copy is
    kept in the land state), so the tree stays clean for `./build/build`
    and `/release`. The content lives on the PR until a reviewer merges
-   it; the next `pending` brings it back.
+   it; the next `pending` brings it back, and `land.sh show` prints it
+   without touching the checkout (to read what is waiting). Running
+   `pr --rolling` again with no edit changes nothing.
+
+Without `gh`, pass `--pr-state` to `pending`, `show` and `pr --rolling`
+once the PR has been closed or merged, as above.
 
 **It never merges.** `/peer-review`, `/auto-merge` or a person
 does. For task work, `/open-pr` owns the ready PR (§10 body) and marks a
@@ -191,8 +212,9 @@ and nothing may be lost: if origin already carries their content (the
 branch they went up on was squash-merged), the trunk simply moves to
 origin; otherwise they are put on a `rescue/<trunk>-<utc>` branch,
 pushed, to propose by PR (`/push`, or `land.sh pr` from that branch),
-and then the trunk moves. A conflicting merge is undone and reported
-(exit 5). `land.sh fresh --sha <sha>` answers "does
+and then the trunk moves (a later sync reuses that branch rather than
+making another). A conflicting merge is undone and reported (exit 5),
+and the checkout is left as it was. `land.sh fresh --sha <sha>` answers "does
 this commit contain the latest trunk?" for merge gates, and
 `land.sh sync-pr --branch <b>` merges the trunk into a PR's branch
 without touching the checkout.

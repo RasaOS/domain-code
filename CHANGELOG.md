@@ -64,7 +64,9 @@ per skill); it can never widen the class.
 3. Build the commit with plumbing, without touching the checkout, from
    what the files hold against the point where the checkout left the trunk
    (so a doc committed on a branch or a `wip/` autosave lands too), and
-   replay it onto the fresh trunk in a hook-less scratch worktree.
+   replay it onto the fresh trunk in a hook-less scratch worktree. Ledger
+   files carrying a work branch's own transitions are refused: planning
+   moves land from a trunk checkout (a worktree).
    - `tasks/history.tsv`, `ROADMAP.md` and `AUDIT.md` merge line by line, and
      the history stays in date order.
    - A change that adds a `check-tasks` error to the ledger's shape (a task
@@ -105,11 +107,13 @@ still runs by git; the PR read must be of that PR at that head), merge with
 branch aside from the latest trunk, with a stable name (`task/<ID>-<slug>`
 or `chore/<skill>-<slug>`, hashed when the title does not survive as a
 slug), so a re-run updates the same PR and the checkout is not touched.
-Each file is resolved on its own: a copy this checkout has seen gives way
-to the checkout's (a revert is a revert); one it has not seen is merged
-with it. Once that PR has merged or been closed, the next run starts again
-from the trunk. `--switch` moves the checkout onto the branch instead, and
-carries a local trunk's own commits there. On a branch it takes commits
+Each file is resolved on its own: the checkout's change, against the copy
+it started from (recorded per worktree), is merged into the branch's copy,
+so a revert is a revert and a reviewer's or another session's change is
+kept. Once that PR has merged or been closed, the next run starts again
+from the trunk; without `gh`, `--pr-state` says which. `--switch` moves the
+checkout onto the branch instead, and carries a local trunk's own commits
+there. `--branch` never names the trunk. On a branch it takes commits
 others pushed to it (`sync-pr`), then merges the trunk in. It pushes and
 opens or reuses the PR (a draft for autonomous skills). It never merges.
 `land.sh auto` splits a mixed list by class.
@@ -117,17 +121,19 @@ opens or reuses the PR (a draft for autonomous skills). It never merges.
 **Rolling PRs** for the side files a skill rewrites on every run
 (`/handoff`'s `.claude/welcome.md`, `/lessons`' `docs/notes/INDEX.md`,
 `/inbox`, `/brainstorm`'s `.claude/tradeoffs/`): `land.sh pending` brings
-the open PR's copy in before the edit; `land.sh pr --rolling` builds the
-PR aside from any branch, merges line by line with what other sessions
-pushed there, and puts the checkout's copy back, so the tree stays clean
-for `./build/build` and `/release`.
+the open PR's copy in before the edit (`land.sh show` prints it without
+touching the checkout); `land.sh pr --rolling` builds the PR aside from any
+branch, merges line by line with what other sessions pushed there, and puts
+the checkout's copy back, so the tree stays clean for `./build/build` and
+`/release`. A re-run with no edit changes nothing.
 
 **`land.sh sync`** fast-forwards on the trunk and merges on a branch; it
 never rebases or forces. Local trunk commits origin lacks go to a pushed
 `rescue/<trunk>-<utc>` branch (or are dropped when origin already has their
-content, after a squash-merge), and the trunk moves to origin. `push.sh`
-and `open-pr.sh` move the trunk back too once they have carried its commits
-onto a branch. `fresh` and `sync-pr` give merge gates the same rule.
+content, after a squash-merge), and the trunk moves to origin; a failed
+sync leaves the checkout as it was. `push.sh` and `open-pr.sh` move the
+trunk back too once they have carried its commits onto a branch. `fresh`
+and `sync-pr` give merge gates the same rule.
 
 **The guard.** It keeps the trunk PR-only for Claude (`CLAUDECODE=1`); people
 at their own terminal are not constrained.
@@ -171,7 +177,8 @@ at their own terminal are not constrained.
     `.claude/tradeoffs/` file.
 - **Still left to the user:** `/rule-promote` (its Element edit goes up as
   `/contribute`'s PR; per-project cleanups are in other repositories) and
-  `/mode` (`.claude/mode.md` is this checkout's drive, not worth a PR).
+  `/mode` (`.claude/mode.md` is this checkout's drive, not worth a PR; the
+  pipeline's clean-tree checks now ignore it and `.claude/inbox/_me.md`).
 - **Syncing with the latest trunk before they push or merge:**
   - `push.sh` cuts from `origin/<trunk>` and merges the trunk in;
   - `open-pr.sh branch` cuts from `origin/<trunk>`, and `open` refuses a
