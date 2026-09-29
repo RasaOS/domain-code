@@ -17,12 +17,18 @@
 #   land.sh docs --skill S --title T [--summary X] [--tasks "IDS"] [--wait SECS] -- <path>...
 #                                       land doc outputs by themselves
 #   land.sh pr   --skill S --title T [--summary X] [--tasks "IDS"] [--draft]
-#                [--verified X] [--risk X] [--branch B] [--message M] [--switch] -- <path>...
+#                [--verified X] [--risk X] [--branch B] [--message M]
+#                [--switch | --rolling] -- <path>...
 #                                       open (or update) a PR, synced with the
 #                                       trunk. Never merges. On a branch: commits
 #                                       there. On the trunk: builds the branch
 #                                       aside, checkout untouched (--switch moves
-#                                       the checkout onto it instead)
+#                                       the checkout onto it instead). --rolling:
+#                                       aside from any branch, then the checkout
+#                                       goes back to HEAD for those files
+#   land.sh pending --skill S --title T -- <path>...
+#                                       before editing files a rolling PR carries:
+#                                       bring the PR's copy into the checkout
 #   land.sh auto --skill S --title T [...] -- <path>...
 #                                       split by class: docs land, code → pr
 #   land.sh merge  --pr N --sha SHA [--pr-json FILE] [--checks-json FILE]... [--wait SECS]
@@ -30,10 +36,13 @@
 #                                       merge pinned to SHA, settle)
 #   land.sh verify --pr N --sha SHA     the pushed-artifact gate, by git alone
 #   land.sh settle --pr N | --branch B  after a merge made with other tooling
+#                                       (--branch when gh did not open the PR)
 #   land.sh sync [--fetch-only] [--push]
 #                                       bring the latest trunk into this checkout
 #                                       (fast-forward on the trunk, merge on a
-#                                       branch; never a rebase, never a force)
+#                                       branch; never a rebase, never a force).
+#                                       Local trunk commits origin lacks go to a
+#                                       pushed rescue/ branch first
 #   land.sh fresh --sha SHA [--pr N]    exit 0 if SHA contains the latest trunk
 #   land.sh sync-pr --branch B          merge the trunk into a PR's branch, push
 #   land.sh status                      guards, landings in flight, trunk rules
@@ -54,7 +63,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 LAND_PY="$here/land.py"
 
-usage() { sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,57p' "$0" | sed 's/^# \{0,1\}//'; }
 
 deny_json() {
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$1"
@@ -119,7 +128,7 @@ case "$verb" in
       root="$(rasa_root 2>/dev/null || true)"
     fi
     LAND_ROOT="${root:-$PWD}" exec python3 "$LAND_PY" classify "$@" ;;
-  docs|pr|auto|merge|verify|settle|sync|fresh|sync-pr|status|hooks|session) ;;
+  docs|pr|auto|pending|merge|verify|settle|sync|fresh|sync-pr|status|hooks|session) ;;
   *) echo "error: unknown verb: $verb" >&2; usage >&2; exit 2 ;;
 esac
 

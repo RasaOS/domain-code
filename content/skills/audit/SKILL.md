@@ -195,7 +195,10 @@ bash .claude/skills/land/land.sh docs --skill audit --title "<audit subject>" --
 Name only the file `save` echoed. An audit is docs class: it merges
 itself after CI, built on the latest trunk (see `land/SKILL.md`).
 
-- Exit 0 → landed; note the PR number (`merged=#N`).
+- Exit 0 → report from the output (`land/SKILL.md` has the table):
+  `merged=#N` → landed, PR #N; `merge=held` → PR open, held for a
+  person by `.claude/landing.json`; `landed=nothing` or
+  `landed=already` → nothing new to land.
 - Exit 4 → no `gh`: finish with the session's GitHub tooling per
   `land/SKILL.md` "Without gh".
 - Any other exit → report it; never retry blindly. On 6 the PR stays

@@ -28,7 +28,8 @@ proportional to its honesty about the messy parts.
   lands by itself (Step 5). `.claude/welcome.md` is code class
   (CLAUDE.md `@`-imports it, so every session loads it), so it
   goes up in a PR this skill never merges: one rolling PR that
-  every handoff updates (Step 5).
+  every handoff updates, built aside so the checkout stays clean
+  (Step 5).
 - **Read multiple sources, synthesize one doc.** A handoff is
   not a doc dump — it's a curated synthesis. Pull from git
   state, tasks/, docs/decisions/, docs/postmortems/, and
@@ -102,9 +103,16 @@ structure** below.
 
 ### Step 4 — Rewrite `.claude/welcome.md`
 
-Always rewrite (don't append) `.claude/welcome.md` with a tight
-summary derived from the same inputs. Keep it under ~15 lines.
-This is what future Claude sessions read on start.
+First bring in the copy the rolling `welcome pointer` PR holds, if
+one is still open (it is newer than the trunk's):
+
+```bash
+bash .claude/skills/land/land.sh pending --skill handoff --title "welcome pointer" -- .claude/welcome.md
+```
+
+Then always rewrite (don't append) `.claude/welcome.md` with a
+tight summary derived from the same inputs. Keep it under ~15
+lines. This is what future Claude sessions read on start.
 
 ```markdown
 # 👋 Welcome back
@@ -151,22 +159,21 @@ bash .claude/skills/land/land.sh docs --skill handoff --title "Handoff <YYYY-MM-
 Name only the dated doc this run wrote (the `<date>-2.md` file if
 date-suffixed). **Never pass `.claude/welcome.md` to `land.sh
 docs`**: CLAUDE.md `@`-imports it, so every session loads it as
-instructions, which makes it code class. It goes by PR instead,
-with this exact title so every handoff updates the same PR:
+instructions, which makes it code class. It goes by PR instead:
+the rolling `welcome pointer` PR, which every handoff updates
+(same title, same `--skill` as the `pending` in Step 4):
 
 ```bash
-bash .claude/skills/land/land.sh pr --skill handoff --title "welcome pointer" -- .claude/welcome.md
+bash .claude/skills/land/land.sh pr --rolling --skill handoff --title "welcome pointer" -- .claude/welcome.md
 ```
 
-From the trunk this builds the stable branch
-`chore/handoff-welcome-pointer` from the latest trunk without
-touching the checkout, and reuses its open PR; on a feature
-branch the file is committed there and rides that branch's PR.
-The skill never merges it. Until a reviewer does, this checkout
-keeps the edited file. Its content is on the PR branch, so
-`git checkout -- .claude/welcome.md` loses nothing when a clean
-tree is needed (`./build/build`, `/release`); after the merge,
-`land.sh settle --pr <N>` brings the merged version in.
+`--rolling` builds that PR's branch aside from the latest trunk,
+whatever branch is checked out, and reuses the PR while it is
+open (once it has merged or been closed, the next run opens a
+new one). Then it puts `.claude/welcome.md` in this checkout back
+to its committed version: the content is on the PR branch, a copy
+is kept in the land state, and `./build/build` and `/release` see
+a clean tree. The skill never merges the PR.
 
 Exit 4 (no `gh`): finish with the session's GitHub tooling per
 `land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never retry
@@ -182,9 +189,9 @@ carry both files.
 - **Deep snapshot.** `docs/handoff/<YYYY-MM-DD>.md` — <line count> lines.
   Landed: PR #N merged *(or `Not landed: exit N — <message>`)*
 - **Welcome.** `.claude/welcome.md` — rewritten (~<line count> lines).
-  PR #N open (updated), never merged by this skill
-  *(or `Not proposed: exit N — <message>`)*. Future sessions
-  read it on start once it merges.
+  In the rolling `welcome pointer` PR #N, never merged by this
+  skill *(or `Not proposed: exit N — <message>`)*. Future
+  sessions read it on start once it merges.
 
 **The three things most worth knowing:**
 1. <terse>
@@ -388,7 +395,9 @@ handoff is dated and additive.*
   docs` lands it (Step 5).
 - **Don't pass `.claude/welcome.md` to `land.sh docs`, and don't
   merge its PR.** It is code class (CLAUDE.md `@`-imports it):
-  `land.sh pr` with the title `welcome pointer` (Step 5).
+  `land.sh pending` before the rewrite (Step 4), `land.sh pr
+  --rolling` after it (Step 5), both with the title `welcome
+  pointer`.
 - **Don't fabricate state.** If `tasks/active/` is empty,
   say so.
 - **Don't spam the project's CLAUDE.md.** This skill writes one
@@ -440,7 +449,8 @@ Two artifacts:
    `@`-import, in the rolling `welcome pointer` PR this skill
    never merges.
 
-The user knows the next session in this checkout can read
-`.claude/welcome.md` for the quick orient, and the next person
-(on any clone) can drill into `docs/handoff/<YYYY-MM-DD>.md` on
-the trunk for the deep state — without you in the room.
+The user knows that once the `welcome pointer` PR merges, every
+session reads `.claude/welcome.md` for the quick orient, and that
+the next person (on any clone) can already drill into
+`docs/handoff/<YYYY-MM-DD>.md` on the trunk for the deep state —
+without you in the room.

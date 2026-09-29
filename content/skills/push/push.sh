@@ -244,6 +244,13 @@ cmd_run() {
       echo "push: on the trunk → moved work onto new branch '$target', cut from the latest $fresh_base."
     elif git checkout -q -b "$target" 2>/dev/null; then
       echo "push: on the trunk → moved work onto new branch '$target' (cut from the local $trunk; the latest trunk is merged in after the commit)."
+      # The trunk's own commits now ride this branch; the local trunk goes
+      # back to origin so it does not keep commits that only land by PR.
+      if [ "$branch" = "$trunk" ] && git rev-parse -q --verify "refs/remotes/origin/$trunk" >/dev/null 2>&1 \
+         && ! git merge-base --is-ancestor "$trunk" "refs/remotes/origin/$trunk" 2>/dev/null; then
+        git branch -f "$trunk" "refs/remotes/origin/$trunk" 2>/dev/null \
+          && echo "push: local $trunk is back at origin/$trunk; its commits are on '$target'."
+      fi
     else
       echo "✗ push: could not create branch '$target'." >&2
       return 1

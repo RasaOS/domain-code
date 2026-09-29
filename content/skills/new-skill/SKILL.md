@@ -1,11 +1,11 @@
 ---
 name: new-skill
-description: Scaffold a new skill that follows the kit's canonical conventions — frontmatter triggers, behavior contract, output structure, style rules, what-NOT-to-do, edge cases, when-NOT-to-use, and a "done" definition. Asks targeted questions about scope (kit-wide or project-local), what the skill produces (report / written files / applied edits), and the consent model, then writes a SKILL.md skeleton with TODO markers for the user to fill. Triggered when the user wants to author a new skill — e.g. "/new-skill", "scaffold a skill", "create a new skill called X", "I want to write a skill that does Y".
+description: Scaffold a new skill that follows the Element's canonical conventions — frontmatter triggers, behavior contract, output structure, style rules, what-NOT-to-do, edge cases, when-NOT-to-use, and a "done" definition. Asks targeted questions about scope (Element-wide or project-local), what the skill produces (report / written files / applied edits), and the consent model, then writes a SKILL.md skeleton with TODO markers for the user to fill. Triggered when the user wants to author a new skill — e.g. "/new-skill", "scaffold a skill", "create a new skill called X", "I want to write a skill that does Y".
 ---
 
 # /new-skill — Scaffold a new skill
 
-Generate a SKILL.md skeleton that already follows every kit
+Generate a SKILL.md skeleton that already follows every Element
 convention. The user fills in the substance; the skill enforces
 the shape.
 
@@ -23,7 +23,7 @@ default to "yes, let's create one".
      solve?
   3. **Triggers** — three to five concrete user phrases that
      should invoke it.
-  4. **Scope** — kit-wide (lives in `kit/skills/` and propagates
+  4. **Scope** — Element-wide (lives in `content/skills/` and propagates
      to all projects via `/sync`) or project-local (lives in
      `.claude/skills/` and stays in this repo only).
   5. **Mutation model** — does the skill (a) only render a
@@ -40,7 +40,7 @@ default to "yes, let's create one".
      skills, common for `bin/`). See `script-craft.md` for the
      split.
 - **Check for collisions.** Before writing, list existing skills
-  (kit-level: `kit/skills/`; project-level: `.claude/skills/`).
+  (Element-level: `content/skills/`; project-level: `.claude/skills/`).
   If the proposed name exists, surface it and ask whether to
   rename, replace, or extend the existing skill.
 - **Push back honestly.** If the proposed skill overlaps heavily
@@ -71,7 +71,7 @@ Before I scaffold, I need six things:
 2. **One-sentence purpose** — what problem does it solve? _____
 3. **Triggers** — 3-5 phrases users would type to invoke it
    (e.g. "/foo", "do the foo thing", "foo this codebase"): _____
-4. **Scope** — kit-wide (propagates to all projects) or
+4. **Scope** — Element-wide (propagates to all projects) or
    project-local (this repo only)? _____
 5. **Mutation model** — report-only / writes-docs / edits-code? _____
 6. **Script mechanics** — could the mechanics be locked into a
@@ -94,7 +94,7 @@ that belong in a script.
 
 ### Step 2 — Sanity check
 
-- **Name collision.** `ls kit/skills/` (kit-wide) or
+- **Name collision.** `ls content/skills/` (Element-wide) or
   `ls .claude/skills/` (project-local) and check for
   `<name>/`. If present, stop and ask.
 - **Overlap check.** Read each existing SKILL.md's frontmatter
@@ -109,13 +109,15 @@ that belong in a script.
 
 ### Step 3 — Pick the right destination
 
-- **Kit-wide** → `kit/skills/<name>/SKILL.md` (only valid when
-  the working directory is the claude-kit repo itself).
+- **Element-wide** → `content/skills/<name>/SKILL.md` (only valid when
+  the working directory is the Element repository, rasa.domain.code,
+  itself; `content/skills/` is a directory-mirror entry in
+  `rasa.json`, so a new folder there ships with no manifest edit).
 - **Project-local** → `.claude/skills/<name>/SKILL.md`.
 
-If the user picked "kit-wide" but the working directory isn't
-the kit repo, stop and explain: kit skills must be authored in
-the kit repo and propagate via `/sync`.
+If the user picked "Element-wide" but the working directory isn't
+the Element repository, stop and explain: Element skills must be
+authored there and propagate via `/sync`.
 
 ### Step 4 — Render the skeleton
 
@@ -208,7 +210,7 @@ About to create:
 With:
 - Name: `<name>`
 - Triggers: <trigger phrases>
-- Scope: <kit-wide|project-local>
+- Scope: <Element-wide|project-local>
 - Mutation: <report-only|writes-docs|edits-code>
 - Script mechanics: <none|partial|full>
 - Landing: a PR via `/land`, never merged by this skill
@@ -261,14 +263,14 @@ Next steps:
    with substance, on the PR's branch; the Step 8 command, run
    again there, updates the same PR.
 2. If a script was scaffolded, read `script-craft.md` and use
-   `kit/skills/save/save.sh` as the working reference. Test the
+   `content/skills/save/save.sh` as the working reference. Test the
    script in a sandbox repo before wiring it into the SKILL.md
    process.
 3. Once filled, test by invoking the skill on a real task.
 4. If Element-wide: once the PR merges, downstream projects pick
    it up via `/sync`.
 
-Tip: `/audit kit/skills/<name>/SKILL.md` once it's filled in,
+Tip: `/audit content/skills/<name>/SKILL.md` once it's filled in,
 to get a critical read before it propagates.
 ```
 
@@ -403,7 +405,7 @@ diff` + commit, or "read X and decide").>
 
 Only written when the script-mechanics answer was **partial** or
 **full**. Lives at `<dest>/<name>.sh` alongside the SKILL.md.
-Follows `script-craft.md` conventions; mirrors `kit/skills/save/save.sh`
+Follows `script-craft.md` conventions; mirrors `content/skills/save/save.sh`
 in shape.
 
 ```bash
@@ -500,8 +502,8 @@ main "$@"
 - **Don't skip the collision check.** Two skills with overlapping
   triggers is a kit-quality bug. Better to push back than
   scaffold.
-- **Don't propagate kit-wide skills from a project repo.**
-  Kit-wide skills must be authored in the claude-kit repo
+- **Don't propagate Element-wide skills from a project repo.**
+  Element-wide skills must be authored in the Element repository (rasa.domain.code)
   itself; otherwise they have no path to propagate.
 - **Don't merge the PR or commit to the trunk.** Skeletons go up
   by `land.sh pr` (Step 8) and wait for a reviewer.
@@ -527,7 +529,7 @@ main "$@"
   "partial" for a purely synthetic skill like `/brainstorm`, or
   "none" for a skill that's clearly deterministic file plumbing.
   Push back per Step 1's pushback rule before scaffolding.
-- **Scope mismatch.** User says "kit-wide" while in a project
+- **Scope mismatch.** User says "Element-wide" while in a project
   repo. Stop, explain, offer project-local instead.
 
 ## When NOT to use this skill
@@ -541,7 +543,7 @@ main "$@"
 
 ## What "done" looks like for a /new-skill session
 
-A new directory at `kit/skills/<name>/` (or `.claude/skills/<name>/`)
+A new directory at `content/skills/<name>/` (or `.claude/skills/<name>/`)
 containing a `SKILL.md` skeleton with the user's name, purpose,
 triggers, mutation-model clause, and script-mode clause filled
 in, and TODO markers everywhere else. If the script-mechanics

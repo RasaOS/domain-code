@@ -230,6 +230,18 @@ diff" was satisfied, in the authoring session, by memory of having written it.
      7 (push refused) → HELD: do not approve or merge, report the exit
      and its message, never retry blindly.
 
+     The trunk may have moved during that wait (doc landings merge to
+     it all the time), so check freshness once more, right before
+     approving:
+
+     ```bash
+     bash .claude/skills/land/land.sh fresh --sha <sha> --pr <N>
+     ```
+
+     Exit 5 → `land.sh sync-pr --branch <head-branch>` and the same
+     `checks <N> --wait 900` again (at most twice more; still behind
+     after that → HELD, report it). Only a fresh `<sha>` merges.
+
      Then `gh pr review <N> --approve --body "<...>"` and merge with
      the method the PR's merge manifest names, pinned to the head CI
      just passed on:

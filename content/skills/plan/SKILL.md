@@ -179,8 +179,11 @@ from the latest trunk that merges after CI):
 bash .claude/skills/land/land.sh docs --skill plan --title "<plan summary>" -- tasks/PHASES.md tasks/ROADMAP.md
 ```
 
-Name only the files this hand-off changed, plus any
-`tasks/**/*.md` it filed. Exit 4 (no `gh`): finish with the
+Name only the files this hand-off changed. When it filed or moved
+task files, name those too (both paths of a moved one) and
+`tasks/history.tsv`, which `bin/task` wrote a row to for each: a task
+file that lands without its row breaks the ledger, and the landing
+refuses (exit 5). Exit 4 (no `gh`): finish with the
 session's GitHub tooling per `land/SKILL.md` "Without `gh`".
 Exits 5/6/7: report, never retry blindly. As a step of
 `/mission`, `/self-heal` or `/self-improve`, skip this: the

@@ -149,12 +149,14 @@ and when it must pass.
    and any runtime stamp or test file you wrote, and nothing else:
 
    ```bash
-   bash .claude/skills/land/land.sh pr --skill test --title "<what>" [--tasks TASK-NNN] -- <files>
+   bash .claude/skills/land/land.sh pr --switch --skill test --title "<what>" [--tasks TASK-NNN] -- <files>
    ```
 
-   It opens a PR (or updates the open one for the branch) and never
-   merges it. `/build` refuses an uncommitted tree, so land before
-   step 6; a fix found there lands the same way. Exit 4 (no `gh`):
+   It commits the files on the PR branch, opens the PR (or updates the
+   open one) and never merges it. `--switch` leaves the checkout on
+   that branch with the change committed, which step 6 needs: `/build`
+   refuses an uncommitted tree, and the proof has to run on the change
+   the PR carries. A fix found there lands the same way. Exit 4 (no `gh`):
    finish with the session's GitHub tooling per `land/SKILL.md`
    "Without `gh`". Exits 5/6/7: report, never retry blindly. As a
    step of `/mission`, `/self-heal` or `/self-improve`, skip this:

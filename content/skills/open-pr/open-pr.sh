@@ -190,9 +190,17 @@ cmd_branch() {
     echo "branch=$target"
     echo "base=origin/$trunk (fetched)"
   else
+    local was
+    was="$(git symbolic-ref --short -q HEAD 2>/dev/null || true)"
     git checkout -q -b "$target" 2>/dev/null || die "could not create branch '$target'"
     echo "branch=$target"
     echo "note: cut from the local $trunk; bring the latest trunk in before opening: bash .claude/skills/land/land.sh sync"
+    # Local trunk commits ride this branch now; the trunk goes back to origin.
+    if [ "$was" = "$trunk" ] && git rev-parse -q --verify "refs/remotes/origin/$trunk" >/dev/null 2>&1 \
+       && ! git merge-base --is-ancestor "$trunk" "refs/remotes/origin/$trunk" 2>/dev/null; then
+      git branch -f "$trunk" "refs/remotes/origin/$trunk" 2>/dev/null \
+        && echo "note: local $trunk is back at origin/$trunk; its commits are on $target"
+    fi
   fi
 }
 

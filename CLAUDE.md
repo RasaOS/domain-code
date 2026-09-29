@@ -152,7 +152,8 @@ merged outside `/peer-review`, a reconcile) go the same way the
 Element tells consumers to: a docs landing, never a commit pushed to
 `main`. The Element is not installed into itself, so run the shipped
 script by its source path:
-`RASA_ROOT="$PWD" bash content/skills/land/land.sh docs --skill task --title "pass TASK-NNN" --tasks TASK-NNN -- <task file> tasks/history.tsv`.
+`RASA_ROOT="$PWD" bash content/skills/land/land.sh docs --skill task --title "pass TASK-NNN" --tasks TASK-NNN -- tasks/review/<TASK-NNN-slug>.md tasks/completed/<TASK-NNN-slug>.md tasks/history.tsv`
+(a pass moves the file, so both of its paths are named).
 
 ## What success looks like
 

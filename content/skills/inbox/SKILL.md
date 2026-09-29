@@ -142,21 +142,30 @@ Parse `/inbox to <name>: <message body>`:
 Apply? *(yes / edit / cancel)*
 ```
 
-On confirm: append to `.claude/inbox/<recipient>.md`. Create
-the file if it doesn't exist. Then propose it, with this exact
-title so every write to that inbox updates the same PR:
+On confirm, first bring in that inbox's rolling PR, if one is
+open: it holds messages other senders wrote that nobody has
+merged yet, and the new message's `#<id>` must follow theirs.
 
 ```bash
-bash .claude/skills/land/land.sh pr --skill inbox --title "messages for <recipient>" -- .claude/inbox/<recipient>.md
+bash .claude/skills/land/land.sh pending --skill inbox --title "messages for <recipient>" -- .claude/inbox/<recipient>.md
 ```
 
-From the trunk this builds the stable branch
-`chore/inbox-messages-for-<recipient>` from the latest trunk without
-touching the checkout and reuses its open PR; on a feature branch
-the file is committed there and rides that branch's PR. Never
-merge it. Exit 4 (no `gh`): finish with the session's GitHub
-tooling per `land/SKILL.md` "Without `gh`". Exits 5/6/7: report,
-never retry blindly.
+Then append to `.claude/inbox/<recipient>.md` (create it if it
+doesn't exist), and propose it in the same rolling PR (the same
+title):
+
+```bash
+bash .claude/skills/land/land.sh pr --rolling --skill inbox --title "messages for <recipient>" -- .claude/inbox/<recipient>.md
+```
+
+`--rolling` builds the PR's branch aside from the latest trunk,
+whatever branch is checked out, reuses the PR while it is open,
+and merges line by line with messages another sender pushed there
+meanwhile. The checkout's copy then goes back to its committed
+version (the message is on the PR branch). Never merge it. Exit 4
+(no `gh`): finish with the session's GitHub tooling per
+`land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never retry
+blindly.
 
 ```markdown
 ✉️ Written to `.claude/inbox/<recipient>.md`.
@@ -182,8 +191,10 @@ flips its status from `unread` to `read` with a `*(read on
 
 `/inbox done all` flips every unread message in my file.
 
-The flip is a write like any other: propose it the same way as
-Step 4 (`--title "messages for <me>"`), so it rides the same rolling PR.
+The flip is a write like any other: `land.sh pending` before it
+and `land.sh pr --rolling` after it, as in Step 4, with
+`--title "messages for <me>"`, so it rides that inbox's rolling
+PR along with any messages still waiting there.
 
 ### Step 7 — Sent mode
 
@@ -269,8 +280,8 @@ The per-recipient inbox file at `.claude/inbox/<recipient>.md`:
 ## What you must NOT do
 
 - **Don't commit to the trunk or merge the inbox PR.** `land.sh
-  pr` proposes each write (Step 4); a reviewer's merge is the
-  message-delivery step.
+  pending` before each write and `land.sh pr --rolling` after it
+  (Step 4); a reviewer's merge is the message-delivery step.
 - **Don't delete messages.** Status flip only. Inboxes are
   history.
 - **Don't store secrets.** Refuse if a credential or key

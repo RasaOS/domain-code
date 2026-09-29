@@ -143,7 +143,9 @@ after CI, built on the latest trunk (see `land/SKILL.md`):
 bash .claude/skills/land/land.sh docs --skill ios-release --title "record <version>" -- tasks/AUDIT.md
 ```
 
-- Exit 0 → add `Landed: PR #N merged` to the closing report.
+- Exit 0 → from the output (`land/SKILL.md` has the table): `merged=#N`
+  → add `Landed: PR #N merged`; `merge=held` → `PR #N open, held for a
+  person`; `landed=nothing`/`landed=already` → `Already on the trunk`.
 - Exit 4 → no `gh`: finish with the session's GitHub tooling per
   `land/SKILL.md` "Without gh".
 - Any other exit → add `Not landed: exit N — <message>`; never retry

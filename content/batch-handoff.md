@@ -39,9 +39,11 @@ Wait for the reviewer's verdict. While waiting:
 - **Do** accept new task ideas, bug reports, or notes the reviewer
   surfaces during testing. File them with `/task`
   (`.claude/bin/task new` — `tasks/triage/`, or `tasks/backlog/`
-  with `--phase`) and draft the specs there **without committing**
-  — keep the worktree clean for their session. Same pattern used
-  during the prior review window.
+  with `--phase`), draft the specs there, and land them with
+  `land.sh docs` (the task files, `tasks/history.tsv` and
+  `tasks/ROADMAP.md`). Never commit them to the integration branch
+  by hand: that keeps its worktree clean for the reviewer's session,
+  and the specs still reach the trunk.
 - **Do** answer questions about what's in the integration branch.
 - **Do not** start new feature work. Don't speculatively merge more
   PRs. Don't auto-deploy. Don't kill the running process.
@@ -56,6 +58,9 @@ take minutes or hours.
   `bash .claude/skills/land/land.sh sync` (a merge, never a rebase or
   force), push, and let CI run on the new head. Exit 5 (conflict) or
   7 (push refused): report, do not merge, never retry blindly.
+- Once CI has passed on that head, check it is still fresh (the trunk
+  may have moved during the wait): `bash .claude/skills/land/land.sh
+  fresh --sha <sha>`. Exit 5 → sync again and wait for CI again.
 - Merge integration → main pinned to that head with
   `gh pr merge --merge --delete-branch --match-head-commit <sha>`
   (`<sha>` = the synced head CI passed on; a refusal means something

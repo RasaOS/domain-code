@@ -45,8 +45,12 @@ stub by stub, until the queue is real.
   left in the working tree (`land/SKILL.md`):
 
   ```bash
-  bash .claude/skills/land/land.sh docs --skill project-manager --title "refinement <date>" -- docs/refinement/<date>.md tasks/<the spec files this session wrote>
+  bash .claude/skills/land/land.sh docs --skill project-manager --title "refinement <date>" -- docs/refinement/<date>.md <the task files this session wrote or moved: both paths of a moved one> tasks/history.tsv tasks/ROADMAP.md
   ```
+
+  `bin/task` writes a `tasks/history.tsv` row for every file it files
+  or moves; a task file that lands without its row breaks the ledger,
+  and the landing refuses (exit 5).
 
   Exit 4 → finish with the session's GitHub tooling per
   `land/SKILL.md` "Without `gh`". Exits 5, 6, 7 → report, never

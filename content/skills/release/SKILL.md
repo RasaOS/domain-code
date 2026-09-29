@@ -287,12 +287,19 @@ RELEASE_SHA=$(git rev-parse HEAD)
 ```
 
 The PR is merged in Step 6, after the deploy succeeds — so check now,
-before anything ships, that it **can** be: the repository allows merge
-commits (`gh api repos/{owner}/{repo} --jq .allow_merge_commit`), and
-the PR is not blocked (`gh pr view <N> --json mergeStateStatus,reviewDecision`:
-`DIRTY` is a conflict, `BLOCKED` a missing review or required check).
-Either is a hard blocker here, not after production is live. Without
-`gh`, read the same fields with the session's GitHub tooling.
+before anything ships, that it **can** be. The push in Step 1 restarted
+CI, so first let the release PR's checks finish
+(`bash .claude/skills/peer-review/peer-review.sh checks <N> --wait 900`;
+failing → hard stop), then:
+
+- the repository allows merge commits
+  (`gh api repos/{owner}/{repo} --jq .allow_merge_commit`);
+- `gh pr view <N> --json mergeStateStatus,reviewDecision`:
+  `DIRTY` (a conflict), `reviewDecision` `CHANGES_REQUESTED` or
+  `REVIEW_REQUIRED`, or `BLOCKED` with the checks already finished,
+  is a hard blocker here, not after production is live.
+
+Without `gh`, read the same fields with the session's GitHub tooling.
 
 ### Step 4 — Tag the release commit (local)
 
@@ -438,11 +445,26 @@ git push origin "$TAG"
 ```
 
 The tag points at `RELEASE_SHA`, the deployed commit, which the
-merge makes part of `main`'s history. If the merge or the tag push
-fails, report it as a partial-state warning: the deploy went live
-but the release is not recorded on the remote yet. Then bring the
-local trunk up to date: `git checkout main` and
-`bash .claude/skills/land/land.sh sync`.
+merge makes part of `main`'s history.
+
+`--match-head-commit` pins the PR's head, not its base, so when there
+was a release PR, check the merge landed on the trunk `fresh` saw: the
+merge commit's first parent must be the `base=` it printed.
+
+```sh
+MERGE="$(gh pr view <N> --json mergeCommit --jq .mergeCommit.oid)"
+git fetch -q origin main && git rev-parse "$MERGE^1"   # must equal base= from `land.sh fresh`
+```
+
+A different parent means a trunk commit slipped in between, so the
+merge carries code that was not deployed: report it as a partial-state
+warning (deployed and recorded, but `main` holds that commit on top of
+what shipped).
+
+If the merge or the tag push fails, report it as a partial-state
+warning: the deploy went live but the release is not recorded on the
+remote yet. Then bring the local trunk up to date: `git checkout main`
+and `bash .claude/skills/land/land.sh sync`.
 
 ### Step 7 — Record the release
 

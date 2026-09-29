@@ -116,16 +116,16 @@ After each user confirmation:
 Once all questions are answered, name every file this run wrote (files, not directories; `.claude/environments.json` and `.gitignore` too if touched), and nothing else:
 
 ```bash
-bash .claude/skills/land/land.sh pr --skill setup-deploy --title "set up deploy for <envs>" -- <files>
+bash .claude/skills/land/land.sh pr --switch --skill setup-deploy --title "set up deploy for <envs>" -- <files>
 ```
 
-It commits only those files on a branch from the latest trunk, pushes and opens a PR (or updates the open one for the branch). **It never merges**; a reviewer does. A run that wrote nothing lands nothing. Exit 4 (no `gh`): finish with the session's GitHub tooling per `land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never retry blindly. As a step of `/mission`, `/self-heal` or `/self-improve`, skip this: the orchestrator's branch and PR carry the files.
+It commits only those files on a branch from the latest trunk, pushes and opens a PR (or updates the open one for the branch), and leaves the checkout on that branch (`--switch`), so the verification below runs on exactly what the PR carries. **It never merges**; a reviewer does. A run that wrote nothing lands nothing. Exit 4 (no `gh`): finish with the session's GitHub tooling per `land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never retry blindly. As a step of `/mission`, `/self-heal` or `/self-improve`, skip this: the orchestrator's branch and PR carry the files.
 
 ### Verify at the end
 
 Once all questions are answered:
 
-1. Run `./build/build` then `./build/test` (land first — both refuse a dirty tree), then `./build/deploy --env=<first-env> --intent=deploy --dry-run` to validate the wiring (stages discover correctly, env folder exists, no syntax errors, the verified-build gate finds the run).
+1. On the PR branch the landing left you on, run `./build/build` then `./build/test` (both refuse a dirty tree, which is why the landing comes first), then `./build/deploy --env=<first-env> --intent=deploy --dry-run` to validate the wiring (stages discover correctly, env folder exists, no syntax errors, the verified-build gate finds the run).
 2. Surface the dry-run output to the user.
 3. If anything errors, flag the specific file + line that needs attention. Don't try to fix silently. A fix the user confirms lands the same way: re-run `land.sh pr` and the push updates the open PR.
 

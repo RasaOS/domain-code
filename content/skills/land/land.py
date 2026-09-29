@@ -19,6 +19,8 @@ have no gh and drive GitHub through other tooling.
 land.sh is the entry point and owns the argument contract; see its header.
 Portable: python3 (3.6+), git >= 2.20, gh optional.
 """
+import hashlib
+import io
 import json
 import os
 import re
@@ -114,12 +116,17 @@ def classify(path, imports=(), mode=None):
 IMPORT_RE = re.compile(r"(?<![\w`@])@([A-Za-z0-9_.~/-]*[A-Za-z0-9_~/-])")
 
 
-def claude_imports(read, roots=("CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.md")):
-    """Every install-relative path @-imported by the instruction files,
-    transitively (depth 4). An import can sit anywhere in the prose ("See
-    @docs/x.md"), not only at the start of a line; fenced code and `code`
-    spans are skipped. `read(path)` returns the text or None. Relative imports
-    resolve against the importing file's folder."""
+IMPORT_ROOT_NAMES = ("claude.md", "claude.local.md")
+
+
+def claude_imports(read, roots):
+    """Every repository-relative path @-imported by the instruction files in
+    `roots` (every CLAUDE.md / CLAUDE.local.md in the repository, at any
+    depth: Claude Code loads nested ones when it works in their folder and
+    parent ones above a monorepo install), transitively (depth 4). An import
+    can sit anywhere in the prose ("See @docs/x.md"); fenced code and `code`
+    spans are skipped. `read(path)` returns the text or None. Relative
+    imports resolve against the importing file's folder."""
     seen, found = set(), set()
     queue = [(r, 0) for r in roots]
     while queue:
@@ -138,12 +145,18 @@ def claude_imports(read, roots=("CLAUDE.md", "CLAUDE.local.md", ".claude/CLAUDE.
             if target.startswith("~") or target.startswith("/"):
                 continue
             norm = os.path.normpath(os.path.join(base, target)).replace("\\", "/")
-            if norm.startswith("../") or norm == ".":
+            if norm.startswith("../") or norm == "." or norm == "..":
                 continue
             found.add(norm)
             if depth < 4 and norm.endswith(".md"):
                 queue.append((norm, depth + 1))
     return found
+
+
+def instruction_roots(names):
+    """The files among `names` (repository-relative) that Claude Code loads
+    as instructions and follows imports from."""
+    return sorted(n for n in names if n.rsplit("/", 1)[-1].lower() in IMPORT_ROOT_NAMES)
 
 
 # High-confidence credential shapes only: a doc that talks about secrets is
@@ -170,9 +183,11 @@ def secret_hit(text):
 # ── git plumbing ──────────────────────────────────────────────────────────
 
 def run(args, cwd=None, env=None, check=True, input_text=None):
+    # UTF-8 whatever the locale (Python 3.6 in a C locale would decode as
+    # ASCII), and bytes that are not UTF-8 survive the round trip.
     p = subprocess.run(args, cwd=cwd, env=env, input=input_text,
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                       universal_newlines=True)
+                       encoding="utf-8", errors="surrogateescape")
     if check and p.returncode != 0:
         raise Stop(ERR, "%s failed: %s" % (" ".join(args[:4]), (p.stderr or p.stdout).strip()[:600]))
     return p
@@ -228,7 +243,7 @@ class Repo(object):
         if r.returncode == 0 and r.stdout.strip().startswith("origin/"):
             t = r.stdout.strip()[len("origin/"):]
         if not t and os.path.exists(cache):
-            t = open(cache).read().strip()
+            t = open(cache, encoding="utf-8", errors="replace").read().strip()
         if not t and self.has_origin():
             r = self.git("ls-remote", "--symref", "origin", "HEAD", check=False)
             m = re.search(r"ref:\s+refs/heads/(\S+)\s+HEAD", r.stdout or "")
@@ -243,7 +258,7 @@ class Repo(object):
         t = t or "main"
         try:
             os.makedirs(self.state, exist_ok=True)
-            with open(cache, "w") as fh:
+            with open(cache, "w", encoding="utf-8") as fh:
                 fh.write(t + "\n")
         except OSError:
             pass
@@ -297,26 +312,32 @@ class Repo(object):
         return self.git("merge-base", "--is-ancestor", a, b, check=False).returncode == 0
 
     def imports(self):
-        """CLAUDE.md imports from the working tree and the fetched trunk."""
+        """Install-relative paths @-imported by any CLAUDE.md in the
+        repository, read from the working tree and from the fetched trunk (a
+        stale checkout must not miss an import the trunk already has)."""
         if self._imports is not None:
             return self._imports
         found = set()
 
         def from_wt(p):
-            f = os.path.join(self.root, p)
             try:
-                return open(f, encoding="utf-8", errors="replace").read()
+                return open(os.path.join(self.top, p), encoding="utf-8", errors="replace").read()
             except OSError:
                 return None
 
+        ref = "refs/remotes/origin/%s" % self.trunk
+
         def from_trunk(p):
-            r = self.git("show", "refs/remotes/origin/%s:%s" % (self.trunk, self.top_path(p)), check=False)
+            r = self.git("show", "%s:%s" % (ref, p), check=False)
             return r.stdout if r.returncode == 0 else None
 
-        found |= claude_imports(from_wt)
-        found |= claude_imports(from_trunk)
-        self._imports = found
-        return found
+        wt_names = self.git("ls-files", "-co", "--exclude-standard", "-z", check=False).stdout.split("\0")
+        tr = self.git("ls-tree", "-r", "--name-only", "-z", ref, check=False)
+        tr_names = tr.stdout.split("\0") if tr.returncode == 0 else []
+        found |= claude_imports(from_wt, instruction_roots(n for n in wt_names if n))
+        found |= claude_imports(from_trunk, instruction_roots(n for n in tr_names if n))
+        self._imports = set(x for x in (self.rel(p) for p in found) if x)
+        return self._imports
 
     def identity_env(self, scratch=False):
         """An environment whose author/committer is the user's, or a named
@@ -339,42 +360,86 @@ class Repo(object):
 # ── state: lock, log ──────────────────────────────────────────────────────
 
 class Lock(object):
-    """One landing at a time per repository (all worktrees). A mkdir lock;
-    an owner whose pid is gone, or older than an hour, is taken over."""
+    """One landing step at a time per repository (all worktrees): planning,
+    pushing, syncing and merging. Never held through a CI wait. A mkdir lock
+    whose owner is gone is taken over; the owner is recorded with its
+    process start time, so a pid the system has since reused does not count
+    as alive."""
+
+    WAIT = 180
 
     def __init__(self, repo):
         self.path = os.path.join(repo.state, "lock")
         os.makedirs(repo.state, exist_ok=True)
 
+    @staticmethod
+    def _started(pid):
+        """When the process started, as the system tells it: /proc on Linux,
+        ps elsewhere; '' when neither can say."""
+        try:
+            with open("/proc/%d/stat" % pid, encoding="utf-8", errors="replace") as fh:
+                return "proc:" + fh.read().rsplit(")", 1)[1].split()[19]
+        except (OSError, IndexError):
+            pass
+        try:
+            r = run(["ps", "-o", "lstart=", "-p", str(pid)], check=False)
+        except OSError:
+            return ""
+        return " ".join(r.stdout.split()) if r.returncode == 0 else ""
+
     def __enter__(self):
-        for _ in range(30):
+        me = os.getpid()
+        token = "%d %d %s" % (me, int(time.time()), self._started(me) or "-")
+        waited, told = 0, False
+        while True:
             try:
                 os.mkdir(self.path)
-                with open(os.path.join(self.path, "owner"), "w") as fh:
-                    fh.write("%d %d\n" % (os.getpid(), int(time.time())))
+                with open(os.path.join(self.path, "owner"), "w", encoding="utf-8") as fh:
+                    fh.write(token + "\n")
                 return self
             except FileExistsError:
                 if self._stale():
                     shutil.rmtree(self.path, ignore_errors=True)
                     continue
-                time.sleep(1)
-        raise Stop(REFUSED, "another landing holds %s; wait for it or remove it if its process is gone" % self.path)
+            if waited >= self.WAIT:
+                raise Stop(REFUSED, "another landing step (%s) has held %s for over %ds; it is still running, so run this again once it ends"
+                           % (self._owner() or "?", self.path, self.WAIT))
+            if not told:
+                say("waiting=another landing step is running (%s)" % (self._owner() or "?"))
+                told = True
+            time.sleep(1)
+            waited += 1
+
+    def _owner(self):
+        try:
+            return open(os.path.join(self.path, "owner"), encoding="utf-8").read().strip()
+        except OSError:
+            return ""
 
     def _stale(self):
+        parts = self._owner().split(None, 2)
         try:
-            pid, since = open(os.path.join(self.path, "owner")).read().split()[:2]
-            pid, since = int(pid), int(since)
-        except (OSError, ValueError):
-            return True
+            pid, since = int(parts[0]), int(parts[1])
+        except (IndexError, ValueError):
+            # Being written right now, or garbage: stale only once it is old.
+            try:
+                return time.time() - os.path.getmtime(self.path) > 30
+            except OSError:
+                return True
+        started = parts[2] if len(parts) > 2 else "-"
         if time.time() - since > 3600:
             return True
         try:
             os.kill(pid, 0)
-            return False
         except ProcessLookupError:
             return True
         except PermissionError:
-            return False
+            pass
+        if started != "-":
+            now = self._started(pid)
+            if now and now != started:
+                return True  # the pid now belongs to another process
+        return False
 
     def __exit__(self, *exc):
         shutil.rmtree(self.path, ignore_errors=True)
@@ -386,7 +451,7 @@ def log_row(repo, event, **fields):
     row = dict(fields)
     row["event"] = event
     row["at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    with open(os.path.join(repo.state, "log.jsonl"), "a") as fh:
+    with open(os.path.join(repo.state, "log.jsonl"), "a", encoding="utf-8") as fh:
         fh.write(json.dumps(row, sort_keys=True) + "\n")
 
 
@@ -394,7 +459,7 @@ def log_rows(repo):
     f = os.path.join(repo.state, "log.jsonl")
     rows = []
     if os.path.exists(f):
-        for line in open(f):
+        for line in open(f, encoding="utf-8", errors="replace"):
             try:
                 rows.append(json.loads(line))
             except ValueError:
@@ -413,32 +478,76 @@ def inflight(repo):
 
 # ── config: may only narrow ───────────────────────────────────────────────
 
-def load_config(repo):
-    f = os.path.join(repo.root, ".claude", "landing.json")
-    cfg = {"docs": "auto", "skills": {}, "check_wait_secs": 180}
+def _read_config(text, where):
+    cfg = {}
     try:
-        user = json.load(open(f))
-    except (OSError, ValueError):
-        user = {}
+        user = json.loads(text) if text is not None else {}
+    except ValueError:
+        warn("%s: not valid JSON; ignored" % where)
+        return cfg
+    if not isinstance(user, dict):
+        return cfg
     if user.get("docs") in ("auto", "pr"):
         cfg["docs"] = user["docs"]
     if isinstance(user.get("skills"), dict):
         cfg["skills"] = {k: v for k, v in user["skills"].items() if v in ("auto", "pr")}
-    try:
-        cfg["check_wait_secs"] = max(0, min(3600, int(user.get("check_wait_secs", 180))))
-    except (TypeError, ValueError):
-        pass
+    if "check_wait_secs" in user:
+        try:
+            cfg["check_wait_secs"] = max(0, min(3600, int(user.get("check_wait_secs"))))
+        except (TypeError, ValueError):
+            pass
     for k in user:
         if k not in ("docs", "skills", "check_wait_secs") and not k.startswith("_"):
-            warn(".claude/landing.json: unknown key '%s' ignored (the docs class is fixed in land.py)" % k)
+            warn("%s: unknown key '%s' ignored (the docs class is fixed in land.py)" % (where, k))
+    return cfg
+
+
+def load_config(repo):
+    """.claude/landing.json from the checkout AND from the fetched trunk: a
+    hold either one declares applies, so a stale checkout (or a local edit)
+    cannot drop a hold the project has committed."""
+    cfg = {"docs": "auto", "skills": {}, "check_wait_secs": 180}
+    local, trunk = None, None
+    try:
+        local = open(os.path.join(repo.root, ".claude", "landing.json"), encoding="utf-8", errors="replace").read()
+    except OSError:
+        pass
+    r = repo.git("show", "refs/remotes/origin/%s:%s" % (repo.trunk, repo.top_path(".claude/landing.json")), check=False)
+    if r.returncode == 0:
+        trunk = r.stdout
+    for text, where in ((trunk, "origin/%s:.claude/landing.json" % repo.trunk), (local, ".claude/landing.json")):
+        c = _read_config(text, where)
+        if c.get("docs") == "pr":
+            cfg["docs"] = "pr"
+        for k, v in c.get("skills", {}).items():
+            if v == "pr":
+                cfg["skills"][k] = "pr"
+        if "check_wait_secs" in c:
+            cfg["check_wait_secs"] = c["check_wait_secs"]  # the checkout's value wins: it only sets a wait
     return cfg
 
 
 def docs_mode(cfg, skill):
-    """'auto' only if both the project and the skill allow it."""
+    """'auto' only if both the project and the skill allow it. A landing whose
+    skill cannot be told is held whenever any per-skill hold exists."""
     if cfg["docs"] == "pr" or cfg["skills"].get(skill) == "pr":
         return "pr"
+    if not skill and any(v == "pr" for v in cfg["skills"].values()):
+        return "pr"
     return "auto"
+
+
+LAND_BRANCH_RE = re.compile(r"^land/([a-z0-9][a-z0-9-]*?)-\d{8}-\d{6}-[0-9a-f]{4}$")
+DOCS_TITLE_RE = re.compile(r"^docs\(([a-z0-9][a-z0-9-]*)\):")
+
+
+def skill_of(branch, title=""):
+    """The skill a docs landing came from, told by its own branch or title."""
+    m = LAND_BRANCH_RE.match(branch or "")
+    if m:
+        return m.group(1)
+    m = DOCS_TITLE_RE.match(title or "")
+    return m.group(1) if m else ""
 
 
 # ── the temporary worktree ────────────────────────────────────────────────
@@ -488,8 +597,8 @@ class Scratch(object):
         want = "".join("%s%s merge=union\n" % (p, x) for x in
                        ("tasks/history.tsv", "tasks/ROADMAP.md", "tasks/AUDIT.md"))
         try:
-            if not os.path.exists(f) or open(f).read() != want:
-                with open(f, "w") as fh:
+            if not os.path.exists(f) or open(f, encoding="utf-8").read() != want:
+                with open(f, "w", encoding="utf-8") as fh:
                     fh.write(want)
         except OSError:
             pass
@@ -507,7 +616,7 @@ def sort_history(path):
     concatenates; bin/task and check-tasks require dates never to run
     backwards."""
     try:
-        lines = open(path, encoding="utf-8").read().splitlines()
+        lines = open(path, encoding="utf-8", errors="surrogateescape", newline="").read().splitlines()
     except OSError:
         return False
     if not lines:
@@ -519,7 +628,7 @@ def sort_history(path):
     new = head + [l for _, l in keyed]
     if new == lines:
         return False
-    with open(path, "w", encoding="utf-8") as fh:
+    with open(path, "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
         fh.write("\n".join(new) + "\n")
     return True
 
@@ -532,13 +641,22 @@ def check_tasks_errors(tree_root):
             ct = cand
     if not ct or not os.path.isdir(os.path.join(tree_root, "tasks")):
         return None
+    # Only the ledger's shape is gated. The digest ledger (I-34/I-38) tracks
+    # edits between runs in one checkout; a scratch tree has no history, and
+    # the baseline run would seed it and then flag every same-day edit.
+    digests = os.path.join(tree_root, "tasks", ".state", "digests.tsv")
+    if os.path.exists(digests):
+        os.unlink(digests)
     r = run([sys.executable, ct, "--json", tree_root], check=False)
+    if os.path.exists(digests):
+        os.unlink(digests)
     try:
         d = json.loads(r.stdout)
     except ValueError:
         return {("unreadable", "", (r.stderr or r.stdout)[:200])}
     return {(f.get("invariant"), f.get("file"), f.get("message"))
-            for f in d.get("findings", []) if f.get("severity") == "ERROR"}
+            for f in d.get("findings", [])
+            if f.get("severity") == "ERROR" and f.get("invariant") not in ("I-34", "I-38")}
 
 
 def gate_tree(sc, repo, touched, baseline):
@@ -554,34 +672,59 @@ def gate_tree(sc, repo, touched, baseline):
 
 # ── building the landing commit ───────────────────────────────────────────
 
-def plan_paths(repo, paths, base, want_class):
-    """Sort each requested path into land / skip, with reasons. Returns
-    (land, skip, parent): the landing commit is built on `parent`."""
+def wt_mode(full):
+    """The git mode a working-tree file would be committed with."""
+    if os.path.islink(full):
+        return "120000"
+    if os.path.isfile(full) and os.access(full, os.X_OK):
+        return "100755"
+    return "100644"
+
+
+def git_bytes(repo, *args, **kw):
+    """git with raw bytes in and out (blob contents are not text)."""
+    p = subprocess.run(["git", "-C", repo.top] + list(args), input=kw.get("input_bytes"),
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=kw.get("env"))
+    if kw.get("check", True) and p.returncode != 0:
+        raise Stop(ERR, "git %s failed: %s" % (" ".join(args[:3]), p.stderr.decode("utf-8", "replace").strip()[:300]))
+    return p
+
+
+def wt_entry(repo, tp):
+    """(mode, blob) for the working-tree file at top-relative `tp`, its blob
+    written to the object store the way `git add` would; None if absent."""
+    full = os.path.join(repo.top, tp)
+    if not os.path.lexists(full):
+        return None
+    mode = wt_mode(full)
+    if mode == "120000":
+        target = os.readlink(full).encode("utf-8", "surrogateescape")
+        return mode, git_bytes(repo, "hash-object", "-w", "--stdin", input_bytes=target).stdout.decode().strip()
+    return mode, repo.git("hash-object", "-w", "--", tp).stdout.strip()
+
+
+def plan_paths(repo, paths, base):
+    """Sort each requested doc into land / skip. Returns (land, skip,
+    parent): the change is taken from `parent`, the point where this checkout
+    left the trunk, so a doc committed on a branch (a wip/ autosave, a task
+    branch) or on a local trunk that has gone its own way lands as what it
+    adds to the trunk, never as a false conflict."""
     head = repo.head()
-    cur = repo.branch()
-    parent = head
-    on_trunk = head is not None and (cur == repo.trunk or not cur)
-    if on_trunk and not repo.is_ancestor(head, base):
-        if repo.is_ancestor(base, head):
-            parent = base  # local trunk ahead of origin: land against origin
-        else:
-            raise Stop(REFUSED, "local %s has diverged from origin/%s; run land.sh sync (its own commits must land through a PR)"
-                       % (cur or "HEAD", repo.trunk))
-    mb = None
-    if head and parent == head:
+    parent = base
+    if head:
         r = repo.git("merge-base", head, base, check=False)
-        mb = r.stdout.strip() if r.returncode == 0 else None
+        if r.returncode == 0 and r.stdout.strip():
+            parent = r.stdout.strip()
     imports = repo.imports()
     land, skip = [], []
     for p in paths:
         tp = repo.top_path(p)
         full = os.path.join(repo.top, tp)
-        mode = "120000" if os.path.islink(full) else None
-        klass, why = classify(p, imports, mode)
-        if want_class == "docs" and klass != "docs":
-            raise Stop(REFUSED, "%s is %s class (%s). Docs land by themselves; this goes through `land.sh pr`." % (p, klass, why))
         if os.path.isdir(full):
             raise Stop(USAGE, "%s is a directory; name the files" % p)
+        klass, why = classify(p, imports, wt_mode(full) if os.path.lexists(full) else None)
+        if klass != "docs":
+            raise Stop(REFUSED, "%s is %s class (%s). Docs land by themselves; this goes through `land.sh pr`." % (p, klass, why))
         if repo.git("check-ignore", "-q", "--", tp, check=False).returncode == 0:
             skip.append((p, "ignored by .gitignore; not landed"))
             continue
@@ -597,20 +740,19 @@ def plan_paths(repo, paths, base, want_class):
                 hit = None
             if hit:
                 raise Stop(REFUSED, "%s looks like it holds a credential (%s). Remove it; nothing was landed." % (p, hit))
-        pb = repo.blob_at(parent, tp) if parent else None
-        if wt != pb:
-            land.append((p, "delta", wt))
-        elif tb is None and (mb is None or repo.blob_at(mb, tp) is None):
-            land.append((p, "new-on-branch", wt))
-        else:
-            skip.append((p, "committed on %s and changed there; it lands with that branch" % (cur or "HEAD")))
-    return land, skip, (parent or base)
+        if wt == repo.blob_at(parent, tp):
+            skip.append((p, "unchanged here since this checkout left %s, and %s has changed it since: nothing of yours to land"
+                         % (repo.trunk, repo.trunk)))
+            continue
+        land.append((p, "delta", wt))
+    return land, skip, parent
 
 
 def build_commit(repo, land, base, message, parent=None):
-    """C = parent (minus files new on the branch) + the landed contents.
-    Built with plumbing in a private index: no checkout, no hooks."""
-    head = parent or repo.head() or base
+    """C = parent + the landed contents, built with plumbing in a private
+    index: no checkout, no hooks. Replayed onto the trunk, it carries exactly
+    what the checkout changed since `parent`."""
+    head = parent or base
     env = repo.identity_env(scratch=True)
     idx = tempfile.NamedTemporaryFile(prefix="land-idx-", dir=repo.state, delete=False)
     idx.close()
@@ -618,12 +760,6 @@ def build_commit(repo, land, base, message, parent=None):
     try:
         g = lambda *a, **k: run(["git", "-C", repo.top] + list(a), env=env, **k)
         g("read-tree", head)
-        parent = head
-        newfiles = [repo.top_path(p) for p, kind, _ in land if kind == "new-on-branch"]
-        if newfiles:
-            g("update-index", "--force-remove", "--", *newfiles)
-            tree = g("write-tree").stdout.strip()
-            parent = g("commit-tree", tree, "-p", head, "-m", "land: base without files new on this branch").stdout.strip()
         for p, _kind, wt in land:
             tp = repo.top_path(p)
             if wt is None:
@@ -632,7 +768,7 @@ def build_commit(repo, land, base, message, parent=None):
                 blob = g("hash-object", "-w", "--", tp).stdout.strip()
                 g("update-index", "--add", "--cacheinfo", "100644,%s,%s" % (blob, tp))
         tree = g("write-tree").stdout.strip()
-        return g("commit-tree", tree, "-p", parent, "-m", message).stdout.strip()
+        return g("commit-tree", tree, "-p", head, "-m", message).stdout.strip()
     finally:
         os.unlink(idx.name)
 
@@ -751,7 +887,7 @@ def pr_body(klass, skill, title, summary, tasks, files, base, verified, risk):
 
 
 def write_body(repo, text):
-    f = tempfile.NamedTemporaryFile("w", prefix="land-body-", suffix=".md", dir=repo.state, delete=False)
+    f = tempfile.NamedTemporaryFile("w", prefix="land-body-", suffix=".md", dir=repo.state, delete=False, encoding="utf-8")
     f.write(text)
     f.close()
     return f.name
@@ -796,12 +932,70 @@ def gh_create_pr(repo, branch, title, body_file, draft=False, label=None):
     return (int(m.group(1)) if m else None), url
 
 
-def trunk_requires_checks(repo, base):
-    """True when the trunk has a workflow that runs on pull requests, so an
-    empty rollup means 'not started yet', never 'nothing to run'."""
+def _patterns(block, key):
+    """Branch patterns under `key:` in a workflow trigger block (list form or
+    inline [a, b]); None when the key is absent."""
+    m = re.search(r"(?m)^([ \t]*)%s:[ \t]*(.*)$" % re.escape(key), block)
+    if not m:
+        return None
+    inline = m.group(2).strip()
+    if inline:
+        return [x.strip().strip("'\"") for x in inline.strip("[]").split(",") if x.strip()]
+    out, indent = [], len(m.group(1))
+    for line in block[m.end():].splitlines()[1:]:
+        if not line.strip():
+            continue
+        if len(line) - len(line.lstrip()) <= indent and not line.lstrip().startswith("-"):
+            break
+        item = re.match(r"^[ \t]*-[ \t]*(.+?)[ \t]*$", line)
+        if item:
+            out.append(item.group(1).strip("'\""))
+        elif len(line) - len(line.lstrip()) <= indent:
+            break
+    return out
+
+
+def _branch_match(patterns, branch):
+    import fnmatch
+    return any(fnmatch.fnmatchcase(branch, pat.replace("**", "*")) for pat in patterns)
+
+
+def workflow_runs_for(text, branch):
+    """Would this workflow report on a PR from `branch` (pull_request,
+    pull_request_target, or a push to the branch)? Read loosely: when in
+    doubt, yes, so an empty read waits rather than passes."""
+    if re.search(r"\bpull_request(_target)?\b", text):
+        return True
+    if re.search(r"(?m)^[ \t]*['\"]?on['\"]?[ \t]*:[ \t]*\[?[^\n]*\bpush\b", text):
+        return True  # on: push / on: [push, ...]: no branch filter possible there
+    m = re.search(r"(?m)^([ \t]*)push[ \t]*:[ \t]*$", text)
+    if not m:
+        return False
+    indent = len(m.group(1))
+    lines = []
+    for line in text[m.end():].splitlines()[1:]:
+        if line.strip() and len(line) - len(line.lstrip()) <= indent:
+            break
+        lines.append(line)
+    block = "\n".join(lines)
+    only = _patterns(block, "branches")
+    ignore = _patterns(block, "branches-ignore")
+    if only is not None:
+        return _branch_match(only, branch)
+    if ignore is not None:
+        return not _branch_match(ignore, branch)
+    if _patterns(block, "tags") is not None:
+        return False  # tags only
+    return True
+
+
+def trunk_requires_checks(repo, base, branch="land/x"):
+    """True when a workflow on the trunk will report on this PR, so an empty
+    read means 'not started yet', never 'nothing to run'. Only the top-level
+    .github/workflows counts: GitHub runs no other."""
     wf = repo.git("ls-tree", "-r", "--name-only", base, "--", ".github/workflows", check=False).stdout.split()
     for f in wf:
-        if f.endswith((".yml", ".yaml")) and "pull_request" in repo.git("show", "%s:%s" % (base, f), check=False).stdout:
+        if f.endswith((".yml", ".yaml")) and workflow_runs_for(repo.git("show", "%s:%s" % (base, f), check=False).stdout, branch):
             return True
     return False
 
@@ -815,64 +1009,90 @@ def classify_rollup(rollup):
     return out.get("checks_state", "fail"), out.get("failing_checks", ""), out.get("pending_checks", "")
 
 
-def rollup_from_json(files, sha=None):
-    """Normalise GitHub reads made with other tooling: a gh rollup, REST
-    check-runs ({check_runs: [...]}) and REST combined status
-    ({statuses: [...]}). Unknown shapes contribute nothing (never a pass)."""
-    rollup, understood = [], False
+def rollup_from_json(files, sha):
+    """Normalise GitHub reads made with other tooling: REST check-runs
+    ({check_runs: [...]}, each with head_sha), REST combined status
+    ({sha, statuses: [...]}) and a gh read ({headRefOid, statusCheckRollup}).
+    Only entries tied to `sha` count; a read with no commit id says nothing
+    about this head and is set aside. Returns (rollup, check_runs): the
+    check runs are counted apart, since a status alone cannot stand for the
+    trunk's own workflows."""
+    rollup, runs, understood = [], 0, False
     for f in files:
         try:
-            d = json.load(open(f))
+            d = json.load(open(f, encoding="utf-8"))
         except (OSError, ValueError) as exc:
             raise Stop(USAGE, "could not read checks JSON %s: %s" % (f, exc))
         if isinstance(d, dict) and isinstance(d.get("statusCheckRollup"), list):
-            rollup += d["statusCheckRollup"]
             understood = True
+            if d.get("headRefOid") != sha:
+                say("ignored=%s (its statusCheckRollup is not tied to %s: read it with headRefOid)" % (f, sha[:12]))
+            else:
+                rollup += d["statusCheckRollup"]
+                runs += sum(1 for c in d["statusCheckRollup"] if isinstance(c, dict) and c.get("__typename") == "CheckRun")
         if isinstance(d, dict) and isinstance(d.get("check_runs"), list):
             understood = True
             for c in d["check_runs"]:
-                if sha and c.get("head_sha") and c.get("head_sha") != sha:
-                    continue  # a result for another commit is no result for this one
+                if c.get("head_sha") != sha:
+                    continue  # another commit's result, or one that does not say
+                runs += 1
                 rollup.append({"__typename": "CheckRun", "name": c.get("name") or "?",
                                "status": str(c.get("status") or "").upper(),
                                "conclusion": str(c.get("conclusion") or "").upper()})
         if isinstance(d, dict) and isinstance(d.get("statuses"), list):
             understood = True
-            if sha and d.get("sha") and d.get("sha") != sha:
-                continue
-            for s in d["statuses"]:
-                rollup.append({"__typename": "StatusContext", "context": s.get("context") or "?",
-                               "state": str(s.get("state") or "").upper()})
+            if d.get("sha") != sha:
+                say("ignored=%s (its statuses are for %s, not %s)" % (f, str(d.get("sha") or "no commit")[:12], sha[:12]))
+            else:
+                for st in d["statuses"]:
+                    rollup.append({"__typename": "StatusContext", "context": st.get("context") or "?",
+                                   "state": str(st.get("state") or "").upper()})
         if isinstance(d, list):
             understood = True
-            rollup += d
+            say("ignored=%s (a bare list is not tied to any commit)" % f)
     if not understood:
-        raise Stop(REFUSED, "the checks JSON is in no shape land.sh knows (gh statusCheckRollup, REST check_runs, REST statuses)")
-    return rollup
+        raise Stop(REFUSED, "the checks JSON is in no shape land.sh knows (REST check_runs, REST combined status, gh headRefOid+statusCheckRollup)")
+    return rollup, runs
 
 
-def wait_checks(repo, pr, base, secs, checks_json=None, sha=None):
-    """'pass' or a Stop. An empty rollup is 'pending' while the trunk runs PR
-    workflows, and never a pass on its own."""
-    need = trunk_requires_checks(repo, base)
+NONE_GRACE_SECS = int(os.environ.get("LAND_NONE_GRACE", "90"))
+
+
+def wait_checks(repo, pr, base, secs, checks_json=None, sha=None, branch="land/x"):
+    """'pass' or a Stop. When a trunk workflow will report on this PR, a pass
+    needs its check runs; with none, 'no checks' passes only once the head is
+    old enough for CI to have registered (external CI included)."""
+    need = trunk_requires_checks(repo, base, branch)
+    ct = repo.git("show", "-s", "--format=%ct", sha, check=False).stdout.strip()
+    pushed_at = int(ct) if ct.isdigit() else 0
+
+    def settled():
+        return time.time() - pushed_at >= NONE_GRACE_SECS
+
     if checks_json:
-        state, failing, pending = classify_rollup(rollup_from_json(checks_json, sha))
-        return _judge(state, failing, pending, need, final=True)
+        rollup, runs = rollup_from_json(checks_json, sha)
+        state, failing, pending = classify_rollup(rollup)
+        if need and runs == 0 and state != "fail":
+            state = "pending" if state == "pending" else "none"
+        return _judge(state, failing, pending, need, final=True, grace_left=not settled())
     deadline = time.time() + secs
     poll = max(1, int(os.environ.get("LAND_POLL", "15")))
-    grace_polls = 2
     while True:
-        r = run(["gh", "pr", "view", str(pr), "--json", "statusCheckRollup"], cwd=repo.top, check=False)
+        r = run(["gh", "pr", "view", str(pr), "--json", "statusCheckRollup,headRefOid"], cwd=repo.top, check=False)
         if r.returncode != 0:
             raise Stop(ERR, "could not read PR #%s checks: %s" % (pr, (r.stderr or "").strip()[:200]))
-        rollup = (json.loads(r.stdout) or {}).get("statusCheckRollup") or []
+        d = json.loads(r.stdout or "{}") or {}
+        if d.get("headRefOid") and d.get("headRefOid") != sha:
+            raise Stop(REFUSED, "PR #%s head is now %s, not %s: something was pushed after the check" % (pr, d["headRefOid"][:12], sha[:12]))
+        rollup = d.get("statusCheckRollup") or []
         state, failing, pending = classify_rollup(rollup)
+        runs = sum(1 for c in rollup if isinstance(c, dict) and c.get("__typename") == "CheckRun")
+        if need and runs == 0 and state != "fail":
+            state = "pending" if state == "pending" else "none"
         final = time.time() >= deadline
-        verdict = _judge(state, failing, pending, need, final=final, grace_left=grace_polls > 0)
+        verdict = _judge(state, failing, pending, need, final=final, grace_left=not settled())
         if verdict == "pass":
             return "pass"
-        if state == "none" and not need:
-            grace_polls -= 1
         time.sleep(poll)
 
 
@@ -882,7 +1102,7 @@ def _judge(state, failing, pending, need, final, grace_left=False):
     if state == "pass":
         return "pass"
     if state == "none" and not need and not grace_left:
-        return "pass"  # no workflow runs on pull requests here: nothing to wait for
+        return "pass"  # nothing runs on this PR here, and CI has had time to register
     if final:
         what = "still running: %s" % pending if state == "pending" else "none reported yet"
         raise Stop(CHECKS, "checks %s. The PR stays open; run `land.sh merge` again later." % what)
@@ -972,7 +1192,7 @@ def settle(repo, branch, landed, merged=True):
     if not cur:
         return ["detached HEAD: landed files kept in the checkout"]
     if cur == repo.trunk and head and not repo.is_ancestor(head, base):
-        return ["local %s has commits that are not on origin: landed files kept; those commits must land through a PR" % cur]
+        return ["local %s has commits that are not on origin: landed files kept. `land.sh sync` moves those commits onto a rescue branch (to propose by PR) and brings the checkout up to date" % cur]
     if os.path.exists(os.path.join(repo.git_dir, "index.lock")):
         return ["index.lock present: landed files kept"]
     report, touched = [], []
@@ -1036,10 +1256,8 @@ def cmd_classify(repo, paths):
     imports = repo.imports() if repo else set()
     worst = OK
     for p in paths:
-        mode = None
-        if repo and os.path.islink(os.path.join(repo.root, p)):
-            mode = "120000"
-        klass, why = classify(p, imports, mode)
+        full = os.path.join(repo.root if repo else os.getcwd(), p)
+        klass, why = classify(p, imports, wt_mode(full) if os.path.lexists(full) else None)
         say("%s\t%s\t%s" % (klass, p, why))
         if klass != "docs":
             worst = REFUSED
@@ -1048,13 +1266,15 @@ def cmd_classify(repo, paths):
 
 
 def land_docs(repo, a, cfg):
-    """The docs landing, end to end."""
+    """The docs landing, end to end. The lock covers building, pushing and
+    opening the PR; the CI wait runs without it."""
     op = repo.op_in_progress()
     if op:
         raise Stop(REFUSED, "a git operation is in progress (%s); finish it first" % op)
     with Lock(repo):
         base = repo.fetch_trunk()
-        land, skip, parent = plan_paths(repo, a.paths, base, "docs")
+        cfg = load_config(repo)  # again, now that the trunk's copy is fresh
+        land, skip, parent = plan_paths(repo, a.paths, base)
         for p, why in skip:
             say("skipped=%s (%s)" % (p, why))
         if not land:
@@ -1072,7 +1292,7 @@ def land_docs(repo, a, cfg):
             except Stop as exc:
                 say("settle=kept: %s" % exc.msg)
             return OK
-        branch = "land/%s-%s-%s" % (slugify(a.skill, 20), stamp(), os.urandom(2).hex())
+        branch = "land/%s-%s-%s" % (slugify(a.skill, 40), stamp(), os.urandom(2).hex())
         push_ref(repo, tip, branch)
         landed = [[p, wt] for p, _, wt in land]
         log_row(repo, "pushed", branch=branch, sha=tip, skill=a.skill, landed=landed, klass="docs")
@@ -1084,7 +1304,7 @@ def land_docs(repo, a, cfg):
             say("body_file=%s" % body, "title=%s" % title, "next=open-pr",
                 "then: open the PR (base %s, head %s) with the session's GitHub tooling and label it docs-land." % (repo.trunk, branch))
             if held:
-                say("      Do NOT merge it: .claude/landing.json holds docs from /%s for a person." % a.skill)
+                say("merge=held (.claude/landing.json asks docs from /%s to wait for a person: do NOT merge it)" % a.skill)
             else:
                 say("      Read the PR (get) and its check runs into files, then run:",
                     "      land.sh merge --pr <N> --sha %s --pr-json <pr file> --checks-json <checks file>" % tip)
@@ -1095,78 +1315,99 @@ def land_docs(repo, a, cfg):
         if held:
             say("merge=held (.claude/landing.json asks docs from this skill to wait for a person)")
             return OK
-        return merge_flow(repo, number, tip, branch, landed, cfg, wait=a.wait, skill=a.skill)
+    return merge_flow(repo, number, tip, branch, landed, cfg, wait=a.wait, skill=a.skill)
 
 
-def pr_base_ok(repo, pr, pr_json=None):
-    """The PR must target the trunk: a squash onto another branch would carry
-    trunk commits into it under a docs label."""
-    base = None
+def pr_facts(repo, pr, sha, pr_json=None):
+    """What the PR itself says: its base, head branch, head commit and
+    title, from gh or from a read made with other tooling (--pr-json). The
+    read must be of this PR and of this head."""
     if gh_ok():
-        r = run(["gh", "pr", "view", str(pr), "--json", "baseRefName"], cwd=repo.top, check=False)
+        r = run(["gh", "pr", "view", str(pr), "--json", "number,baseRefName,headRefName,headRefOid,title"],
+                cwd=repo.top, check=False)
         try:
-            base = json.loads(r.stdout).get("baseRefName")
+            d = json.loads(r.stdout)
         except ValueError:
-            base = None
+            raise Stop(ERR, "could not read PR #%s: %s" % (pr, (r.stderr or r.stdout).strip()[:200]))
+        facts = {"number": d.get("number"), "base": d.get("baseRefName"), "head_ref": d.get("headRefName"),
+                 "head_sha": d.get("headRefOid"), "title": d.get("title") or ""}
     elif pr_json:
         try:
-            d = json.load(open(pr_json))
+            d = json.load(open(pr_json, encoding="utf-8"))
         except (OSError, ValueError) as exc:
             raise Stop(USAGE, "could not read --pr-json %s: %s" % (pr_json, exc))
-        b = d.get("base")
-        base = (b.get("ref") if isinstance(b, dict) else None) or d.get("baseRefName")
+        b, h = d.get("base"), d.get("head")
+        facts = {"number": d.get("number"),
+                 "base": (b.get("ref") if isinstance(b, dict) else None) or d.get("baseRefName"),
+                 "head_ref": (h.get("ref") if isinstance(h, dict) else None) or d.get("headRefName"),
+                 "head_sha": (h.get("sha") if isinstance(h, dict) else None) or d.get("headRefOid"),
+                 "title": d.get("title") or ""}
     else:
         raise Stop(REFUSED, "without gh, pass --pr-json <a read of PR #%s> so its base can be checked" % pr)
-    if base != repo.trunk:
-        raise Stop(REFUSED, "PR #%s targets %s, not %s: a docs landing only merges into the trunk" % (pr, base or "?", repo.trunk))
+    if facts["number"] is not None and str(facts["number"]) != str(pr):
+        raise Stop(REFUSED, "the PR read is of #%s, not #%s" % (facts["number"], pr))
+    if facts["head_sha"] and facts["head_sha"] != sha:
+        raise Stop(REFUSED, "the PR read shows head %s, not %s: read it again after the last push" % (facts["head_sha"][:12], sha[:12]))
+    if facts["base"] != repo.trunk:
+        raise Stop(REFUSED, "PR #%s targets %s, not %s: a docs landing only merges into the trunk" % (pr, facts["base"] or "?", repo.trunk))
+    return facts
 
 
 def merge_flow(repo, pr, sha, branch, landed, cfg, wait=None, checks_json=None, skill="", pr_json=None):
-    if docs_mode(cfg, skill) == "pr":
-        raise Stop(REFUSED, "held for a person: .claude/landing.json asks docs from /%s to wait for review; merge PR #%s by hand"
-                   % (skill or "this skill", pr))
+    """Verify, wait for CI, merge pinned to the head, settle. The lock is
+    taken for the steps that push, merge or touch the checkout, never for
+    the wait."""
     secs = cfg["check_wait_secs"] if wait is None else wait
     touched = [p for p, _ in landed]
-    pr_base_ok(repo, pr, pr_json)
+    facts = pr_facts(repo, pr, sha, pr_json)
+    skill = skill or skill_of(facts.get("head_ref"), facts.get("title"))
+    branch = branch or facts.get("head_ref") or ""
     for _round in range(3):
-        base, fresh, _files = verify(repo, pr, sha, "docs")
+        base, fresh, files = verify(repo, pr, sha, "docs")
+        touched = touched or files  # a clone with no record of this landing gates what the PR carries
+        if docs_mode(load_config(repo), skill) == "pr":
+            raise Stop(REFUSED, "held for a person: .claude/landing.json asks docs from /%s to wait for review; merge PR #%s by hand"
+                       % (skill or "an unnamed skill", pr))
         if not fresh:
             if not branch:
                 raise Stop(CHECKS, "PR #%s is behind %s; sync it (land.sh sync-pr) and read its checks again" % (pr, repo.trunk))
-            new = merge_trunk_into(repo, sha, base, touched)
-            push_ref(repo, new, branch)
-            log_row(repo, "pushed", branch=branch, sha=new, pr=pr, landed=landed, klass="docs")
+            with Lock(repo):
+                base = repo.fetch_trunk()
+                new = merge_trunk_into(repo, sha, base, touched)
+                push_ref(repo, new, branch)
+            log_row(repo, "pushed", branch=branch, sha=new, pr=pr, landed=landed, klass="docs", skill=skill)
             say("synced=%s now carries %s (%s)" % (branch, repo.trunk, new[:12]))
             sha = new
             if checks_json:
                 say("head=%s" % sha)
-                raise Stop(CHECKS, "the landing branch was brought up to date; read its checks again and re-run merge with --sha %s" % sha)
+                raise Stop(CHECKS, "the landing branch was brought up to date; read the PR and its checks again and re-run merge with --sha %s" % sha)
             continue
-        wait_checks(repo, pr, base, secs, checks_json, sha)
-        # The trunk may have moved while CI ran: merge only what contains it.
-        if not repo.is_ancestor(repo.fetch_trunk(), sha):
-            if checks_json:
-                raise Stop(CHECKS, "%s moved while the checks ran; run land.sh merge again to bring it in" % repo.trunk)
-            continue
-        if not gh_ok():
-            log_row(repo, "merge-ready", branch=branch, sha=sha, pr=pr, landed=landed, klass="docs", skill=skill)
-            say("merge=ready", "next=merge",
-                "then: merge PR #%s with the session's GitHub tooling: merge_method=squash, expectedHeadSha=%s," % (pr, sha),
-                "      then run: land.sh settle --pr %s" % pr)
-            return NOGH
-        r = run(["gh", "pr", "merge", str(pr), "--squash", "--delete-branch", "--match-head-commit", sha],
-                cwd=repo.top, check=False)
-        if r.returncode != 0:
-            raise Stop(CHECKS, "the merge was refused (%s). The PR stays open." % (r.stderr or r.stdout).strip()[:300])
-        log_row(repo, "merged", branch=branch, sha=sha, pr=pr, landed=landed, klass="docs")
-        say("merged=#%s" % pr)
-        try:
-            for line in settle(repo, branch, landed):
-                say("settle=" + line)
-            log_row(repo, "settled", branch=branch, pr=pr)
-        except Stop as exc:
-            say("settle=not yet: %s (run land.sh settle --pr %s later)" % (exc.msg, pr))
-        return OK
+        wait_checks(repo, pr, base, secs, checks_json, sha, branch or "land/x")
+        with Lock(repo):
+            # The trunk may have moved while CI ran: merge only what contains it.
+            if not repo.is_ancestor(repo.fetch_trunk(), sha):
+                if checks_json:
+                    raise Stop(CHECKS, "%s moved while the checks ran; run land.sh merge again to bring it in" % repo.trunk)
+                continue
+            if not gh_ok():
+                log_row(repo, "merge-ready", branch=branch, sha=sha, pr=pr, landed=landed, klass="docs", skill=skill)
+                say("merge=ready", "next=merge",
+                    "then: merge PR #%s with the session's GitHub tooling: merge_method=squash, expectedHeadSha=%s," % (pr, sha),
+                    "      then run: land.sh settle --pr %s" % pr)
+                return NOGH
+            r = run(["gh", "pr", "merge", str(pr), "--squash", "--delete-branch", "--match-head-commit", sha],
+                    cwd=repo.top, check=False)
+            if r.returncode != 0:
+                raise Stop(CHECKS, "the merge was refused (%s). The PR stays open." % (r.stderr or r.stdout).strip()[:300])
+            log_row(repo, "merged", branch=branch, sha=sha, pr=pr, landed=landed, klass="docs")
+            say("merged=#%s" % pr)
+            try:
+                for line in settle(repo, branch, landed):
+                    say("settle=" + line)
+                log_row(repo, "settled", branch=branch, pr=pr)
+            except Stop as exc:
+                say("settle=not yet: %s (run land.sh settle --pr %s later)" % (exc.msg, pr))
+            return OK
     raise Stop(CHECKS, "the trunk kept moving; PR #%s stays open" % pr)
 
 
@@ -1178,20 +1419,27 @@ def cmd_merge(repo, a, cfg):
     landed = (row or {}).get("landed") or []
     branch = (row or {}).get("branch") or ""
     if row and row.get("pr") is None:
-        log_row(repo, "pr-open", branch=branch, sha=a.sha, pr=a.pr, landed=landed, klass="docs")
-    with Lock(repo):
-        return merge_flow(repo, a.pr, a.sha, branch, landed, cfg, wait=a.wait, checks_json=a.checks_json or None,
-                          skill=(row or {}).get("skill") or "", pr_json=a.pr_json or None)
+        log_row(repo, "pr-open", branch=branch, sha=a.sha, pr=a.pr, landed=landed, klass="docs", skill=row.get("skill"))
+    return merge_flow(repo, a.pr, a.sha, branch, landed, cfg, wait=a.wait, checks_json=a.checks_json or None,
+                      skill=(row or {}).get("skill") or "", pr_json=a.pr_json or None)
 
 
 def cmd_settle(repo, a):
     """After a merge made with other tooling. Matches the exact PR or branch,
     only for a landing whose files are on record, and deletes the branch
     only once git shows the content on the trunk."""
+    want_branch = a.branch
+    if not want_branch and a.pr is not None and gh_ok():
+        r = run(["gh", "pr", "view", str(a.pr), "--json", "headRefName"], cwd=repo.top, check=False)
+        try:
+            want_branch = json.loads(r.stdout).get("headRefName") or ""
+        except ValueError:
+            want_branch = ""
     rows = [r for r in log_rows(repo)
-            if (a.pr is not None and r.get("pr") == a.pr) or (a.branch and r.get("branch") == a.branch)]
+            if (a.pr is not None and r.get("pr") == a.pr) or (want_branch and r.get("branch") == want_branch)]
     if not rows:
-        raise Stop(USAGE, "no landing on record for %s" % (("PR #%s" % a.pr) if a.pr else a.branch))
+        raise Stop(USAGE, "no landing on record for %s%s" % (("PR #%s" % a.pr) if a.pr else a.branch,
+                   "" if want_branch else " (a PR opened with other tooling: pass --branch <its head branch>)"))
     br = rows[-1].get("branch")
     landed = []
     for r in log_rows(repo):
@@ -1258,15 +1506,14 @@ def cmd_sync(repo, a):
         say("synced=unborn HEAD now at %s" % repo.trunk)
         return OK
     if cur == repo.trunk and not repo.is_ancestor(head, base):
-        ahead = repo.git("rev-list", "--count", "%s..%s" % (base, head)).stdout.strip()
-        raise Stop(REFUSED, "local %s has %s commit(s) that are not on origin. They must land through a PR: land.sh pr --switch"
-                   % (cur, ahead))
+        return rescue_trunk(repo, head, base)
     if repo.is_ancestor(base, head):
         say("sync=up to date")
         return OK
     if not cur:
         raise Stop(REFUSED, "detached HEAD: check out a branch first")
     env = repo.identity_env()
+    align_identical(repo, head, base)
     if cur == repo.trunk:
         r = repo.git("merge", "-q", "--ff-only", base, check=False, env=env)
         if r.returncode != 0:
@@ -1292,15 +1539,80 @@ def cmd_sync(repo, a):
     return OK
 
 
+def align_identical(repo, head, base):
+    """Files the incoming trunk changes that this checkout already holds
+    byte for byte (a landing merged elsewhere, never settled): put them back
+    to HEAD's state so the fast-forward, merge or reset can write them.
+    Nothing is lost: what arrives is the same content."""
+    moved = []
+    mb = repo.git("merge-base", head, base, check=False).stdout.strip() or head
+    # Only what the trunk changed since this checkout left it: a branch's own
+    # changes (and an uncommitted revert of them) are never touched.
+    for f in [x for x in repo.git("diff", "--name-only", "-z", mb, base).stdout.split("\0") if x]:
+        wt = repo.wt_blob(f)
+        hb = repo.blob_at(head, f)
+        if wt is None or wt == hb or wt != repo.blob_at(base, f):
+            continue
+        if hb:
+            repo.git("checkout", "-q", head, "--", f)
+        else:
+            repo.git("rm", "-q", "--cached", "--ignore-unmatch", "--", f, check=False)
+            full = os.path.join(repo.top, f)
+            if os.path.lexists(full):
+                os.unlink(full)
+        moved.append(f)
+    return moved
+
+
+def rescue_trunk(repo, head, base):
+    """The local trunk has commits origin does not. The trunk only moves
+    through a merged PR, so they cannot stay there; nothing may be lost
+    either. If origin already carries their content (a squash-merge of the
+    branch they went up on), the local trunk simply moves to origin.
+    Otherwise they go to a rescue/ branch first (pushed, so a container that
+    ends does not take them along) to be proposed by PR. Either way the
+    trunk is then moved to origin, keeping uncommitted changes."""
+    trunk = repo.trunk
+    mb = repo.git("merge-base", head, base).stdout.strip()
+    count = repo.git("rev-list", "--count", "%s..%s" % (base, head)).stdout.strip()
+    changed = [f for f in repo.git("diff", "--name-only", "-z", mb, head).stdout.split("\0") if f]
+    on_origin = all(repo.blob_at(base, f) == repo.blob_at(head, f) for f in changed)
+    if on_origin:
+        log_row(repo, "trunk-reset", branch=trunk, old=head, new=base)
+        say("local=%s commit(s) on %s are already on origin in content (was %s; `git branch <name> %s` recovers them)"
+            % (count, trunk, head[:12], head[:12]))
+    else:
+        rescue = "rescue/%s-%s" % (slugify(trunk, 20), stamp())
+        repo.git("branch", rescue, head)
+        log_row(repo, "rescued", branch=rescue, sha=head)
+        pushed = repo.git("push", "-q", "origin", "%s:refs/heads/%s" % (head, rescue), check=False)
+        say("rescued=%s commit(s) of local %s onto %s%s" % (count, trunk, rescue,
+            " (pushed)" if pushed.returncode == 0 else " (local only: the push failed: %s)" % (pushed.stderr or "").strip()[:160]))
+        say("next=propose them: `git checkout %s` then /push, or land.sh pr from that branch" % rescue)
+    align_identical(repo, head, base)
+    r = repo.git("reset", "-q", "--keep", base, check=False)
+    if r.returncode != 0:
+        raise Stop(CONFLICT, "could not move %s to origin/%s: your uncommitted changes overlap what it changes (%s). Commit or put them aside, then sync again."
+                   % (trunk, trunk, (r.stderr or r.stdout).strip()[:200]))
+    say("synced=%s now at origin/%s (%s)" % (trunk, trunk, base[:12]))
+    return OK
+
+
 def branch_name(a, repo, stable=False):
     """task/<ID>-<slug> for task work; chore/<skill>-<slug> otherwise. A
-    stable name (isolated PRs) lets a later run update the same PR."""
+    stable name (PRs built aside) lets a later run update the same PR; it
+    gets a short hash of the exact title whenever the slug had to drop or
+    change characters, so two titles never share a branch."""
     if a.branch:
         return a.branch
     if a.tasks:
         return "task/%s-%s" % (a.tasks[0], slugify(a.title, 32))
     if stable:
-        return "chore/%s-%s" % (slugify(a.skill, 20), slugify(a.title, 32))
+        slug = slugify(a.title, 48)
+        plain = re.sub(r"\s+", "-", (a.title or "").strip().lower())
+        if slug != plain:
+            slug = "%s-%s" % (slug, hashlib.sha1((a.title or "").encode("utf-8")).hexdigest()[:6])
+        return "chore/%s-%s" % (slugify(a.skill, 40), slug)
     return "chore/%s-%s-%s" % (slugify(a.skill, 20), slugify(a.title, 24), stamp())
 
 
@@ -1325,45 +1637,307 @@ def open_code_pr(repo, a, branch, tip, base):
     return OK
 
 
-def pr_isolated(repo, a, base):
-    """From the trunk: build the PR branch away from the checkout — the
-    named files' changes replayed onto the latest trunk (or onto the branch's
-    earlier PR, brought up to date) — push it, open or update the PR. The
-    checkout is not touched; `land.sh settle --pr N` tidies it after the
-    merge."""
+# ── PRs built aside: isolated and rolling ─────────────────────────────────
+#
+# From the trunk (or with --rolling, from anywhere), a code PR is built away
+# from the checkout on a stable branch that a later run updates. Each named
+# path is resolved on its own: a version on the branch that this checkout has
+# seen (its HEAD's, one it pushed, the one `land.sh pending` brought in) is
+# superseded by the checkout's copy, so a revert is a revert; a version it
+# has not seen (another session's, a reviewer's) is merged with it, line by
+# line for append-only files, and a real conflict stops the run.
+
+UNION_PATHS = re.compile(r"^(docs/notes/INDEX\.md|\.claude/inbox/[^/]+\.md|tasks/history\.tsv|tasks/ROADMAP\.md|tasks/AUDIT\.md)$")
+
+
+def remote_tip(repo, branch):
+    """The branch's tip on origin (fetched), or None when it does not exist."""
+    if repo.git("ls-remote", "--exit-code", "origin", "refs/heads/" + branch, check=False).returncode != 0:
+        return None
+    ref = "refs/land/aside/%s" % branch
+    repo.git("fetch", "-q", "origin", "+refs/heads/%s:%s" % (branch, ref))
+    return repo.git("rev-parse", ref).stdout.strip()
+
+
+def branch_pr_state(repo, branch):
+    """'open', 'merged' or 'closed' for the newest PR from `branch`, 'none'
+    when it has none, None when that cannot be known (no gh)."""
+    if not gh_ok():
+        return None
+    r = run(["gh", "pr", "list", "--head", branch, "--state", "all", "--limit", "1",
+             "--json", "number,state,url"], cwd=repo.top, check=False)
+    try:
+        rows = json.loads(r.stdout) if r.returncode == 0 else None
+    except ValueError:
+        rows = None
+    if rows is None:
+        return None
+    return str(rows[0].get("state") or "").lower() if rows else "none"
+
+
+def aside_start(repo, branch, base, touched):
+    """(tip, start, superseded, state). `start` is what the new commit is
+    built on: the branch brought up to date with the trunk, or the trunk
+    when there is no branch or its PR is over (merged, or closed without
+    merging: its content is not carried forward)."""
+    tip = remote_tip(repo, branch)
+    if not tip:
+        return None, base, False, None
+    state = branch_pr_state(repo, branch)
+    if state in ("merged", "closed") or repo.is_ancestor(tip, base):
+        return tip, base, True, state
+    return tip, merge_trunk_into(repo, tip, base, touched), False, state
+
+
+def pending_file(repo, branch):
+    return os.path.join(repo.state, "pending", branch.replace("/", "__") + ".json")
+
+
+def load_pending(repo, branch):
+    try:
+        return json.load(open(pending_file(repo, branch), encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def pushed_blobs(repo, branch):
+    """path -> blobs this checkout pushed on `branch`, oldest first."""
+    out = {}
+    for r in log_rows(repo):
+        if r.get("branch") == branch and r.get("event") == "pushed":
+            for p, b in r.get("landed") or []:
+                out.setdefault(p, [])
+                if b not in out[p]:
+                    out[p].append(b)
+    return out
+
+
+def merge3(repo, base_blob, ours_blob, theirs_blob, union=False):
+    """git merge-file over three blobs (None = empty). The merged blob, or
+    None when they conflict."""
+    d = tempfile.mkdtemp(prefix="land-m3-", dir=repo.state)
+    try:
+        names = []
+        for name, blob in (("ours", ours_blob), ("base", base_blob), ("theirs", theirs_blob)):
+            f = os.path.join(d, name)
+            data = git_bytes(repo, "cat-file", "blob", blob).stdout if blob else b""
+            with open(f, "wb") as fh:
+                fh.write(data)
+            names.append(f)
+        args = ["merge-file", "-p"] + (["--union"] if union else []) + names
+        r = git_bytes(repo, *args, check=False)
+        if r.returncode != 0:
+            return None
+        return git_bytes(repo, "hash-object", "-w", "--stdin", input_bytes=r.stdout).stdout.decode().strip()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def resolve_aside(repo, paths, start, branch, pend):
+    """[(path, (mode, blob) | None)] the aside branch must change."""
+    head = repo.head()
+    pushed = pushed_blobs(repo, branch)
+    files = (pend or {}).get("files") or {}
+    out = []
+    for p in paths:
+        tp = repo.top_path(p)
+        w = wt_entry(repo, tp)
+        W = w[1] if w else None
+        O = repo.blob_at(start, tp)
+        if W == O:
+            continue
+        H = repo.blob_at(head, tp) if head else None
+        seen = set([H]) | set(pushed.get(p, []))
+        if p in files:
+            seen.add(files[p])
+        if O in seen:
+            out.append((p, w))
+            continue
+        B = files[p] if p in files else (pushed[p][-1] if pushed.get(p) else H)
+        if W == B:
+            continue  # this checkout did not change it: the branch's copy stays
+        if W is None or O is None:
+            raise Stop(CONFLICT, "%s: the PR branch %s and this checkout both changed it, one of them by deleting it. Run "
+                       "`land.sh pending` to start from the PR's copy, redo the change, then run this again." % (p, branch))
+        merged = merge3(repo, B, O, W, union=bool(UNION_PATHS.match(p)))
+        if merged is None:
+            raise Stop(CONFLICT, "%s: the PR branch %s has changes this checkout never saw, on the same lines as yours. Nothing was "
+                       "pushed. Run `land.sh pending` to start from the PR's copy, redo the change, then run this again." % (p, branch))
+        say("merged=%s (with changes on %s that this checkout had not seen)" % (p, branch))
+        out.append((p, (w[0], merged)))
+    return out
+
+
+def commit_aside(repo, start, changes, message, extra_parent=None):
+    """A commit on `start` with `changes` applied (a merge with
+    `extra_parent` first when the branch is carried over a finished PR). None
+    when it would change nothing."""
+    env = repo.identity_env(scratch=True)
+    idx = tempfile.NamedTemporaryFile(prefix="land-idx-", dir=repo.state, delete=False)
+    idx.close()
+    env["GIT_INDEX_FILE"] = idx.name
+    try:
+        g = lambda *a, **k: run(["git", "-C", repo.top] + list(a), env=env, **k)
+        g("read-tree", start)
+        for p, entry in changes:
+            tp = repo.top_path(p)
+            if entry is None:
+                g("update-index", "--force-remove", "--", tp)
+            else:
+                g("update-index", "--add", "--cacheinfo", "%s,%s,%s" % (entry[0], entry[1], tp))
+        tree = g("write-tree").stdout.strip()
+        if tree == repo.git("rev-parse", start + "^{tree}").stdout.strip():
+            return None
+        parents = (["-p", extra_parent] if extra_parent else []) + ["-p", start]
+        return g("commit-tree", tree, *parents, "-m", message).stdout.strip()
+    finally:
+        os.unlink(idx.name)
+
+
+def restore_checkout(repo, paths):
+    """After a rolling push: the content is on the PR branch, so the
+    checkout goes back to its own HEAD for these files (a copy is kept in
+    the land state). `land.sh pending` brings the PR's copy back."""
+    head = repo.head()
+    keep = os.path.join(repo.state, "stash", stamp())
+    for p in paths:
+        tp = repo.top_path(p)
+        full = os.path.join(repo.top, tp)
+        if os.path.lexists(full) and not os.path.isdir(full):
+            os.makedirs(os.path.dirname(os.path.join(keep, tp)), exist_ok=True)
+            shutil.copy2(full, os.path.join(keep, tp), follow_symlinks=False)
+        if head and repo.blob_at(head, tp):
+            repo.git("checkout", "-q", head, "--", tp)
+        else:
+            repo.git("rm", "-q", "--cached", "--ignore-unmatch", "--", tp, check=False)
+            if os.path.lexists(full):
+                os.unlink(full)
+    return keep
+
+
+def pr_aside(repo, a, base, rolling=False):
+    """Build the PR branch away from the checkout, push it, open or update
+    the PR. Isolated (from the trunk): the checkout keeps its edits, and
+    `land.sh settle --branch <b>` tidies it after the merge. Rolling: the
+    checkout is put back to its HEAD for these files."""
     branch = branch_name(a, repo, stable=True)
-    land, skip, parent = plan_paths(repo, a.paths, base, "any")
-    for p, why in skip:
-        say("skipped=%s (%s)" % (p, why))
-    if not land:
+    paths = []
+    for p in a.paths:
+        if repo.git("check-ignore", "-q", "--", repo.top_path(p), check=False).returncode == 0:
+            say("skipped=%s (ignored by .gitignore)" % p)
+            continue
+        paths.append(p)
+    if not paths:
         say("result=nothing to land")
         return OK
-    touched = [p for p, _, _ in land]
-    start = base
-    if repo.git("ls-remote", "--exit-code", "origin", "refs/heads/" + branch, check=False).returncode == 0:
-        ref = "refs/land/iso-%d" % os.getpid()
-        repo.git("fetch", "-q", "origin", "+refs/heads/%s:%s" % (branch, ref))
-        tip0 = repo.git("rev-parse", ref).stdout.strip()
-        repo.git("update-ref", "-d", ref, check=False)
-        start = merge_trunk_into(repo, tip0, base, touched)
+    tip, start, superseded, state = aside_start(repo, branch, base, paths)
+    if tip and superseded:
+        say("previous=%s (its PR is %s): starting again from %s" % (branch, state or "in the trunk", repo.trunk))
+    elif tip:
         say("reusing=%s (brought up to date with %s)" % (branch, repo.trunk))
+    pend = load_pending(repo, branch)
+    changes = resolve_aside(repo, paths, start, branch, pend)
+    for p, entry in changes:
+        if entry and entry[0] != "120000":
+            text = git_bytes(repo, "cat-file", "blob", entry[1]).stdout.decode("utf-8", "replace")
+            hit = secret_hit(text)
+            if hit:
+                raise Stop(REFUSED, "%s looks like it holds a credential (%s); nothing was pushed" % (p, hit))
     msg = a.message or ("%s: %s" % (a.tasks[0], a.title) if a.tasks else "%s: %s" % (a.skill, a.title))
-    head = repo.head()
-    untouched_by_trunk = all(repo.blob_at(parent, repo.top_path(p)) == repo.blob_at(base, repo.top_path(p)) for p in touched)
-    if start != base and untouched_by_trunk:
-        # Updating our own PR: the trunk has not changed these files since the
-        # checkout, so their current content goes straight onto the branch.
-        tip = build_commit(repo, land, base, msg, parent=start)
-        if repo.git("diff", "--quiet", start, tip, check=False).returncode == 0:
-            tip = start
+    new = commit_aside(repo, start, changes, msg, extra_parent=tip if superseded else None)
+    if new is None:
+        new = start
+    touched = [p for p, _ in changes]
+    if any(p.startswith("tasks/") for p in touched) and new != start:
+        gate_commit(repo, new, base, touched)
+    if new == base:
+        say("result=nothing to propose: these files match %s" % repo.trunk)
+        if rolling:
+            restore_checkout(repo, paths)
+            _drop_pending(repo, branch)
+        return OK
+    if new != tip:
+        try:
+            push_ref(repo, new, branch)
+        except Stop as exc:
+            if exc.code == ERR and re.search(r"non-fast-forward|fetch first|rejected", exc.msg):
+                raise Stop(CONFLICT, "the PR branch %s moved while this ran (another session pushed to it). Nothing was lost; run this again." % branch)
+            raise
+    carried = {p: e[1] if e else None for p, e in changes}
+    landed = [[p, carried.get(p, repo.blob_at(new, repo.top_path(p)))] for p in paths]
+    log_row(repo, "pushed", branch=branch, sha=new, skill=a.skill, klass="code", landed=landed, rolling=rolling)
+    say("pushed=%s" % branch if new != tip else "unchanged=%s (it already carries these files)" % branch, "head=%s" % new)
+    if rolling:
+        keep = restore_checkout(repo, paths)
+        _drop_pending(repo, branch)
+        say("checkout=restored to HEAD for %s (the content is on %s; a copy is in %s; `land.sh pending` brings the PR's copy back)"
+            % (", ".join(paths), branch, keep))
     else:
-        c = build_commit(repo, land, base, msg, parent=parent)
-        tip = pick_onto(repo, c, start, touched, msg) or start
-    push_ref(repo, tip, branch)
-    landed = [[p, wt] for p, _, wt in land]
-    log_row(repo, "pushed", branch=branch, sha=tip, skill=a.skill, klass="code", landed=landed)
-    say("pushed=%s" % branch, "head=%s" % tip, "checkout=untouched (you stay on %s)" % (repo.branch() or "HEAD"))
-    return open_code_pr(repo, a, branch, tip, base)
+        say("checkout=untouched (you stay on %s; after the merge: land.sh settle --branch %s)" % (repo.branch() or "HEAD", branch))
+    return open_code_pr(repo, a, branch, new, base)
+
+
+def _drop_pending(repo, branch):
+    try:
+        os.unlink(pending_file(repo, branch))
+    except OSError:
+        pass
+
+
+def gate_commit(repo, commit, base, touched):
+    """The ledger gate for a commit built outside a scratch worktree."""
+    with Scratch(repo, base) as sb:
+        baseline = check_tasks_errors(os.path.join(sb.path, repo.prefix) if repo.prefix else sb.path)
+    with Scratch(repo, commit) as sc:
+        gate_tree(sc, repo, touched, baseline)
+
+
+def cmd_pending(repo, a):
+    """Before editing a file a rolling PR carries: bring the PR's copy into
+    the checkout (or the trunk's, when there is no open PR), merged with any
+    uncommitted changes of yours. Recorded, so the next `land.sh pr
+    --rolling` knows what the edit started from."""
+    with Lock(repo):
+        base = repo.fetch_trunk()
+        branch = branch_name(a, repo, stable=True)
+        tip, start, superseded, state = aside_start(repo, branch, base, a.paths)
+        source = "the open PR on %s" % branch if tip and not superseded else repo.trunk
+        head = repo.head()
+        files = {}
+        for p in a.paths:
+            tp = repo.top_path(p)
+            full = os.path.join(repo.top, tp)
+            S = repo.blob_at(start, tp)
+            W = repo.wt_blob(tp)
+            H = repo.blob_at(head, tp) if head else None
+            files[p] = S
+            if W == S:
+                say("file=%s (already %s's copy)" % (p, source))
+                continue
+            if S == H:
+                say("file=%s (kept: your copy already has everything %s has)" % (p, source))
+                continue
+            if W != H:
+                merged = merge3(repo, H, S, W, union=bool(UNION_PATHS.match(p))) if W is not None else None
+                if merged is None:
+                    raise Stop(CONFLICT, "%s has uncommitted changes that overlap %s's copy. Nothing was changed. Propose yours first "
+                               "(land.sh pr --rolling), or put them aside, then run pending again." % (p, source))
+                S_write, how = merged, "merged with your uncommitted changes"
+            else:
+                S_write, how = S, "from %s" % source
+            if S_write is None:
+                if os.path.lexists(full):
+                    os.unlink(full)
+            else:
+                os.makedirs(os.path.dirname(full) or ".", exist_ok=True)
+                with open(full, "wb") as fh:
+                    fh.write(git_bytes(repo, "cat-file", "blob", S_write).stdout)
+            say("file=%s (%s)" % (p, how))
+        os.makedirs(os.path.dirname(pending_file(repo, branch)), exist_ok=True)
+        with open(pending_file(repo, branch), "w", encoding="utf-8") as fh:
+            json.dump({"branch": branch, "source": start, "files": files}, fh)
+        say("pending=%s" % branch, "source=%s" % ("pr" if tip and not superseded else "trunk"))
+        return OK
 
 
 def cmd_pr(repo, a):
@@ -1390,38 +1964,66 @@ def cmd_pr(repo, a):
         head = repo.head()
         tps = [repo.top_path(p) for p in a.paths]
         on_trunk = (cur == repo.trunk) or not cur
+        if a.rolling:
+            return pr_aside(repo, a, base, rolling=True)
         if on_trunk and not a.switch:
-            return pr_isolated(repo, a, base)
+            return pr_aside(repo, a, base)
         env = repo.identity_env()
         branch = cur
         if on_trunk:
             branch = branch_name(a, repo)
-            overlap = []
-            if head:
-                if not repo.is_ancestor(head, base):
-                    raise Stop(REFUSED, "local %s has commits that are not on origin; land.sh pr without --switch replays only the named files"
-                               % (cur or "HEAD"))
-                changed = set(repo.git("diff", "--name-only", head, base).stdout.split())
-                all_dirty = set(repo.git("diff", "--name-only", "HEAD").stdout.split()) | \
-                    set(repo.git("ls-files", "--others", "--exclude-standard").stdout.split())
-                overlap = sorted(changed & all_dirty)
-            if overlap:
-                raise Stop(REFUSED, "the trunk moved under uncommitted files: %s. Run land.sh pr without --switch, or sync first." % ", ".join(overlap[:6]))
-            r = repo.git("switch", "-q", "-c", branch, "--no-track", base, check=False)
-            if r.returncode != 0:
-                raise Stop(REFUSED, "could not cut %s from %s: %s" % (branch, repo.trunk, (r.stderr or "").strip()[:200]))
-            say("branch=%s cut from %s (%s), carrying your changes" % (branch, repo.trunk, base[:12]))
+            carry = head is not None and not repo.is_ancestor(head, base)
+            if carry:
+                # Local trunk commits origin does not have: they ride this
+                # branch into the PR, and the trunk goes back to origin.
+                r = repo.git("switch", "-q", "-c", branch, "--no-track", check=False)
+                if r.returncode != 0:
+                    raise Stop(REFUSED, "could not cut %s: %s" % (branch, (r.stderr or "").strip()[:200]))
+                if cur == repo.trunk:
+                    repo.git("branch", "-f", repo.trunk, base)
+                n = repo.git("rev-list", "--count", "%s..%s" % (base, head)).stdout.strip()
+                say("branch=%s cut from your %s, carrying its %s commit(s) not on origin; %s is back at origin/%s"
+                    % (branch, cur or "HEAD", n, repo.trunk if cur == repo.trunk else "HEAD", repo.trunk))
+            else:
+                overlap = []
+                if head:
+                    changed = set(repo.git("diff", "--name-only", head, base).stdout.split())
+                    all_dirty = set(repo.git("diff", "--name-only", "HEAD").stdout.split()) | \
+                        set(repo.git("ls-files", "--others", "--exclude-standard").stdout.split())
+                    overlap = sorted(changed & all_dirty)
+                if overlap:
+                    raise Stop(REFUSED, "the trunk moved under uncommitted files: %s. Run land.sh pr without --switch, or sync first." % ", ".join(overlap[:6]))
+                r = repo.git("switch", "-q", "-c", branch, "--no-track", base, check=False)
+                if r.returncode != 0:
+                    raise Stop(REFUSED, "could not cut %s from %s: %s" % (branch, repo.trunk, (r.stderr or "").strip()[:200]))
+                say("branch=%s cut from %s (%s), carrying your changes" % (branch, repo.trunk, base[:12]))
         head = repo.head()
         dirty = [tp for tp in tps if repo.wt_blob(tp) != (repo.blob_at(head, tp) if head else None)]
+        msg = a.message or ("%s: %s" % (a.tasks[0], a.title) if a.tasks else "%s: %s" % (a.skill, a.title))
         if dirty:
             repo.git("add", "--", *tps)
-            msg = a.message or ("%s: %s" % (a.tasks[0], a.title) if a.tasks else "%s: %s" % (a.skill, a.title))
             r = repo.git("commit", "-q", "-m", msg, "--only", "--", *tps, check=False, env=env)
             if r.returncode != 0:
                 raise Stop(ERR, "commit failed: %s" % (r.stderr or r.stdout).strip()[:300])
             say("committed=%s" % repo.git("rev-parse", "--short", "HEAD").stdout.strip())
         elif head and repo.is_ancestor(head, base):
             raise Stop(REFUSED, "nothing to land: the named files match %s and the branch adds nothing" % repo.trunk)
+        # Someone else may have pushed to this branch (/peer-review and
+        # /auto-merge bring the trunk in with sync-pr): take theirs first, by
+        # a merge, so the push is a fast-forward.
+        if repo.git("ls-remote", "--exit-code", "origin", "refs/heads/" + branch, check=False).returncode == 0:
+            repo.git("fetch", "-q", "origin", "+refs/heads/%s:refs/remotes/origin/%s" % (branch, branch))
+            theirs = "refs/remotes/origin/%s" % branch
+            if not repo.is_ancestor(theirs, "HEAD"):
+                r = repo.git("merge", "-q", "--no-edit", theirs, check=False, env=env)
+                if r.returncode != 0:
+                    conflicted = repo.git("diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
+                    if os.path.exists(os.path.join(repo.git_dir, "MERGE_HEAD")):
+                        repo.git("merge", "--abort", check=False)
+                    raise Stop(CONFLICT if conflicted else ERR,
+                               "origin/%s has commits that conflict with yours (%s). Your commit is on %s; merge origin/%s by hand and re-run."
+                               % (branch, ", ".join(conflicted) or (r.stderr or r.stdout).strip()[:160], branch, branch))
+                say("took=the commits pushed to %s elsewhere" % branch)
         if not repo.is_ancestor(base, repo.head()):
             r = repo.git("merge", "-q", "--no-edit", base, check=False, env=env)
             if r.returncode != 0:
@@ -1450,7 +2052,8 @@ def cmd_auto(repo, a, cfg):
     imports = repo.imports()
     docs, code = [], []
     for p in a.paths:
-        mode = "120000" if os.path.islink(os.path.join(repo.root, p)) else None
+        full = os.path.join(repo.root, p)
+        mode = wt_mode(full) if os.path.lexists(full) else None
         (docs if classify(p, imports, mode)[0] == "docs" else code).append(p)
     say("docs_paths=%s" % " ".join(docs), "code_paths=%s" % " ".join(code))
     worst = OK
@@ -1475,12 +2078,15 @@ def cmd_status(repo):
     say("trunk=%s" % repo.trunk, "install=%s" % repo.root, "prefix=%s" % (repo.prefix or "(top)"))
     hooks_dir = repo.git("rev-parse", "--git-path", "hooks").stdout.strip()
     pp = os.path.join(repo.top, hooks_dir, "pre-push") if not os.path.isabs(hooks_dir) else os.path.join(hooks_dir, "pre-push")
-    layer = "installed" if os.path.exists(pp) and PREPUSH_BEGIN in open(pp, errors="replace").read() else "ABSENT"
+    layer = "installed" if os.path.exists(pp) and PREPUSH_BEGIN in open(pp, encoding="utf-8", errors="replace").read() else "ABSENT"
     hp = repo.git("config", "core.hooksPath", check=False).stdout.strip()
     say("guard_prepush=%s%s" % (layer, (" (core.hooksPath=%s)" % hp) if hp else ""))
-    settings = os.path.join(repo.root, ".claude", "settings.json")
-    txt = open(settings).read() if os.path.exists(settings) else ""
-    say("guard_claude_hooks=%s" % ("installed" if re.search(r'land\.sh"? guard-bash', txt) else "ABSENT"))
+    have_hooks = land_hook_commands(repo.root)
+    missing = sorted(set(["guard-bash", "guard-edit", "guard-mcp", "session"]) - have_hooks)
+    say("guard_claude_hooks=%s" % ("installed" if not missing else "ABSENT: " + ", ".join(missing)))
+    lock = os.path.join(repo.state, "lock", "owner")
+    if os.path.exists(lock):
+        say("lock=%s" % open(lock, encoding="utf-8", errors="replace").read().strip())
     for r in inflight(repo):
         say("inflight=%s pr=%s state=%s since=%s" % (r.get("branch"), r.get("pr") or "-", r.get("event"), r.get("at")))
     if gh_ok():
@@ -1524,7 +2130,7 @@ def protected_names(repo):
         names.add(repo.trunk)
         cache = os.path.join(repo.state, "trunk")
         try:
-            names.add(open(cache).read().strip())
+            names.add(open(cache, encoding="utf-8", errors="replace").read().strip())
         except OSError:
             pass
     names.discard("")
@@ -1672,6 +2278,25 @@ def _is_no_verify(tok):
     return len(tok) >= 5 and "--no-verify".startswith(tok) and tok.startswith("--no-v")
 
 
+def _switch_target(sub, args):
+    """The branch `git checkout`/`git switch` moves to, when it says so; None
+    for a file checkout or anything unclear (the pre-push hook still sees the
+    real destination of a later push)."""
+    create = ("-b", "-B", "--orphan") if sub == "checkout" else ("-c", "-C", "--create", "--force-create", "--orphan")
+    for i, t in enumerate(args):
+        if t == "--":
+            return None
+        if t in create and i + 1 < len(args):
+            return args[i + 1]
+        for c in create:
+            if c.startswith("--") and t.startswith(c + "="):
+                return t.split("=", 1)[1]
+    pos = [t for t in args if not t.startswith("-")]
+    if len(pos) == 1 and "--" not in args:
+        return pos[0]
+    return None
+
+
 def cmd_guard_bash(stdin_text):
     """PreToolUse on Bash. The pre-push hook is what sees a push's real
     destination; this denies the ways around it, plus the direct pushes it
@@ -1682,29 +2307,71 @@ def cmd_guard_bash(stdin_text):
         return OK
     cmd = ((payload.get("tool_input") or {}).get("command") or "")
     cwd = payload.get("cwd") or os.getcwd()
+    why = _bash_reason(cmd, cwd)
+    return deny(why) if why else OK
+
+
+KNOWN_GIT = set("""add am apply archive bisect blame branch bundle cat-file check-ignore checkout cherry cherry-pick
+clean clone commit commit-tree config count-objects describe diff diff-tree fetch for-each-ref format-patch fsck gc
+grep hash-object help init interpret-trailers log ls-files ls-remote ls-tree maintenance merge merge-base merge-file
+mktree mv name-rev notes prune pull push range-diff read-tree rebase reflog remote repack replace reset restore
+rev-list rev-parse revert rm send-pack shortlog show show-ref sparse-checkout stash status submodule switch
+symbolic-ref tag update-index update-ref var verify-commit version whatchanged worktree write-tree""".split())
+
+
+def _expand_alias(sub, args, gopts, cwd):
+    """A git alias, inline (-c alias.X=...) or configured: ("git", sub, args)
+    or ("shell", text); None when `sub` is no alias."""
+    val = ""
+    for k in range(len(gopts) - 1):
+        if gopts[k] == "-c" and gopts[k + 1].lower().startswith("alias.%s=" % sub.lower()):
+            val = gopts[k + 1].split("=", 1)[1]
+    if not val:
+        try:
+            r = run(["git", "-C", cwd, "config", "--get", "alias." + sub], check=False)
+            val = r.stdout.strip() if r.returncode == 0 else ""
+        except OSError:
+            val = ""
+    if not val:
+        return None
+    if val.startswith("!"):
+        return ("shell", val[1:])
+    import shlex
+    try:
+        toks = shlex.split(val)
+    except ValueError:
+        return ("shell", val)
+    return ("git", toks[0], toks[1:] + list(args)) if toks else None
+
+
+def _bash_reason(cmd, cwd, depth=0):
+    """Why a Bash command must be refused, or None."""
     body = _strip_heredocs(cmd)
     low = body.lower()
+    if re.search(r"alias\.[^\s=]+[\s=]", low) and re.search(r"--no-v|\bcommit\b[^;&|]*\s-[a-z]*n", low):
+        return ("Defining a git alias that skips hooks is refused: the trunk guard lives in them.")
     if "git_guard_allow_main" in low:
-        return deny("GIT_GUARD_ALLOW_MAIN is refused for Claude: the trunk changes only through a merged PR (land.sh docs / land.sh pr).")
+        return ("GIT_GUARD_ALLOW_MAIN is refused for Claude: the trunk changes only through a merged PR (land.sh docs / land.sh pr).")
     if re.search(r"\bclaudecode\s*=|\benv\b[^;&|]*\s-(u\s*claudecode|i\b|-ignore-environment)|\bunset\b[^;&|]*\bclaudecode\b", low):
-        return deny("CLAUDECODE tells the trunk guard that Claude is pushing; clearing or overriding it is refused.")
+        return ("CLAUDECODE tells the trunk guard that Claude is pushing; clearing or overriding it is refused.")
     if re.search(r"git_config_(count|key_\d+|value_\d+|parameters)|--config-env", low):
-        return deny("Injecting git config through the environment or --config-env can switch off the trunk guard. Refused.")
+        return ("Injecting git config through the environment or --config-env can switch off the trunk guard. Refused.")
     if "hookspath" in low and not re.search(r"config\s+(--get|--get-all|--list|-l|--show-origin|--unset|--unset-all)\b", low) \
             and not re.search(r"config\s+core\.hookspath\s*($|[;&|])", low):
-        return deny("Changing core.hooksPath switches off the trunk guard. Refused.")
+        return ("Changing core.hooksPath switches off the trunk guard. Refused.")
     if GUARD_FILES.search(body) and WRITEISH.search(body):
         segs0 = _segments(body) or []
         first = os.path.basename(segs0[0][1]) if segs0 and len(segs0[0]) > 1 and os.path.basename(segs0[0][0]) == "bash" else ""
         if first != "land.sh":
-            return deny("Writing the git hooks or land.sh's state is refused: the trunk guard lives there.")
+            return ("Writing the git hooks or land.sh's state is refused: the trunk guard lives there.")
     if re.search(r"remote\s+set-head|symbolic-ref\s+(-[a-z-]+\s+)*refs/remotes/|update-ref\s+(-[a-z-]+\s+)*refs/remotes/[^\s]*/head\b", low):
-        return deny("Re-pointing refs/remotes/*/HEAD changes what the guard treats as the trunk. Refused.")
+        return ("Re-pointing refs/remotes/*/HEAD changes what the guard treats as the trunk. Refused.")
     segs = _segments(cmd)
     if segs is None:
         if re.search(r"\bgit\b", cmd) and re.search(r"\b(push|send-pack)\b", cmd):
-            return deny("This command could not be parsed and looks like a git push. Write it plainly (git push origin <branch>).")
-        return OK
+            return ("This command could not be parsed and looks like a git push. Write it plainly (git push origin <branch>).")
+        return None
+    switched = None  # the branch an earlier part of this command moves to
     for seg in segs:
         gi = _find_cmd(seg, "gh")
         if gi is not None and gi + 1 < len(seg) and seg[gi + 1] == "api":
@@ -1713,23 +2380,37 @@ def cmd_guard_bash(stdin_text):
             writes = (method and method.group(1).upper() != "GET") or \
                 re.search(r"(^|\s)(-f|-F|--field|--raw-field|--input)(=|\s|\S)", text)
             if writes and re.search(r"/merges\b|/git/refs|/contents/|/pulls/\d+/merge\b", text):
-                return deny("Writing the repository through `gh api` (merges, refs, contents) goes around pull requests. Use land.sh or gh pr.")
+                return ("Writing the repository through `gh api` (merges, refs, contents) goes around pull requests. Use land.sh or gh pr.")
             if "graphql" in text and re.search(r"createCommitOnBranch|mergeBranch|updateRefs?\b|mergePullRequest", text):
-                return deny("GraphQL mutations that move a branch go around pull requests. Use land.sh or gh pr.")
+                return ("GraphQL mutations that move a branch go around pull requests. Use land.sh or gh pr.")
             continue
         call = _git_call(seg)
         if call is None:
             continue
         gopts, sub, args = call
+        if sub and sub not in KNOWN_GIT and not sub.startswith("-"):
+            exp = _expand_alias(sub, args, gopts, cwd)
+            if exp and exp[0] == "shell":
+                why = _bash_reason(exp[1], cwd, depth + 1) if depth < 3 else None
+                if why:
+                    return "git alias `%s` runs: %s" % (sub, why)
+                continue
+            if exp:
+                sub, args = exp[1], exp[2]
         for k in range(len(gopts) - 1):
             if gopts[k] in ("-c", "--config-env") and "hookspath" in gopts[k + 1].lower():
-                return deny("`-c core.hooksPath` switches off the trunk guard. Refused.")
+                return ("`-c core.hooksPath` switches off the trunk guard. Refused.")
         if sub in ("send-pack", "http-push", "receive-pack") or sub.startswith("remote-"):
-            return deny("`git %s` updates remote refs without the pre-push hook. Use git push to a branch." % sub)
+            return ("`git %s` updates remote refs without the pre-push hook. Use git push to a branch." % sub)
         if sub in ("commit", "push", "merge", "rebase", "am", "cherry-pick", "revert", "pull") and any(_is_no_verify(t) for t in args):
-            return deny("--no-verify skips the hooks that keep the trunk PR-only. Refused.")
+            return ("--no-verify skips the hooks that keep the trunk PR-only. Refused.")
         if sub == "commit" and "n" in _short_flags(args, COMMIT_VALUED):
-            return deny("`git commit -n` skips the pre-commit hooks. Refused.")
+            return ("`git commit -n` skips the pre-commit hooks. Refused.")
+        if sub in ("checkout", "switch"):
+            to = _switch_target(sub, args)
+            if to:
+                switched = to
+            continue
         if sub != "push":
             continue
         opts = [t for t in args if t.startswith("-")]
@@ -1744,7 +2425,7 @@ def cmd_guard_bash(stdin_text):
             if not t.startswith("-"):
                 pos.append(t)
         if "--mirror" in opts or "--all" in opts or "--branches" in opts:
-            return deny("`git push --all/--mirror` can move the trunk. Push the one branch you mean.")
+            return ("`git push --all/--mirror` can move the trunk. Push the one branch you mean.")
         if "--tags" in opts and len(pos) <= 1:
             continue  # tags only: the trunk does not move
         repo, _trunk = _trunk_for(cwd)
@@ -1754,11 +2435,11 @@ def cmd_guard_bash(stdin_text):
         else:
             dests = [_dest_branch(r.split(":", 1)[1]) if ":" in r.lstrip("+") else _dest_branch(r) for r in pos[1:]]
         if any(d in names for d in dests if d):
-            return deny("Pushing to %s is refused: the trunk changes only through a merged PR. Push a branch and open a PR (land.sh pr), or land docs with land.sh docs." % "/".join(sorted(n for n in dests if n in names)))
-        cur = repo.branch() if repo is not None else ""
+            return ("Pushing to %s is refused: the trunk changes only through a merged PR. Push a branch and open a PR (land.sh pr), or land docs with land.sh docs." % "/".join(sorted(n for n in dests if n in names)))
+        cur = switched if switched is not None else (repo.branch() if repo is not None else "")
         if cur in names and (len(pos) <= 1 or any(d in ("HEAD", "@") for d in dests if d)):
-            return deny("You are on %s: this push would move the trunk. Put the work on a branch (land.sh pr)." % cur)
-    return OK
+            return ("You are on %s: this push would move the trunk. Put the work on a branch (land.sh pr)." % cur)
+    return None
 
 
 def cmd_guard_edit(stdin_text):
@@ -1881,9 +2562,23 @@ def _prepush_block(land_sh, root):
     ]) + "\n"
 
 
+def _chain_aside(hooks, f):
+    """Move an existing pre-push (a script in another language, or a
+    symlink into the repository) aside as a chained hook, kept whole."""
+    n = 0
+    chained = os.path.join(hooks, "pre-push.land-chained")
+    while os.path.lexists(chained):
+        n += 1
+        chained = os.path.join(hooks, "pre-push.land-chained.%d" % n)
+    os.rename(f, chained)
+    return chained
+
+
 def install_prepush(repo, land_sh):
-    """Arm the pre-push layer in this repository's own hooks directory.
-    Returns (armed: bool, message)."""
+    """Arm the pre-push layer in this repository's own hooks directory. The
+    managed block always sits straight after the shebang, so it reads the
+    ref lines before anything else can consume them (it hands the same stdin
+    on). Returns (armed: bool, message)."""
     hp = repo.git("config", "core.hooksPath", check=False).stdout.strip()
     if hp:
         full = os.path.realpath(hp if os.path.isabs(hp) else os.path.join(repo.top, hp))
@@ -1893,41 +2588,60 @@ def install_prepush(repo, land_sh):
     hooks = os.path.join(repo.common, "hooks")
     os.makedirs(hooks, exist_ok=True)
     f = os.path.join(hooks, "pre-push")
-    rel_root = repo.prefix
-    block = _prepush_block(land_sh, rel_root)
+    block = _prepush_block(land_sh, repo.prefix)
+    note = ""
+    if os.path.islink(f):
+        # Never write through a link: it usually points at a tracked file.
+        chained = _chain_aside(hooks, f)
+        note = " (the linked hook runs after it as %s)" % os.path.basename(chained)
     if os.path.exists(f):
-        text = open(f, errors="replace").read()
+        text = open(f, encoding="utf-8", errors="surrogateescape").read()
+        first = text.splitlines()[0] if text else ""
+        shell = re.match(r"^#!\s*(/usr/bin/env\s+)?(/bin/)?(ba|da|z|k)?sh\b|^#!/bin/sh|^#!/usr/bin/env (ba)?sh", first) \
+            or not first.startswith("#!")
         if PREPUSH_BEGIN in text and PREPUSH_END in text:
-            new = re.sub(re.escape(PREPUSH_BEGIN) + r".*?" + re.escape(PREPUSH_END) + r"\n?", lambda _m: block, text, count=1, flags=re.S)
-            if new == text:
-                return True, "present"
+            rest = re.sub(re.escape(PREPUSH_BEGIN) + r".*?" + re.escape(PREPUSH_END) + r"\n?", "", text, count=1, flags=re.S)
         else:
-            first = text.splitlines()[0] if text else ""
-            if re.match(r"^#!\s*(/usr/bin/env\s+)?(/bin/)?(ba)?sh\b|^#!/bin/sh|^#!/usr/bin/env (ba)?sh", first) or not first.startswith("#!"):
-                # A shell hook: our block goes first, its body stays as it is.
-                rest = text.split("\n", 1)[1] if first.startswith("#!") else text
-                new = (first if first.startswith("#!") else "#!/bin/sh") + "\n" + block + rest
-            else:
-                # Another interpreter: keep it whole as a chained hook.
-                n = 0
-                chained = os.path.join(hooks, "pre-push.land-chained")
-                while os.path.exists(chained):
-                    n += 1
-                    chained = os.path.join(hooks, "pre-push.land-chained.%d" % n)
-                os.rename(f, chained)
-                new = "#!/bin/sh\n" + block + "exit 0\n"
+            rest = text
+        if shell:
+            body = rest.split("\n", 1)[1] if (rest.startswith("#!")) else rest
+            new = (first if first.startswith("#!") else "#!/bin/sh") + "\n" + block + body
+        else:
+            chained = _chain_aside(hooks, f)
+            note = " (the existing hook runs after it as %s)" % os.path.basename(chained)
+            new = "#!/bin/sh\n" + block + "exit 0\n"
+        if new == text:
+            return True, "present"
     else:
         new = "#!/bin/sh\n" + block + "exit 0\n"
-    with open(f, "w") as fh:
+    with open(f, "w", encoding="utf-8", errors="surrogateescape") as fh:
         fh.write(new)
     os.chmod(f, 0o755)
-    return True, "installed at %s" % f
+    return True, "installed at %s%s" % (f, note)
 
 
-def install_claude_hooks(repo):
-    path = os.path.join(repo.root, ".claude", "settings.json")
+def land_hook_commands(root):
+    """The land.sh hook commands registered in .claude/settings.json."""
+    path = os.path.join(root, ".claude", "settings.json")
     try:
-        d = json.load(open(path)) if os.path.exists(path) else {}
+        d = json.load(open(path, encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    found = set()
+    for groups in (d.get("hooks") or {}).values():
+        for g in groups or []:
+            for h in g.get("hooks") or []:
+                c = str(h.get("command") or "")
+                m = re.search(r"land\.sh[\"']?\s+(guard-bash|guard-edit|guard-mcp|session)\b", c)
+                if m:
+                    found.add(m.group(1))
+    return found
+
+
+def install_claude_hooks(root):
+    path = os.path.join(root, ".claude", "settings.json")
+    try:
+        d = json.load(open(path, encoding="utf-8")) if os.path.exists(path) else {}
     except ValueError:
         raise Stop(ERR, "%s is not valid JSON; fix it first" % path)
     hooks = d.setdefault("hooks", {})
@@ -1964,16 +2678,23 @@ def install_claude_hooks(repo):
     if changed:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = path + ".tmp"
-        with open(tmp, "w") as fh:
+        with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(d, fh, indent=2)
             fh.write("\n")
         os.replace(tmp, path)
     return changed
 
 
-def cmd_hooks(repo, land_sh):
-    for c in install_claude_hooks(repo):
+def cmd_hooks(root, land_sh):
+    """The Claude hooks need no git; the pre-push layer does. In a folder
+    that is not a git repository yet, the SessionStart hook arms it later."""
+    for c in install_claude_hooks(root):
         say("hooks: installed " + c)
+    try:
+        repo = Repo(root)
+    except Stop as exc:
+        say("prepush: NOT armed yet: %s. The SessionStart hook arms it once this is a git repository." % exc.msg)
+        return REFUSED
     armed, msg = install_prepush(repo, land_sh)
     say("prepush: " + msg)
     return OK if armed else REFUSED
@@ -2013,7 +2734,7 @@ def parse(argv):
     a.skill, a.title, a.summary, a.tasks, a.wait = "manual", "", "", [], None
     a.paths, a.pr, a.sha, a.branch, a.checks_json = [], None, "", "", []
     a.draft, a.verified, a.risk, a.message, a.fetch_only, a.push = False, "", "", "", False, False
-    a.switch, a.pr_json = False, ""
+    a.switch, a.pr_json, a.rolling = False, "", False
     i = 0
     while i < len(argv):
         t = argv[i]
@@ -2056,6 +2777,8 @@ def parse(argv):
             a.draft = True
         elif t == "--switch":
             a.switch = True
+        elif t == "--rolling":
+            a.rolling = True
         elif t == "--fetch-only":
             a.fetch_only = True
         elif t == "--push":
@@ -2096,9 +2819,9 @@ def main(argv):
         except Stop:
             repo = None
         return cmd_classify(repo, a.paths)
-    repo = Repo(root)
     if verb == "hooks":
-        return cmd_hooks(repo, land_sh)
+        return cmd_hooks(root, land_sh)
+    repo = Repo(root)
     if verb == "session":
         return cmd_session(repo, land_sh)
     if verb == "status":
@@ -2115,6 +2838,10 @@ def main(argv):
         if verb == "auto":
             return cmd_auto(repo, a, cfg)
         return cmd_pr(repo, a)
+    if verb == "pending":
+        if not a.title or not a.paths:
+            raise Stop(USAGE, "pending needs --skill S --title T -- <files> (the same as the land.sh pr --rolling that follows)")
+        return cmd_pending(repo, a)
     if verb == "merge":
         if not a.pr or not a.sha:
             raise Stop(USAGE, "merge needs --pr N --sha <40-hex>")
@@ -2140,7 +2867,19 @@ def main(argv):
     raise Stop(USAGE, "unknown verb: %s" % verb)
 
 
+def _utf8_stdio():
+    """Hook payloads and messages are UTF-8 whatever the locale."""
+    for name in ("stdin", "stdout", "stderr"):
+        stream = getattr(sys, name)
+        enc = (getattr(stream, "encoding", "") or "").lower().replace("-", "")
+        if enc != "utf8" and hasattr(stream, "buffer"):
+            setattr(sys, name, io.TextIOWrapper(stream.buffer, encoding="utf-8",
+                                                errors="surrogateescape" if name == "stdin" else "replace",
+                                                line_buffering=(name != "stdin")))
+
+
 if __name__ == "__main__":
+    _utf8_stdio()
     try:
         sys.exit(main(sys.argv[1:]))
     except Stop as s:

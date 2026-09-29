@@ -46,9 +46,11 @@ upstream.
   before splitting.
 - **Never push without confirmation.** Show the user the PR
   title, body, and file list. Open only on explicit go.
-- **Never auto-commit in the project repo.** Any
-  `rasa.lock.json` updates (new override entries) are left in
-  the working tree, uncommitted.
+- **Never commit to the project's trunk.** Any `rasa.lock.json`
+  updates (new override entries) are code class: once the upstream
+  PR is open, propose them with `bash .claude/skills/land/land.sh pr
+  --skill contribute --title "record overrides" -- .claude/rasa.lock.json`,
+  a PR this skill never merges.
 - **Honest about uncertainty.** If the user can't tell whether
   an edit is portable, say so and offer a path: open as a
   draft PR, get feedback in the PR, decide there.
@@ -256,8 +258,8 @@ the new pinned SHA into the project.
 - **Don't bundle unrelated changes.** Three themes = three PRs.
 - **Don't include the whole project in a PR body.** The Element
   maintainer wants the change, not the project's lore.
-- **Don't auto-commit `rasa.lock.json`.** Same rule as every
-  other Element-managed-file edit.
+- **Don't commit `rasa.lock.json` yourself.** It goes up by
+  `land.sh pr`, like every other Element-managed-file edit.
 - **Don't fall back to a stale cache.** If the Element clone
   fails, surface the error and stop.
 - **Don't write overrides anywhere but `rasa.lock.json`.** An

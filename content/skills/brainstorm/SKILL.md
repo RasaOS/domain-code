@@ -39,9 +39,11 @@ decisions when grounding.
   code locations. A brainstorm grounded in real artifacts is
   more honest than abstract pro/con theatre.
 - **Propose by PR, never merge.** The file sits under `.claude/`,
-  so it is code class (`/land`): at the end of each session it
-  goes up with `land.sh pr` in one rolling PR per topic, which
-  this skill never merges (Step 8).
+  so it is code class (`/land`): `land.sh pending` brings the
+  topic's open PR in before a resume (Step 2), and at the end of
+  each session the file goes up with `land.sh pr --rolling` in
+  that one rolling PR per topic, which this skill never merges
+  (Step 8).
 
 ## Process
 
@@ -58,7 +60,15 @@ something else?"
 
 ### Step 2 — Detect mode (new vs resume)
 
-Check `.claude/tradeoffs/<slug>.md`:
+First bring in the copy the topic's rolling PR holds, if one is
+still open (an earlier session proposed it and nobody has merged
+it yet), so a resume starts from the latest state:
+
+```bash
+bash .claude/skills/land/land.sh pending --skill brainstorm --title "tradeoffs <slug>" -- .claude/tradeoffs/<slug>.md
+```
+
+Then check `.claude/tradeoffs/<slug>.md`:
 - **Missing** → **new mode**. Scaffold the file structure.
 - **Exists** → **resume mode**. Read the file, surface
   current state.
@@ -158,18 +168,18 @@ Don't pretend a brainstorm converged when it didn't.
 ### Step 8 — Propose the file
 
 At the end of the session (not after every pass), propose the
-file, with this exact title so every session on the topic updates
-the same PR:
+file in the topic's rolling PR (the same title as the `pending`
+in Step 2):
 
 ```bash
-bash .claude/skills/land/land.sh pr --skill brainstorm --title "tradeoffs <slug>" -- .claude/tradeoffs/<slug>.md
+bash .claude/skills/land/land.sh pr --rolling --skill brainstorm --title "tradeoffs <slug>" -- .claude/tradeoffs/<slug>.md
 ```
 
-From the trunk this builds the stable branch
-`chore/brainstorm-tradeoffs-<slug>` from the latest trunk without
-touching the checkout and reuses its open PR; on a feature branch
-the file is committed there and rides that branch's PR. Never
-merge it. Exit 4 (no `gh`): finish with the session's GitHub
+`--rolling` builds the PR's branch aside from the latest trunk,
+whatever branch is checked out, and reuses it while it is open:
+one PR per topic, its branch named from the full title. The
+checkout's copy then goes back to its committed version; the next
+resume brings the PR's copy back (Step 2). Never merge it. Exit 4 (no `gh`): finish with the session's GitHub
 tooling per `land/SKILL.md` "Without `gh`". Exits 5/6/7: report,
 never retry blindly. As a step of `/mission`, `/self-heal` or
 `/self-improve`, skip this step: the orchestrator's branch and PR
@@ -313,7 +323,8 @@ was added, what was challenged, what's still open.>
   "ready to decide", don't pre-write the decision doc. Hand
   off to `/decision`.
 - **Don't commit to the trunk or merge the tradeoffs PR.**
-  `land.sh pr` proposes the file (Step 8).
+  `land.sh pending` (Step 2) and `land.sh pr --rolling` (Step 8)
+  carry the file.
 - **Don't bury real history.** If a prior decision or regret
   is relevant, link it explicitly in "Prior history".
 

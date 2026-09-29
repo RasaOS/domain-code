@@ -210,7 +210,15 @@ user runs the suggested skill to land them durably:
 [`INDEX.md`](INDEX.md).*
 ```
 
-**INDEX.md** — append a one-liner at the top (newest first).
+**INDEX.md** — first bring in the copy the rolling `notes index`
+PR holds, if one is still open (rows other sessions added and no
+one has merged yet):
+
+```bash
+bash .claude/skills/land/land.sh pending --skill lessons --title "notes index" -- docs/notes/INDEX.md
+```
+
+Then append a one-liner at the top (newest first).
 
 If `INDEX.md` doesn't exist, create it with this header:
 
@@ -257,22 +265,21 @@ Name only the note. **Never pass `docs/notes/INDEX.md` to
 `land.sh docs`**: the seeded CLAUDE.md `@`-imports it, so every
 session loads it as instructions, which makes it code class
 (`land.sh docs` refuses it, exit 3). When this run added an
-INDEX row, propose it by PR, with this exact title so every
-capture updates the same PR:
+INDEX row, propose it in the rolling `notes index` PR, which every
+capture updates (same title as the `pending` in Step 4):
 
 ```bash
-bash .claude/skills/land/land.sh pr --skill lessons --title "notes index" -- docs/notes/INDEX.md
+bash .claude/skills/land/land.sh pr --rolling --skill lessons --title "notes index" -- docs/notes/INDEX.md
 ```
 
-From the trunk this builds the stable branch
-`chore/lessons-notes-index` from the latest trunk without touching
-the checkout, and reuses its open PR; on a feature branch the row
-is committed there and rides that branch's PR. The skill never
-merges it. Until a reviewer does, this checkout keeps the edited
-INDEX.md; its content is on the PR branch, so
-`git checkout -- docs/notes/INDEX.md` loses nothing when a clean
-tree is needed, and `land.sh settle --pr <N>` brings the merged
-version in.
+`--rolling` builds that PR's branch aside from the latest trunk,
+whatever branch is checked out, and reuses the PR while it is
+open. Rows another session pushed there in the meantime are kept:
+the file is merged line by line. Then INDEX.md in this checkout
+goes back to its committed version (the content is on the PR
+branch, and a copy is kept in the land state), so the tree stays
+clean for `./build/build` and `/release`. The skill never merges
+the PR.
 
 Exit 4 (no `gh`): finish with the session's GitHub tooling per
 `land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never retry
@@ -292,8 +299,8 @@ After writing, render in chat:
 
 Landed: PR #N merged *(or `Not landed: exit N — <message>`)*
 
-[`docs/notes/INDEX.md`](docs/notes/INDEX.md) updated: PR #N open
-(the rolling `notes index` PR), never merged by this skill
+[`docs/notes/INDEX.md`](docs/notes/INDEX.md): the row is in the
+rolling `notes index` PR #N, never merged by this skill
 *(or `Not proposed: exit N — <message>`)*.
 
 **Graduation candidates worth routing:**
@@ -357,8 +364,9 @@ See per-task note + INDEX.md shapes in Step 4.
 - **Don't commit or push the note yourself.** `land.sh docs`
   lands it (Step 6).
 - **Don't pass `docs/notes/INDEX.md` to `land.sh docs`, and don't
-  merge its PR.** It is code class: `land.sh pr` with the title
-  `notes index` (Step 6).
+  merge its PR.** It is code class: `land.sh pending` before the
+  edit (Step 4), `land.sh pr --rolling` after it (Step 6), both
+  with the title `notes index`.
 - **Don't write empty sections.** A category with zero items
   is omitted, not stubbed.
 - **Don't backdate.** The date in the note is today's, not the

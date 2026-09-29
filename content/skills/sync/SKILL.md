@@ -35,8 +35,9 @@ when to run each verb and what to ask.
 - **Project-owned files are off-limits.** `CLAUDE.md`, `tasks/` content,
   `.claude/done-gate.md` and every other seeded file are the project's.
   `bin/init` creates a seed only when it is missing.
-- **Never auto-commit.** Everything lands in the working tree; the user
-  reviews with `git diff`.
+- **Never auto-commit, never merge.** Everything lands in the working
+  tree; the user reviews with `git diff`, then it goes up as a PR the
+  skill never merges (step "Report"): `.claude/` is code class.
 
 ## Process
 
@@ -134,8 +135,11 @@ seed and printed the command to finish). Then:
 - Task ledger: migrated — <n> tasks, <e> errors left (see MIGRATION-REVIEW.md) / already v1.0.0 / none
 - Pin: `<old>` → `<new>`
 
-Next: review `git diff`. Commit the ledger migration on its own
-(`git add tasks && git commit`), then the rest.
+Next: review `git diff`, then propose it (a PR, never a commit on the
+trunk). The ledger migration first, on its own:
+`bash .claude/skills/land/land.sh pr --switch --skill sync --title "migrate the task ledger" -- <the tasks/ files it changed>`,
+then the rest in a second PR:
+`bash .claude/skills/land/land.sh pr --switch --skill sync --title "sync to <name> v<version>" -- <the other files it changed>`.
 ```
 
 ## What you must NOT do
@@ -147,7 +151,8 @@ Next: review `git diff`. Commit the ledger migration on its own
   command it printed.
 - **Don't overwrite a local edit without the user's answer**, and don't
   delete anything that is not archived first.
-- **Don't auto-commit, don't push.**
+- **Don't commit to the trunk, don't push it, don't merge.** The
+  result goes up by `land.sh pr` once the user has reviewed it.
 
 ## When NOT to use this skill
 
