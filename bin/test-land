@@ -672,13 +672,14 @@ clean
 NEXT=$(( $(ls "$T/gh" | grep -c '^pr-.*\.head$') + 1 ))
 printf '[{"__typename":"CheckRun","name":"ci","status":"IN_PROGRESS"}]' > "$T/gh/rollup-$NEXT.json"
 printf '# slow\n' > docs/audits/slow.md
-( PATH="$GHPATH" bash "$L" docs --skill audit --title slow --wait 10 -- docs/audits/slow.md > "$T/slow.out" 2>&1; echo $? > "$T/slow.rc" ) &
+( PATH="$GHPATH" bash "$L" docs --skill audit --title slow --wait 25 -- docs/audits/slow.md > "$T/slow.out" 2>&1; echo $? > "$T/slow.rc" ) &
 SLOW=$!
 for i in 1 2 3 4 5 6 7 8 9 10 11 12; do [ -f "$T/gh/pr-$NEXT.head" ] && break; sleep 1; done
 sleep 1
 printf '# quick\n' > docs/audits/quick.md
 out="$(PATH="$GHPATH" bash "$L" docs --skill lessons --title quick -- docs/audits/quick.md 2>&1)"; rc=$?
 expect "a second landing runs while the first waits on CI" 0 "$rc" "merged=#" "$out"
+[ ! -f "$T/slow.rc" ] && ok "  it finished while the first was still waiting" || bad "  it finished while the first was still waiting" "the first had already ended: $(cat "$T/slow.rc")"
 wait "$SLOW"
 expect "  the first still ends on its own CI (pending → exit 6)" 6 "$(cat "$T/slow.rc")" "" ""
 rm -f "$T/gh/rollup-$NEXT.json"
