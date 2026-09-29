@@ -683,7 +683,7 @@ wait "$SLOW"
 expect "  the first still ends on its own CI (pending → exit 6)" 6 "$(cat "$T/slow.rc")" "" ""
 rm -f "$T/gh/rollup-$NEXT.json"
 clean
-sleep 300 & SP=$!
+sleep 271 & SP=$!  # not "sleep 30…": test-pipeline pgreps for that
 mkdir -p .git/land/lock && printf '%s %s proc:1\n' "$SP" "$(date +%s)" > .git/land/lock/owner
 printf '# stale lock\n' > docs/audits/stale-lock.md
 out="$(PATH="$GHPATH" bash "$L" docs --skill audit --title stale -- docs/audits/stale-lock.md 2>&1)"; rc=$?
