@@ -219,15 +219,23 @@ one, made once and synced before every use (ids come from the local
 ledger). From the install folder:
 
 ```bash
-WT="$(git rev-parse --show-toplevel)/../trunk-land"; SUB="$(git rev-parse --show-prefix)"
-[ -d "$WT" ] || { git worktree prune; git worktree add --detach "$WT" "origin/<trunk>"; }
-cd "$WT/$SUB" && bash .claude/skills/land/land.sh sync
+TOP="$(git rev-parse --show-toplevel)"; SUB="$(git rev-parse --show-prefix)"
+WT="$TOP/../$(basename "$TOP")-trunk-land"
+repo_of() { (cd "$1" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P); }
+if [ -d "$WT" ] && [ "$(repo_of "$WT")" != "$(repo_of "$TOP")" ]; then
+  echo "$WT is not a working worktree of this repository: move it aside, then run this again"
+else
+  [ -d "$WT" ] || { git worktree prune; git worktree add --detach "$WT" "origin/<trunk>"; }
+  cd "$WT/$SUB" && bash .claude/skills/land/land.sh sync
+fi
 ```
 
 Then `.claude/bin/task new …` there and `land.sh docs` from there. The
-worktree is a detached checkout of the trunk: `sync` moves it on, and a
-landing's settle leaves it clean. If something was already filed on the
-work branch, undo it there first: it is not on the trunk.
+worktree is named after this repository and used only when it is one of
+its worktrees (a neighbouring project's, or one left broken by a re-clone,
+is never used). It is a detached checkout of the trunk: `sync` moves it
+on, and a landing's settle leaves it clean. If something was already
+filed on the work branch, undo it there first: it is not on the trunk.
 
 ## Sync
 

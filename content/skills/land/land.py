@@ -1876,7 +1876,7 @@ def merge_bytes(repo, base, ours, theirs, union=False):
     """The three-way merge of three versions of a file (bytes), or None when
     they conflict. With `union` (an append-only file: the inbox, the notes
     index), a conflict where both sides only added lines at one place keeps
-    both additions, when that loses and doubles nothing (union_safe)."""
+    both additions whole (union_merge)."""
     d = tempfile.mkdtemp(prefix="land-m3-", dir=repo.state)
     try:
         names = []
@@ -1884,18 +1884,13 @@ def merge_bytes(repo, base, ours, theirs, union=False):
             names.append(os.path.join(d, name))
             with open(names[-1], "wb") as fh:
                 fh.write(data)
-        # The plain conflict style whatever the user's merge.conflictStyle: a
-        # union under diff3 style repeats what both sides added alike.
-        plain = ("-c", "merge.conflictStyle=merge", "merge-file", "-p")
-        r = git_bytes(repo, *(plain + tuple(names)), check=False)
+        # The plain conflict style whatever the user's merge.conflictStyle.
+        r = git_bytes(repo, "-c", "merge.conflictStyle=merge", "merge-file", "-p", *names, check=False)
         if r.returncode == 0:
             return r.stdout
-        if not (union and 0 < r.returncode < 128 and union_safe(repo, names, base, ours, theirs)):
+        if not (union and 0 < r.returncode < 128):
             return None
-        r = git_bytes(repo, *(plain + ("--union",) + tuple(names)), check=False)
-        if r.returncode != 0 or doubled(r.stdout, base, ours, theirs):
-            return None
-        return r.stdout
+        return union_merge(repo, names, base, ours, theirs)
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
@@ -1906,15 +1901,27 @@ def merge_bytes(repo, base, ours, theirs, union=False):
 RECORD_KEYS = (re.compile(r"^###\s+`#(\d+)`"), re.compile(r"\]\(([^)\s]+\.md)\)"))
 
 
-def union_safe(repo, names, base, ours, theirs):
-    """A union of the conflicts in the merge of `names` (ours, base, theirs)
-    keeps everything and doubles nothing: in every conflict both sides only
-    added lines at one place (no line of the base is in it: an edit or a
-    removal next to the other side's addition is not an append, and a union
-    would keep both the old and the new line), and no record was added by
-    both sides in different versions (an inbox status flip on one side, the
-    unflipped message on the other). Edits elsewhere in the file merge as
-    usual."""
+def record_keys(text):
+    """{key: [lines]} for the record lines of `text` (bytes)."""
+    keys = {}
+    for line in text.splitlines():
+        t = line.decode("utf-8", "replace")
+        for rx in RECORD_KEYS:
+            m = rx.search(t)
+            if m:
+                keys.setdefault(m.group(1), []).append(line)
+    return keys
+
+
+def union_merge(repo, names, base, ours, theirs):
+    """The merge of `names` (ours, base, theirs) with each conflict settled by
+    keeping both sides' additions whole, ours first (an identical addition
+    once), or None when that could lose or double something: a conflict
+    that holds a line of the base (an edit or a removal next to the other
+    side's addition), or a record that would end up twice (an inbox status
+    flip on one side and the unflipped message on the other, or the same
+    message added by both). Built from git's diff3 view, which neither trims
+    what both additions share nor joins neighbouring conflicts."""
     size = 7  # conflict markers longer than any line of the file starts with
     for text in (base, ours, theirs):
         for line in text.splitlines():
@@ -1923,48 +1930,40 @@ def union_safe(repo, names, base, ours, theirs):
                 size = max(size, len(line) - len(line.lstrip(c)) + 1)
     r = git_bytes(repo, "merge-file", "-p", "--diff3", "--marker-size=%d" % size, *names, check=False)
     if not 0 < r.returncode < 128:
-        return False
+        return None
     mark = dict((c, c * size) for c in (b"<", b"|", b"=", b">"))
-    part = None  # outside a conflict, or the side of it being read
-    for line in r.stdout.splitlines():
+    out, part, mine, yours = [], None, [], []
+    for line in r.stdout.splitlines(True):
         if part is None:
-            part = "ours" if line.startswith(mark[b"<"]) else None
+            if line.startswith(mark[b"<"]):
+                part, mine, yours = "ours", [], []
+            else:
+                out.append(line)
         elif part == "ours":
-            part = "base" if line.startswith(mark[b"|"]) else "ours"
+            if line.startswith(mark[b"|"]):
+                part = "base"
+            else:
+                mine.append(line)
         elif part == "base":
             if not line.startswith(mark[b"="]):
-                return False  # a line of the base is in this conflict
+                return None  # a line of the base is in this conflict
             part = "theirs"
         elif line.startswith(mark[b">"]):
+            out.extend(mine)
+            if yours != mine:
+                out.extend(yours)
             part = None
+        else:
+            yours.append(line)
     if part is not None:
-        return False
-    old = set(base.splitlines())
-
-    def added(side):
-        keys = {}
-        for line in side.splitlines():
-            if line in old:
-                continue
-            text = line.decode("utf-8", "replace")
-            for rx in RECORD_KEYS:
-                m = rx.search(text)
-                if m:
-                    keys.setdefault(m.group(1), set()).add(line)
-        return keys
-
-    a, b = added(ours), added(theirs)
-    return all(a[k] == b[k] for k in set(a) & set(b))
-
-
-def doubled(merged, base, ours, theirs):
-    """True when `merged` holds a line more often than either side does, or
-    than both sides' additions together: a union that wrote a line of the
-    base twice (git joins conflicts separated only by lines with no letter
-    or digit, a blank line, a rule, and a union repeats those lines)."""
-    import collections
-    m, b, o, t = (collections.Counter(x.splitlines()) for x in (merged, base, ours, theirs))
-    return any(n > max(o[v], t[v], o[v] + t[v] - b[v]) for v, n in m.items())
+        return None
+    merged = b"".join(out)
+    have = record_keys(merged)
+    o, t = record_keys(ours), record_keys(theirs)
+    for k, lines in have.items():
+        if len(lines) > max(len(o.get(k, ())), len(t.get(k, ()))):
+            return None
+    return merged
 
 
 def resolve_appends(repo, sc, path):
@@ -2196,25 +2195,33 @@ def cmd_pending(repo, a):
         base = repo.fetch_trunk()
         branch, tip, start, superseded, source = pending_source(repo, a, base)
         head = repo.head()
+        rec = load_aside(repo, branch)
         entries, kept = {}, []
         for p in a.paths:
             tp = repo.top_path(p)
             full = os.path.join(repo.top, tp)
             S = repo.blob_at(start, tp)
-            W = repo.wt_blob(tp)
+            w = wt_entry(repo, tp)  # written to the object store: merge3 reads it
+            W = w[1] if w else None
             H = repo.blob_at(head, tp) if head else None
+            # What the checkout's copy started from: the copy an earlier
+            # pending brought in (while HEAD still holds what it was recorded
+            # against), else HEAD's.
+            B, ok = record_base(repo, rec.get(p), H)
+            if not ok:
+                B = H
             entries[p] = (S, H)
             if W == S:
                 say("file=%s (already %s's copy)" % (p, source))
                 continue
-            if S == H:
+            if S == B:
                 say("file=%s (kept: your copy already has everything %s has)" % (p, source))
-                entries[p] = (H, H)
+                entries[p] = (B, H)
                 continue
             how = "from %s" % source
             S_write = S
-            if W != H:
-                merged = merge3(repo, H, S, W, union=bool(UNION_PATHS.match(p))) if W is not None else None
+            if W != B:
+                merged = merge3(repo, B, S, W, union=bool(UNION_PATHS.match(p))) if W is not None else None
                 if merged is not None:
                     S_write, how = merged, "merged with your uncommitted changes"
                 elif W is None:

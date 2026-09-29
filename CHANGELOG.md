@@ -127,8 +127,9 @@ PR (a draft for autonomous skills). It never merges.
 the open PR's copy in before the edit (`land.sh show` prints it without
 touching the checkout); `land.sh pr --rolling` builds the PR aside from any
 branch, merges what other sessions pushed there (line by line; where
-both sides added lines at the same place, both are kept, and an edit there,
-such as an inbox status flip, stops instead of doubling a line), and puts
+both sides added lines at the same place, both additions are kept whole,
+and an edit there, or one record in two versions such as an inbox status
+flip, stops instead of doubling a line), and puts
 the checkout's copy back, so the tree stays clean for `./build/build` and
 `/release`. A re-run with no edit changes nothing. When `pending` meets
 overlapping uncommitted edits, it keeps them aside and brings the PR's copy

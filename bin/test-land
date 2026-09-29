@@ -1118,6 +1118,9 @@ read = b"# Inbox\n\n### `#0001` `[read]` from `@t` *(read)*\nhi\n"
 two = b"# Inbox\n\n### `#0002` `[unread]` from `@u`\nyo\n"
 v1 = b"# Notes\nn1\nn2\nn3\nn4\nn5\nn6\n"
 fixed = v1.replace(b"n5\n", b"n5 FIXED\n")
+msg1 = b"### `#0001` `[unread]` from `@a`\n\nhello\n\n---\n\n"
+msg2 = b"### `#0002` `[unread]` from `@b`\n\nLGTM\n\n---\n\n"
+msg3 = b"### `#0003` `[unread]` from `@c`\n\nLGTM\n\n---\n\n"
 cases = [
     ("a message added in two versions", m(b"", unread, read) is None),
     ("a flip on one side is an edit", m(unread, unread, read) == read),
@@ -1125,12 +1128,16 @@ cases = [
     ("appends clash beside an edit elsewhere", m(v1, fixed + b"n10\n", v1 + b"n11\n") == fixed + b"n10\nn11\n"),
     ("one line edited both ways", m(b"a\nb\nc\n", b"a\nB1\nc\n", b"a\nB2\nc\n") is None),
     ("an edit next to the other side's append", m(b"a\nb\n", b"a\nB\n", b"a\nb\nc\n") is None),
-    ("git joining two clashes would write the blank line twice", m(b"a\n\nb\n", b"a\nX1\n\nX2\nb\n", b"a\nY1\n\nY2\nb\n") is None),
-    ("a shared first addition is kept once", m(b"a\n", b"a\nn10\nn11\n", b"a\nn10\nn12\n") == b"a\nn10\nn11\nn12\n"),
+    ("two clashes a blank line apart keep that line once", m(b"a\n\nb\n", b"a\nX1\n\nX2\nb\n", b"a\nY1\n\nY2\nb\n") == b"a\nX1\nY1\n\nX2\nY2\nb\n"),
+    ("a separator is not doubled when one side removed another copy", m(b"top\n\nmid\na\n\nz\n", b"top\nmid\na\nO1\n\nO2\nz\n", b"top\n\nmid\na\nT1\n\nT2\nz\n") == b"top\nmid\na\nO1\nT1\n\nO2\nT2\nz\n"),
+    ("each side's addition stays whole", m(b"a\n", b"a\nn10\nn11\n", b"a\nn10\nn12\n") == b"a\nn10\nn11\nn10\nn12\n"),
+    ("an identical addition is kept once", m(b"a\n", b"a\nsame\n", b"a\nsame\n") == b"a\nsame\n"),
+    ("a record both sides added is never written twice", m(b"a\n", b"a\n- [x](x.md)\nn11\n", b"a\n- [x](x.md)\nn12\n") is None),
+    ("two messages with the same body and trailer stay two whole messages", m(msg1, msg1 + msg2, msg1 + msg3) == msg1 + msg2 + msg3),
     ("lines that look like conflict markers", m(b"a\n=======\n", b"a\n=======\nx\n", b"a\n=======\ny\n") == b"a\n=======\nx\ny\n"),
 ]
 os.environ.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="merge.conflictStyle", GIT_CONFIG_VALUE_0="diff3")
-cases.append(("the same under a user's diff3 conflict style", m(b"a\n", b"a\nn10\nn11\n", b"a\nn10\nn12\n") == b"a\nn10\nn11\nn12\n"))
+cases.append(("the same under a user's diff3 conflict style", m(v1, fixed + b"n10\n", v1 + b"n11\n") == fixed + b"n10\nn11\n" and m(b"a\n", b"a\nx\n", b"a\ny\n") == b"a\nx\ny\n"))
 bad = [name for name, good in cases if not good]
 print("union_rules=%s %s" % (not bad, bad))
 PY
@@ -1293,9 +1300,20 @@ has "crash=" "$out" && bad "  no crash" "$out" || true
 clean
 git checkout -q -b task/TASK-903-plan
 $TASK new --type change --phase P1 --by tester "Plan one" >/dev/null 2>&1; git add -A tasks; git commit -qm "branch ledger" >/dev/null 2>&1
-WT="$(git rev-parse --show-toplevel)/../trunk-land-t"; SUB="$(git rev-parse --show-prefix)"
-plan_wt() { [ -d "$WT" ] || { git worktree prune; git worktree add -q --detach "$WT" origin/main 2>/dev/null; }; }   # land/SKILL.md
+TOP="$(git rev-parse --show-toplevel)"; SUB="$(git rev-parse --show-prefix)"
+WT="$TOP/../$(basename "$TOP")-trunk-land"
+repo_of() { (cd "$1" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P); }
+plan_wt() {   # land/SKILL.md "Planning from a work branch"
+  if [ -d "$WT" ] && [ "$(repo_of "$WT")" != "$(repo_of "$TOP")" ]; then
+    echo "$WT is not a working worktree of this repository: move it aside, then run this again"; return 1
+  fi
+  [ -d "$WT" ] || { git worktree prune; git worktree add -q --detach "$WT" origin/main 2>/dev/null; }
+}
 rm -rf "$WT"; git worktree prune
+mkdir -p "$WT"; git init -q "$WT"
+out="$(plan_wt 2>&1)"; rc=$?
+[ "$rc" != 0 ] && has "not a working worktree of this repository" "$out" && ok "the planning setup never uses a folder that is another repository" || bad "foreign worktree refused" "$rc :: $out"
+rm -rf "$WT"
 plan_wt
 out="$(cd "$WT/$SUB" && bash .claude/skills/land/land.sh sync 2>&1 && python3 .claude/bin/task new --type change --phase P1 --by tester "Planned in the worktree" >/dev/null 2>&1 \
   && F1="$(ls tasks/backlog/*planned-in-the-worktree*.md | head -1)" \
@@ -1354,6 +1372,27 @@ out="$(PATH="$GHPATH" bash "$L" pending --skill lessons --title "notes del" -- d
 expect "pending after the file was deleted here brings the PR's copy back and says so" 0 "$rc" "you had deleted it" "$out"
 grep -q '^d2$' docs/notes/INDEX.md 2>/dev/null && has "INDEX.md, deleted" "$out" && ok "  the PR's copy is in the checkout, and next= names the deletion" \
   || bad "  PR copy back, deletion named" "$out :: $(cat docs/notes/INDEX.md 2>&1)"
+git checkout -q -- . 2>/dev/null; clean
+
+clean
+printf 'top\n1\n2\n3\n4\n5\n6\n7\n8\n9\nbottom\n' > .claude/welcome.md; git add .claude/welcome.md; git commit -qm "welcome"; git push -q origin main 2>/dev/null
+WEL() { PATH="$GHPATH" bash "$L" "$@" --skill handoff --title "wel five" -- .claude/welcome.md; }
+WEL pending >/dev/null 2>&1
+awk '{print} /^top$/{print "note A"}' .claude/welcome.md > "$T/wel" && cp "$T/wel" .claude/welcome.md
+WEL pr --rolling >/dev/null 2>&1
+echo 'note B' >> .claude/welcome.md
+out="$(WEL pending 2>&1)"; rc=$?
+expect "pending merges an uncommitted edit with the PR's copy (no crash)" 0 "$rc" "merged with your uncommitted changes" "$out"
+grep -q '^note A$' .claude/welcome.md && grep -q '^note B$' .claude/welcome.md && ok "  both notes are in the checkout" || bad "  both notes" "$(cat .claude/welcome.md)"
+S5="$T/fifth"; rm -rf "$S5"; git clone -q "$R" "$S5" 2>/dev/null; (cd "$S5" && git config user.email s5@x && git config user.name s5)
+( cd "$S5" && PATH="$GHPATH" bash .claude/skills/land/land.sh pending --skill handoff --title "wel five" -- .claude/welcome.md >/dev/null 2>&1 \
+  && grep -v '^note A$' .claude/welcome.md > "$T/wel5" && cp "$T/wel5" .claude/welcome.md \
+  && PATH="$GHPATH" bash .claude/skills/land/land.sh pr --rolling --skill handoff --title "wel five" -- .claude/welcome.md >/dev/null 2>&1 )
+out="$(WEL pending 2>&1)"; rc=$?
+WEL pr --rolling >/dev/null 2>&1
+body="$(git --git-dir="$R" show chore/handoff-wel-five:.claude/welcome.md 2>/dev/null)"
+! has "note A" "$body" && has "note B" "$body" && ok "a second pending keeps another session's removal (measured from the copy the first brought in)" \
+  || bad "second pending keeps the removal" "$(printf '%s' "$body" | tr '\n' '|') :: $out"
 git checkout -q -- . 2>/dev/null; clean
 
 echo "guard table — what must be refused and what must pass"
