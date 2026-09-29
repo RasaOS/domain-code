@@ -87,7 +87,10 @@ exempted. Landing records the plan and leaves the tree clean.
 
 Name only `tasks/RELEASES.md`. Exit 4 (no `gh`): finish with the
 session's GitHub tooling per `land/SKILL.md` "Without `gh`". Exits
-5/6/7: report, never retry blindly. As a step of `/mission`,
+5/6/7: report, never retry blindly. Exit 3 (a work branch that
+changed `tasks/RELEASES.md` itself): undo the edit here and redo it,
+and the landing, from the planning worktree of `land/SKILL.md`
+"Planning from a work branch". As a step of `/mission`,
 `/self-heal` or `/self-improve`, skip this: the orchestrator's branch
 and PR carry the file. End the report with one line: `Landed: PR #N
 merged` or `Not landed: exit N — <message>`.

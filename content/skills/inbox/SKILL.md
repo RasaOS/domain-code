@@ -135,16 +135,16 @@ Parse `/inbox to <name>: <message body>`:
 - Sender: my handle (Step 1).
 - Timestamp: `YYYY-MM-DD HH:MM` local time.
 
-Before drafting, bring in that inbox's rolling PR, if one is open:
-it holds messages other senders wrote that nobody has merged yet, and
-the new message's id must follow theirs.
+Before drafting, read that inbox's rolling PR, if one is open, without
+touching the checkout: it holds messages other senders wrote that
+nobody has merged yet, and the new message's id must follow theirs.
 
 ```bash
-bash .claude/skills/land/land.sh pending --skill inbox --title "messages for <recipient>" -- .claude/inbox/<recipient>.md
+bash .claude/skills/land/land.sh show --skill inbox --title "messages for <recipient>" -- .claude/inbox/<recipient>.md
 ```
 
-- Message ID: 4-digit incrementing per recipient file (next
-  unused number in the file as `pending` left it).
+- Message ID: 4-digit incrementing per recipient file (the next
+  number unused in the copy `show` printed).
 
 **Confirm before writing:**
 
@@ -160,9 +160,16 @@ bash .claude/skills/land/land.sh pending --skill inbox --title "messages for <re
 Apply? *(yes / edit / cancel)*
 ```
 
-On confirm, append to `.claude/inbox/<recipient>.md` (create it if
-it doesn't exist), and propose it in the same rolling PR (the same
-title as the `pending` above):
+On cancel, nothing was changed. On confirm, bring the PR's copy in,
+then append to `.claude/inbox/<recipient>.md` (create it if it doesn't
+exist; if another message took the drafted id meanwhile, use the next
+free one and say so):
+
+```bash
+bash .claude/skills/land/land.sh pending --skill inbox --title "messages for <recipient>" -- .claude/inbox/<recipient>.md
+```
+
+Then propose it in the same rolling PR (the same title):
 
 ```bash
 bash .claude/skills/land/land.sh pr --rolling --skill inbox --title "messages for <recipient>" -- .claude/inbox/<recipient>.md

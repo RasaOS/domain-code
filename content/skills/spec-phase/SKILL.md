@@ -203,9 +203,12 @@ Name each `tasks/backlog/TASK-*.md` this session wrote, plus
 `tasks/ROADMAP.md` and `tasks/history.tsv`; `--tasks` lists their
 ids. Exit 4 (no `gh`): finish with the session's GitHub tooling
 per `land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never
-retry blindly. As a step of `/mission`, `/self-heal` or
-`/self-improve`, skip this: the orchestrator's branch and PR
-carry the specs.
+retry blindly. Exit 3 (a work branch, whose ledger carries its own
+transitions): undo the filing here and redo it, and the landing,
+from the planning worktree of `land/SKILL.md` "Planning from a
+work branch" (ids come from that ledger). As a step of `/mission`,
+`/self-heal` or `/self-improve`, skip this: the orchestrator's
+branch and PR carry the specs.
 
 ### Step 6 — Closing report
 

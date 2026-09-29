@@ -97,7 +97,11 @@ tasks *after* the hotfix ships, not during it.
    resulting state, who can authorize escalation if needed.
 6. **File it**, after a sync — ids come from the local ledger, so
    it must hold the latest trunk (report a non-zero sync exit;
-   never retry it blindly):
+   never retry it blindly).
+   On a work branch (anything but the trunk or a `wip/` branch), run
+   this and the landing from the planning worktree of `land/SKILL.md`
+   "Planning from a work branch": the branch's ledger carries its own
+   transitions, and `land.sh docs` refuses it there (exit 3).
 
    ```bash
    bash .claude/skills/land/land.sh sync

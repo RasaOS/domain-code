@@ -78,7 +78,11 @@ steps and the observable wrong behavior — not what the developer
    is filled from this recon where possible.
 6. **Sync, then file it.** Ids come from the local ledger, so it
    must hold the latest trunk (report a non-zero sync exit; never
-   retry it blindly):
+   retry it blindly).
+   On a work branch (anything but the trunk or a `wip/` branch), run
+   this and the landing from the planning worktree of `land/SKILL.md`
+   "Planning from a work branch": the branch's ledger carries its own
+   transitions, and `land.sh docs` refuses it there (exit 3).
 
    ```bash
    bash .claude/skills/land/land.sh sync

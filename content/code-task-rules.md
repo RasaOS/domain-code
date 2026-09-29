@@ -314,9 +314,9 @@ expanding, graduating, parking, closing or reopening one, and editing a
 `/spec-phase`, the auto-* filers) runs `land.sh sync` first, because ids come
 from the local ledger, then lands the touched task files, `tasks/history.tsv`
 and `tasks/ROADMAP.md` with `land.sh docs`, from a checkout of the trunk (on
-a work branch whose ledger carries its own transitions, a worktree:
-`git worktree add ../trunk-land origin/<trunk>`; `land.sh docs` refuses the
-branch's ledger). (The vendored `/task` skill cannot say this itself; this
+a work branch whose ledger carries its own transitions, the planning
+worktree of `land/SKILL.md` "Planning from a work branch"; `land.sh docs`
+refuses the branch's ledger). (The vendored `/task` skill cannot say this itself; this
 is the domain's rule for it.) Transitions of work in flight — `start`,
 `submit`, `block`, `unblock`, `reject`, `pass` — are not landed on their
 own: they ride the work's branch and PR.

@@ -175,7 +175,10 @@ Behavior:
    `tasks/history.tsv`. Nothing changed ("already tracked") →
    nothing to land. Exit 4 (no `gh`): finish with the session's
    GitHub tooling per `land/SKILL.md` "Without `gh`". Exits 5/6/7:
-   report, never retry blindly. As a step of `/mission`,
+   report, never retry blindly. Exit 3 (a work branch, whose ledger
+   carries its own transitions): undo the edit here and redo it, and
+   the landing, from the planning worktree of `land/SKILL.md`
+   "Planning from a work branch". As a step of `/mission`,
    `/self-heal` or `/self-improve`, skip this: the orchestrator's
    branch and PR carry the files. Add one line under the
    confirmation: `Landed: PR #N merged` or

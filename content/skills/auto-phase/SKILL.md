@@ -58,6 +58,11 @@ for the whole phase.
    sync.** `bash .claude/skills/land/land.sh sync` before filing
    anything: ids come from the local ledger, so it must hold the
    latest trunk. A non-zero exit: report it, never retry blindly.
+   On a work branch (anything but the trunk or a `wip/` branch), do
+   the filing and the landing from the planning worktree of
+   `land/SKILL.md` "Planning from a work branch": the branch's ledger
+   carries its own transitions, and `land.sh docs` refuses it there
+   (exit 3).
 2. **Identify the phase.** From the user's argument, or — if
    absent — the current active phase in `tasks/PHASES.md`.
 3. **Walk every stub in the phase.** For each, run the autonomous

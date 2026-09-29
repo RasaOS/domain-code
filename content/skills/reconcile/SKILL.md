@@ -127,7 +127,10 @@ changed; `--tasks` lists the moved tasks. `land.sh` writes the PR body;
 the evidence table (each task, from → to, and why) goes in the report.
 Exit 4 (no `gh`): finish with the session's GitHub tooling per
 `land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never retry
-blindly. As a step of `/mission`, `/self-heal` or `/self-improve`, skip
+blindly. Exit 3 (a work branch, whose ledger carries its own
+transitions): undo the moves here and redo the run, and the landing,
+from the planning worktree of `land/SKILL.md` "Planning from a work
+branch". As a step of `/mission`, `/self-heal` or `/self-improve`, skip
 the landing: the orchestrator's branch and PR carry the files.
 
 ## The enforcement that keeps it clean

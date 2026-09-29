@@ -182,12 +182,12 @@ def secret_hit(text):
 
 # ── git plumbing ──────────────────────────────────────────────────────────
 
-def run(args, cwd=None, env=None, check=True, input_text=None):
+def run(args, cwd=None, env=None, check=True, input_text=None, timeout=None):
     # UTF-8 whatever the locale (Python 3.6 in a C locale would decode as
     # ASCII), and bytes that are not UTF-8 survive the round trip.
     p = subprocess.run(args, cwd=cwd, env=env, input=input_text,
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                       encoding="utf-8", errors="surrogateescape")
+                       encoding="utf-8", errors="surrogateescape", timeout=timeout)
     if check and p.returncode != 0:
         raise Stop(ERR, "%s failed: %s" % (" ".join(args[:4]), (p.stderr or p.stdout).strip()[:600]))
     return p
@@ -394,20 +394,16 @@ class Lock(object):
         while True:
             try:
                 os.mkdir(self.path)
-                with open(os.path.join(self.path, "owner"), "w", encoding="utf-8") as fh:
-                    fh.write(self.token + "\n")
-                return self
             except FileExistsError:
-                if self._stale():
-                    # Take over by renaming: only one waiter's rename succeeds,
-                    # so two cannot both remove and re-create the lock.
-                    aside = "%s.stale-%d-%s" % (self.path, me, os.urandom(2).hex())
-                    try:
-                        os.rename(self.path, aside)
-                    except OSError:
-                        continue
-                    shutil.rmtree(aside, ignore_errors=True)
+                if self._stale() and self._take_over():
                     continue
+            else:
+                try:
+                    with open(os.path.join(self.path, "owner"), "w", encoding="utf-8") as fh:
+                        fh.write(self.token + "\n")
+                    return self
+                except OSError:
+                    continue  # removed under us by a takeover that judged it stale: try again
             if waited >= self.WAIT:
                 raise Stop(REFUSED, "another landing step (%s) has held %s for over %ds; it is still running, so run this again once it ends"
                            % (self._owner() or "?", self.path, self.WAIT))
@@ -416,6 +412,33 @@ class Lock(object):
                 told = True
             time.sleep(1)
             waited += 1
+
+    def _take_over(self):
+        """Remove a stale lock, one waiter at a time: only the holder of the
+        takeover guard may remove it, and only after judging it stale again
+        under the guard, so a fresh lock another waiter just made is never
+        removed. A guard left by a crash is cleared after 30 s."""
+        guard = self.path + ".takeover"
+        try:
+            os.mkdir(guard)
+        except FileExistsError:
+            try:
+                if time.time() - os.path.getmtime(guard) > 30:
+                    os.rmdir(guard)
+            except OSError:
+                pass
+            time.sleep(0.2)
+            return False
+        try:
+            if self._stale():
+                shutil.rmtree(self.path, ignore_errors=True)
+                return True
+            return False
+        finally:
+            try:
+                os.rmdir(guard)
+            except OSError:
+                pass
 
     def _owner(self):
         try:
@@ -603,8 +626,7 @@ class Scratch(object):
         f = os.path.join(self.repo.state, "attributes")
         p = self.repo.prefix
         want = "".join("%s%s merge=union\n" % (p, x) for x in
-                       ("tasks/history.tsv", "tasks/ROADMAP.md", "tasks/AUDIT.md",
-                        "docs/notes/INDEX.md", ".claude/inbox/*.md"))
+                       ("tasks/history.tsv", "tasks/ROADMAP.md", "tasks/AUDIT.md"))
         try:
             if not os.path.exists(f) or open(f, encoding="utf-8").read() != want:
                 with open(f, "w", encoding="utf-8") as fh:
@@ -737,8 +759,8 @@ def plan_paths(repo, paths, base):
             # A task branch's own transitions (start, submit) ride its PR; landed
             # from here they would reach the trunk ahead of the files they move.
             raise Stop(REFUSED, "%s has changes committed on %s, which ride that branch's PR. Land planning changes from a checkout "
-                       "of %s instead, e.g. `git worktree add ../trunk-land origin/%s`: file or move the tasks there and run "
-                       "land.sh docs from it." % (p, cur, repo.trunk, repo.trunk))
+                       "of %s instead: a planning worktree (land/SKILL.md, \"Planning from a work branch\"). Undo what you filed "
+                       "here first (it is not on the trunk)." % (p, cur, repo.trunk))
         klass, why = classify(p, imports, wt_mode(full) if os.path.lexists(full) else None)
         if klass != "docs":
             raise Stop(REFUSED, "%s is %s class (%s). Docs land by themselves; this goes through `land.sh pr`." % (p, klass, why))
@@ -829,8 +851,11 @@ def merge_trunk_into(repo, tip, base, touched):
         r = sc.git("merge", "--no-edit", "-q", base, check=False)
         if r.returncode != 0:
             conflicted = sc.git("diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
-            sc.git("merge", "--abort", check=False)
-            raise Stop(CONFLICT, "the trunk now conflicts with this landing in: %s" % (", ".join(conflicted) or "?"))
+            left = [f for f in conflicted if not resolve_appends(repo, sc, f)]
+            if left or not conflicted:
+                sc.git("merge", "--abort", check=False)
+                raise Stop(CONFLICT, "the trunk now conflicts with this landing in: %s" % (", ".join(left or conflicted) or "?"))
+            sc.git("commit", "-q", "--no-edit")
         hist = repo.top_path("tasks/history.tsv")
         if "tasks/history.tsv" in touched and sort_history(os.path.join(sc.path, hist)):
             sc.git("add", "--", hist)
@@ -1211,8 +1236,8 @@ def settle(repo, branch, landed, merged=True):
     if repo.op_in_progress():
         return ["checkout left as is: an operation is in progress"]
     head, cur = repo.head(), repo.branch()
-    if not cur:
-        return ["detached HEAD: landed files kept in the checkout"]
+    if not cur and not (head and repo.is_ancestor(head, base)):
+        return ["detached HEAD with commits of its own: landed files kept in the checkout"]
     if cur == repo.trunk and head and not repo.is_ancestor(head, base):
         return ["local %s has commits that are not on origin: landed files kept. `land.sh sync` moves those commits onto a rescue branch (to propose by PR) and brings the checkout up to date" % cur]
     if os.path.exists(os.path.join(repo.git_dir, "index.lock")):
@@ -1251,7 +1276,9 @@ def settle(repo, branch, landed, merged=True):
                 repo.git("rm", "-q", "--cached", "--ignore-unmatch", "--", tp, check=False)
                 if os.path.lexists(full):
                     os.unlink(full)
-        if cur == repo.trunk:
+        if not cur:
+            r = repo.git("checkout", "-q", "--detach", base, check=False, env=env)
+        elif cur == repo.trunk:
             r = repo.git("merge", "-q", "--ff-only", base, check=False, env=env)
         else:
             r = repo.git("merge", "-q", "--no-edit", base, check=False, env=env)
@@ -1269,7 +1296,7 @@ def settle(repo, branch, landed, merged=True):
     except Stop as exc:
         restore_copies()
         return report + ["settle stopped (%s); your copies were put back" % exc.msg]
-    return report + ["%s now carries the landed files from %s" % (cur, repo.trunk)]
+    return report + ["%s now carries the landed files from %s" % (cur or "the detached checkout", repo.trunk)]
 
 
 # ── verbs ─────────────────────────────────────────────────────────────────
@@ -1535,7 +1562,16 @@ def cmd_sync(repo, a):
         say("sync=up to date")
         return OK
     if not cur:
-        raise Stop(REFUSED, "detached HEAD: check out a branch first")
+        if not repo.is_ancestor(head, base):
+            raise Stop(REFUSED, "detached HEAD with commits of its own: check out a branch first")
+        # A detached checkout of the trunk (a planning worktree): move it on.
+        moved = align_identical(repo, head, base)
+        r = repo.git("checkout", "-q", "--detach", base, check=False)
+        if r.returncode != 0:
+            restore_aligned(repo, moved)
+            raise Stop(CONFLICT, "could not move this detached checkout to origin/%s: %s" % (repo.trunk, (r.stderr or r.stdout).strip()[:300]))
+        say("synced=detached HEAD now at origin/%s (%s)" % (repo.trunk, base[:12]))
+        return OK
     env = repo.identity_env()
     moved = align_identical(repo, head, base)
     if cur == repo.trunk:
@@ -1568,10 +1604,11 @@ def cmd_sync(repo, a):
 def align_identical(repo, head, base):
     """Files the incoming trunk changes that this checkout already holds
     byte for byte (a landing merged elsewhere, never settled): put them back
-    to HEAD's state so the fast-forward, merge or reset can write them. A
-    copy of each is kept; `restore_aligned` puts them back if that step then
-    fails, so a failed sync leaves the checkout as it found it."""
-    moved = []
+    to HEAD's state so the fast-forward, merge or reset can write them. The
+    index and each file are saved first; `restore_aligned` puts both back if
+    that step then fails, so a failed sync leaves the checkout — staged work
+    included — as it found it."""
+    moved = {"files": [], "index": None}
     keep = os.path.join(repo.state, "stash", "align-%s-%s" % (stamp(), os.urandom(2).hex()))
     mb = repo.git("merge-base", head, base, check=False).stdout.strip() or head
     # Only what the trunk changed since this checkout left it: a branch's own
@@ -1581,6 +1618,14 @@ def align_identical(repo, head, base):
         hb = repo.blob_at(head, f)
         if wt is None or wt == hb or wt != repo.blob_at(base, f):
             continue
+        if moved["index"] is None:
+            os.makedirs(keep, exist_ok=True)
+            idx = os.path.join(repo.git_dir, "index")
+            moved["index"] = os.path.join(keep, "index.snapshot")
+            if os.path.exists(idx):
+                shutil.copy2(idx, moved["index"])
+            else:
+                open(moved["index"] + ".absent", "w").close()
         full = os.path.join(repo.top, f)
         os.makedirs(os.path.dirname(os.path.join(keep, f)), exist_ok=True)
         shutil.copy2(full, os.path.join(keep, f), follow_symlinks=False)
@@ -1590,19 +1635,28 @@ def align_identical(repo, head, base):
             repo.git("rm", "-q", "--cached", "--ignore-unmatch", "--", f, check=False)
             if os.path.lexists(full):
                 os.unlink(full)
-        moved.append((f, os.path.join(keep, f)))
+        moved["files"].append((f, os.path.join(keep, f)))
     return moved
 
 
 def restore_aligned(repo, moved):
-    """Undo align_identical after the step it prepared for failed."""
-    for f, copy in moved:
+    """Undo align_identical after the step it prepared for failed: the files,
+    then the index exactly as it was."""
+    for f, copy in moved.get("files") or []:
         full = os.path.join(repo.top, f)
         if os.path.exists(copy):
             os.makedirs(os.path.dirname(full) or ".", exist_ok=True)
             if os.path.lexists(full):
                 os.unlink(full)
             shutil.copy2(copy, full, follow_symlinks=False)
+    snap = moved.get("index")
+    if snap:
+        idx = os.path.join(repo.git_dir, "index")
+        if os.path.exists(snap):
+            shutil.copy2(snap, idx + ".land-tmp")
+            os.replace(idx + ".land-tmp", idx)
+        elif os.path.exists(snap + ".absent") and os.path.exists(idx):
+            os.unlink(idx)
 
 
 def rescue_trunk(repo, head, base):
@@ -1748,8 +1802,8 @@ def aside_start(repo, branch, base, touched, told=None):
     if state in ("merged", "closed") or repo.is_ancestor(tip, base):
         return tip, base, True, state
     if state is None:
-        say("pr_state=unknown (no gh): %s is treated as an open PR. If its PR was closed without merging, run again with "
-            "--pr-state closed (read it with the session's GitHub tooling)" % branch)
+        say("pr_state=unknown (no gh): %s is treated as an open PR. If its PR is already merged or closed, run again with "
+            "--pr-state merged (or closed); read it with the session's GitHub tooling" % branch)
     return tip, merge_trunk_into(repo, tip, base, touched), False, state
 
 
@@ -1759,14 +1813,27 @@ def aside_file(repo, branch):
 
 
 def load_aside(repo, branch):
+    """{path: {"blob", "head", "data"}}: the copy each file started from, and
+    HEAD's copy when that was recorded."""
     try:
         d = json.load(open(aside_file(repo, branch), encoding="utf-8"))
-        return d.get("files") or {}
     except (OSError, ValueError):
         return {}
+    return {p: e for p, e in (d.get("files") or {}).items() if isinstance(e, dict)}
 
 
-def save_aside(repo, branch, files):
+def save_aside(repo, branch, entries):
+    """entries: {path: (blob|None, head_blob|None)}. The content goes into the
+    record too (small files), so a gc that prunes a loose blob loses nothing."""
+    import base64
+    files = {}
+    for p, (blob, head) in entries.items():
+        e = {"blob": blob, "head": head, "data": None}
+        if blob:
+            size = repo.git("cat-file", "-s", blob, check=False).stdout.strip()
+            if size.isdigit() and int(size) <= (1 << 20):
+                e["data"] = base64.b64encode(git_bytes(repo, "cat-file", "blob", blob).stdout).decode()
+        files[p] = e
     f = aside_file(repo, branch)
     os.makedirs(os.path.dirname(f), exist_ok=True)
     with open(f + ".tmp", "w", encoding="utf-8") as fh:
@@ -1774,25 +1841,156 @@ def save_aside(repo, branch, files):
     os.replace(f + ".tmp", f)
 
 
+def record_base(repo, entry, head_blob):
+    """The recorded start copy, when it still describes this checkout: HEAD's
+    copy is the one it was recorded against, or the recorded copy itself
+    (it was committed since). None otherwise — HEAD moved under it."""
+    import base64
+    if not entry or head_blob not in (entry.get("head"), entry.get("blob")):
+        return None, False
+    blob = entry.get("blob")
+    if blob is None:
+        return None, True
+    if repo.git("cat-file", "-e", blob, check=False).returncode != 0:
+        if not entry.get("data"):
+            return None, False
+        back = git_bytes(repo, "hash-object", "-w", "--stdin",
+                         input_bytes=base64.b64decode(entry["data"])).stdout.decode().strip()
+        if back != blob:
+            return None, False
+    return blob, True
+
+
 def merge3(repo, base_blob, ours_blob, theirs_blob, union=False):
     """git merge-file over three blobs (None = empty). The merged blob, or
     None when they conflict."""
+    data = [git_bytes(repo, "cat-file", "blob", b).stdout if b else b""
+            for b in (base_blob, ours_blob, theirs_blob)]
+    out = merge_bytes(repo, data[0], data[1], data[2], union=union)
+    if out is None:
+        return None
+    return git_bytes(repo, "hash-object", "-w", "--stdin", input_bytes=out).stdout.decode().strip()
+
+
+def merge_bytes(repo, base, ours, theirs, union=False):
+    """The three-way merge of three versions of a file (bytes), or None when
+    they conflict. With `union` (an append-only file: the inbox, the notes
+    index), a conflict where both sides only added lines at one place keeps
+    both additions, when that loses and doubles nothing (union_safe)."""
     d = tempfile.mkdtemp(prefix="land-m3-", dir=repo.state)
     try:
         names = []
-        for name, blob in (("ours", ours_blob), ("base", base_blob), ("theirs", theirs_blob)):
-            f = os.path.join(d, name)
-            data = git_bytes(repo, "cat-file", "blob", blob).stdout if blob else b""
-            with open(f, "wb") as fh:
+        for name, data in (("ours", ours), ("base", base), ("theirs", theirs)):
+            names.append(os.path.join(d, name))
+            with open(names[-1], "wb") as fh:
                 fh.write(data)
-            names.append(f)
-        args = ["merge-file", "-p"] + (["--union"] if union else []) + names
-        r = git_bytes(repo, *args, check=False)
-        if r.returncode != 0:
+        # The plain conflict style whatever the user's merge.conflictStyle: a
+        # union under diff3 style repeats what both sides added alike.
+        plain = ("-c", "merge.conflictStyle=merge", "merge-file", "-p")
+        r = git_bytes(repo, *(plain + tuple(names)), check=False)
+        if r.returncode == 0:
+            return r.stdout
+        if not (union and 0 < r.returncode < 128 and union_safe(repo, names, base, ours, theirs)):
             return None
-        return git_bytes(repo, "hash-object", "-w", "--stdin", input_bytes=r.stdout).stdout.decode().strip()
+        r = git_bytes(repo, *(plain + ("--union",) + tuple(names)), check=False)
+        if r.returncode != 0 or doubled(r.stdout, base, ours, theirs):
+            return None
+        return r.stdout
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+# The records of the append-only files: an inbox message (`### `#0001``), a
+# notes-index row (its link to the note). Two versions of one record are an
+# edit, never two records.
+RECORD_KEYS = (re.compile(r"^###\s+`#(\d+)`"), re.compile(r"\]\(([^)\s]+\.md)\)"))
+
+
+def union_safe(repo, names, base, ours, theirs):
+    """A union of the conflicts in the merge of `names` (ours, base, theirs)
+    keeps everything and doubles nothing: in every conflict both sides only
+    added lines at one place (no line of the base is in it: an edit or a
+    removal next to the other side's addition is not an append, and a union
+    would keep both the old and the new line), and no record was added by
+    both sides in different versions (an inbox status flip on one side, the
+    unflipped message on the other). Edits elsewhere in the file merge as
+    usual."""
+    size = 7  # conflict markers longer than any line of the file starts with
+    for text in (base, ours, theirs):
+        for line in text.splitlines():
+            c = line[:1]
+            if c in (b"<", b"|", b"=", b">"):
+                size = max(size, len(line) - len(line.lstrip(c)) + 1)
+    r = git_bytes(repo, "merge-file", "-p", "--diff3", "--marker-size=%d" % size, *names, check=False)
+    if not 0 < r.returncode < 128:
+        return False
+    mark = dict((c, c * size) for c in (b"<", b"|", b"=", b">"))
+    part = None  # outside a conflict, or the side of it being read
+    for line in r.stdout.splitlines():
+        if part is None:
+            part = "ours" if line.startswith(mark[b"<"]) else None
+        elif part == "ours":
+            part = "base" if line.startswith(mark[b"|"]) else "ours"
+        elif part == "base":
+            if not line.startswith(mark[b"="]):
+                return False  # a line of the base is in this conflict
+            part = "theirs"
+        elif line.startswith(mark[b">"]):
+            part = None
+    if part is not None:
+        return False
+    old = set(base.splitlines())
+
+    def added(side):
+        keys = {}
+        for line in side.splitlines():
+            if line in old:
+                continue
+            text = line.decode("utf-8", "replace")
+            for rx in RECORD_KEYS:
+                m = rx.search(text)
+                if m:
+                    keys.setdefault(m.group(1), set()).add(line)
+        return keys
+
+    a, b = added(ours), added(theirs)
+    return all(a[k] == b[k] for k in set(a) & set(b))
+
+
+def doubled(merged, base, ours, theirs):
+    """True when `merged` holds a line more often than either side does, or
+    than both sides' additions together: a union that wrote a line of the
+    base twice (git joins conflicts separated only by lines with no letter
+    or digit, a blank line, a rule, and a union repeats those lines)."""
+    import collections
+    m, b, o, t = (collections.Counter(x.splitlines()) for x in (merged, base, ours, theirs))
+    return any(n > max(o[v], t[v], o[v] + t[v] - b[v]) for v, n in m.items())
+
+
+def resolve_appends(repo, sc, path):
+    """In a scratch merge, settle a conflict in an append-only file (the
+    inbox, the notes index) when both sides only added lines where they
+    clash. False leaves the conflict standing."""
+    rel = repo.rel(path)
+    if not rel or not UNION_PATHS.match(rel):
+        return False
+    stages = {}
+    for line in sc.git("ls-files", "-u", "-z", "--", path, check=False).stdout.split("\0"):
+        if not line.strip():
+            continue
+        meta, _name = line.split("\t", 1)
+        _mode, sha, stage = meta.split()
+        stages[stage] = sha
+    if "2" not in stages or "3" not in stages:
+        return False
+    blob = lambda k: git_bytes(repo, "cat-file", "blob", stages[k]).stdout if k in stages else b""
+    out = merge_bytes(repo, blob("1"), blob("2"), blob("3"), union=True)
+    if out is None:
+        return False
+    with open(os.path.join(sc.path, path), "wb") as fh:
+        fh.write(out)
+    sc.git("add", "--", path)
+    return True
 
 
 def fork_point(repo, base):
@@ -1803,30 +2001,34 @@ def fork_point(repo, base):
     return r.stdout.strip() or None
 
 
-def resolve_aside(repo, paths, start, branch, base):
+def resolve_aside(repo, paths, start, branch, base, where=None):
     """[(path, (mode, blob) | None)] the aside branch must change."""
     rec = load_aside(repo, branch)
     fp = fork_point(repo, base)
+    head = repo.head()
+    where = where or branch
     out = []
     for p in paths:
         tp = repo.top_path(p)
         w = wt_entry(repo, tp)
         W = w[1] if w else None
         O = repo.blob_at(start, tp)
-        B = rec[p] if p in rec else (repo.blob_at(fp, tp) if fp else None)
+        B, ok = record_base(repo, rec.get(p), repo.blob_at(head, tp) if head else None)
+        if not ok:
+            B = repo.blob_at(fp, tp) if fp else None
         if W == O or W == B:
-            continue  # nothing of this checkout's to add: the branch's copy stays
+            continue  # nothing of this checkout's to add: the copy there stays
         if O == B:
             out.append((p, w))  # only this checkout changed it
             continue
         if W is None or O is None:
-            raise Stop(CONFLICT, "%s: the PR branch %s and this checkout both changed it, one of them by deleting it. Nothing was "
-                       "pushed. Run `land.sh pending` to start from the PR's copy, redo the change, then run this again." % (p, branch))
+            raise Stop(CONFLICT, "%s: %s and this checkout both changed it, one of them by deleting it. Nothing was pushed. "
+                       "Run `land.sh pending` to start from that copy (yours is kept aside), redo the change, then run this again." % (p, where))
         merged = merge3(repo, B, O, W, union=bool(UNION_PATHS.match(p)))
         if merged is None:
-            raise Stop(CONFLICT, "%s: the PR branch %s has changes this checkout never saw, on the same lines as yours. Nothing was "
-                       "pushed. Run `land.sh pending` to start from the PR's copy, redo the change, then run this again." % (p, branch))
-        say("combined=%s (with changes on %s that this checkout had not seen)" % (p, branch))
+            raise Stop(CONFLICT, "%s: %s has changes this checkout never saw, on the same lines as yours. Nothing was pushed. "
+                       "Run `land.sh pending` to start from that copy (yours is kept aside), redo the change, then run this again." % (p, where))
+        say("combined=%s (with changes on %s that this checkout had not seen)" % (p, where))
         out.append((p, (w[0], merged)))
     return out
 
@@ -1905,7 +2107,8 @@ def pr_aside(repo, a, base, rolling=False):
         say("previous=%s (its PR is %s): starting again from %s" % (branch, state or "in the trunk", repo.trunk))
     elif tip:
         say("reusing=%s (brought up to date with %s)" % (branch, repo.trunk))
-    changes = resolve_aside(repo, paths, start, branch, base)
+    where = branch if (tip and not superseded) else repo.trunk
+    changes = resolve_aside(repo, paths, start, branch, base, where)
     for p, entry in changes:
         if entry and entry[0] != "120000":
             text = git_bytes(repo, "cat-file", "blob", entry[1]).stdout.decode("utf-8", "replace")
@@ -1921,18 +2124,27 @@ def pr_aside(repo, a, base, rolling=False):
         gate_commit(repo, new, base, touched)
 
     def after_push():
-        # What each file of this checkout now stands for on the branch: the
-        # base of its next change here.
+        # What each file of this checkout now stands for on the branch — the
+        # base of its next change here — and HEAD's copy it stands against.
+        head = repo.head()
+        hb = lambda p: repo.blob_at(head, repo.top_path(p)) if head else None
         if rolling:
             keep = restore_checkout(repo, paths)
-            head = repo.head()
-            save_aside(repo, branch, {p: (repo.blob_at(head, repo.top_path(p)) if head else None) for p in paths})
+            save_aside(repo, branch, {p: (hb(p), hb(p)) for p in paths})
             return keep
-        save_aside(repo, branch, {p: repo.wt_blob(repo.top_path(p)) for p in paths})
+        save_aside(repo, branch, {p: (repo.wt_blob(repo.top_path(p)), hb(p)) for p in paths})
         return None
 
     if new == base:
-        say("result=nothing to propose: after this run, these files would match %s" % repo.trunk)
+        differs = [p for p in paths if repo.wt_blob(repo.top_path(p)) != repo.blob_at(base, repo.top_path(p))]
+        if differs:
+            # This checkout's copy is what it already proposed on a PR that
+            # is over: a PR that is over is not carried forward.
+            over = "whose PR is %s" % (state or "in the trunk") if tip else "which is gone from origin"
+            say("result=nothing new to propose: %s already went up on %s, %s; a PR that is over is not carried "
+                "forward. To propose it again, use a new --title." % (", ".join(differs), branch, over))
+        else:
+            say("result=nothing to propose: these files match %s" % repo.trunk)
         after_push()
         return OK
     if new != tip:
@@ -1976,35 +2188,44 @@ def pending_source(repo, a, base):
 def cmd_pending(repo, a):
     """Before editing a file a rolling PR carries: bring the PR's copy into
     the checkout (or the trunk's, when there is no open PR), merged with any
-    uncommitted changes of yours. Recorded for this worktree, so the next
+    uncommitted changes of yours. When those overlap it, your copy is kept
+    aside (its path is printed) and the PR's copy is brought in, so the edit
+    can be redone on it. Recorded for this worktree, so the next
     `land.sh pr --rolling` knows what the edit started from."""
     with Lock(repo):
         base = repo.fetch_trunk()
         branch, tip, start, superseded, source = pending_source(repo, a, base)
         head = repo.head()
-        files = {}
+        entries, kept = {}, []
         for p in a.paths:
             tp = repo.top_path(p)
             full = os.path.join(repo.top, tp)
             S = repo.blob_at(start, tp)
             W = repo.wt_blob(tp)
             H = repo.blob_at(head, tp) if head else None
-            files[p] = S
+            entries[p] = (S, H)
             if W == S:
                 say("file=%s (already %s's copy)" % (p, source))
                 continue
             if S == H:
                 say("file=%s (kept: your copy already has everything %s has)" % (p, source))
-                files[p] = H
+                entries[p] = (H, H)
                 continue
+            how = "from %s" % source
+            S_write = S
             if W != H:
                 merged = merge3(repo, H, S, W, union=bool(UNION_PATHS.match(p))) if W is not None else None
-                if merged is None:
-                    raise Stop(CONFLICT, "%s has uncommitted changes that overlap %s's copy. Nothing was changed. Propose yours first "
-                               "(land.sh pr --rolling), or put them aside, then run pending again." % (p, source))
-                S_write, how = merged, "merged with your uncommitted changes"
-            else:
-                S_write, how = S, "from %s" % source
+                if merged is not None:
+                    S_write, how = merged, "merged with your uncommitted changes"
+                elif W is None:
+                    kept.append((p, None))
+                    how = "from %s; you had deleted it, and the copy there changed since" % source
+                else:
+                    keep = os.path.join(repo.state, "stash", "pending-%s-%s" % (stamp(), os.urandom(2).hex()), tp)
+                    os.makedirs(os.path.dirname(keep), exist_ok=True)
+                    shutil.copy2(full, keep, follow_symlinks=False)
+                    kept.append((p, keep))
+                    how = "from %s; your uncommitted copy overlapped it and is kept at %s" % (source, keep)
             if S_write is None:
                 if os.path.lexists(full):
                     os.unlink(full)
@@ -2013,8 +2234,11 @@ def cmd_pending(repo, a):
                 with open(full, "wb") as fh:
                     fh.write(git_bytes(repo, "cat-file", "blob", S_write).stdout)
             say("file=%s (%s)" % (p, how))
-        save_aside(repo, branch, files)
+        save_aside(repo, branch, entries)
         say("pending=%s" % branch, "source=%s" % ("pr" if tip and not superseded else "trunk"))
+        if kept:
+            say("next=redo your change on the copy now in the checkout (yours: %s), then run land.sh pr again" %
+                ", ".join(k or "%s, deleted" % p for p, k in kept))
         return OK
 
 
@@ -2785,6 +3009,35 @@ def install_claude_hooks(root):
     return changed
 
 
+EXCLUDE_BEGIN = "# >>> rasa land: this checkout's own state >>>"
+EXCLUDE_END = "# <<< rasa land: this checkout's own state <<<"
+# Written by the Element for this checkout alone (the active mode, who "me"
+# is in the inbox): never part of a commit, so /push and autosave skip them.
+CHECKOUT_STATE = (".claude/mode.md", ".claude/mode.md.last", ".claude/mode-stats.md", ".claude/inbox/_me.md")
+
+
+def ensure_local_excludes(repo):
+    """Keep the checkout's own state out of git through .git/info/exclude
+    (per clone, never committed), in a managed block. Tracked copies are not
+    affected: git never ignores a tracked file."""
+    f = repo.git("rev-parse", "--git-path", "info/exclude").stdout.strip()
+    f = f if os.path.isabs(f) else os.path.join(repo.top, f)
+    block = "\n".join([EXCLUDE_BEGIN] + ["/%s%s" % (repo.prefix, x) for x in CHECKOUT_STATE] + [EXCLUDE_END]) + "\n"
+    try:
+        text = open(f, encoding="utf-8", errors="surrogateescape").read() if os.path.exists(f) else ""
+    except OSError:
+        return False
+    if block in text:
+        return True
+    text = re.sub(re.escape(EXCLUDE_BEGIN) + r".*?" + re.escape(EXCLUDE_END) + r"\n?", "", text, flags=re.S)
+    if text and not text.endswith("\n"):
+        text += "\n"
+    os.makedirs(os.path.dirname(f), exist_ok=True)
+    with open(f, "w", encoding="utf-8", errors="surrogateescape") as fh:
+        fh.write(text + block)
+    return True
+
+
 def cmd_hooks(root, land_sh):
     """The Claude hooks need no git; the pre-push layer does. In a folder
     that is not a git repository yet, the SessionStart hook arms it later."""
@@ -2798,6 +3051,7 @@ def cmd_hooks(root, land_sh):
         return OK
     armed, msg = install_prepush(repo, land_sh)
     say("prepush: " + msg)
+    ensure_local_excludes(repo)
     return OK if armed else REFUSED
 
 
@@ -2811,6 +3065,10 @@ def cmd_session(repo, land_sh):
             say("land: ⚠ pre-push trunk guard %s" % msg)
     except Exception as exc:  # noqa: BLE001 — a session hook must not fail
         say("land: ⚠ could not arm the pre-push trunk guard: %s" % exc)
+    try:
+        ensure_local_excludes(repo)
+    except Exception:  # noqa: BLE001
+        pass
     cfg = load_config(repo)
     rows = inflight(repo)
     docs = [r for r in rows if r.get("klass") == "docs"]
@@ -2824,7 +3082,22 @@ def cmd_session(repo, land_sh):
             say("  %s  PR %s  (%s since %s) → %s" %
                 (r.get("branch"), r.get("pr") or "not opened", r.get("event"), r.get("at"), nxt))
     if code:
-        say("land: %d code PR branch(es) pushed from here; a reviewer merges them (land.sh status lists them)" % len(code))
+        # One bounded read of the remote's branches: a code row whose branch
+        # is gone (merged and deleted, or closed) is closed in the log.
+        try:
+            r = repo.git("ls-remote", "--heads", "origin", check=False, timeout=15,
+                         env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
+            heads = set(l.split("refs/heads/", 1)[1] for l in r.stdout.splitlines() if "refs/heads/" in l) \
+                if r.returncode == 0 else None
+        except (subprocess.TimeoutExpired, OSError):
+            heads = None
+        if heads is not None:
+            for row in code:
+                if row.get("branch") not in heads:
+                    log_row(repo, "closed", branch=row.get("branch"), klass="code")
+            code = [row for row in code if row.get("branch") in heads]
+        if code:
+            say("land: %d code PR branch(es) pushed from here are still open; a reviewer merges them (land.sh status lists them)" % len(code))
     return OK
 
 

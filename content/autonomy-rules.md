@@ -174,7 +174,11 @@ The carve-out:
   fetched trunk, opens a PR, waits for CI, and merges pinned to the
   verified head (`--match-head-commit`). Other changes in the
   working tree neither block it nor ride along: the path-scoped
-  landing replaces the old clean-tree precondition.
+  landing replaces the old clean-tree precondition. One exception:
+  on a work branch, whose ledger carries its own transitions, a
+  ledger landing is refused (exit 3), so the filers file and land
+  from the planning worktree (`land/SKILL.md` "Planning from a work
+  branch") before they allocate an id.
 - **CI and branch protection win.** Only a CI pass merges. Checks
   failing or pending, or a merge that branch protection refuses,
   leave the PR open (exit 6) and the autonomy report says so. The

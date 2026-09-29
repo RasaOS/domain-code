@@ -308,10 +308,12 @@ When that file is absent, render "No mode active."
   `.claude/mode-stats.md` (the accumulator).
 - **Don't commit or propose the activation.** `.claude/mode.md` and
   `.claude/mode-stats.md` are this checkout's current drive, not a
-  project decision, so a switch is not worth a PR. The pipeline's
-  clean-tree checks (`./build/build`, the release gate) ignore them;
-  a project that would rather not see them in `git status` adds them
-  to `.gitignore`.
+  project decision, so a switch is not worth a PR. They stay out of
+  git on their own: every session start adds them to the clone's
+  `.git/info/exclude` (`land.sh session`), so `/push` and autosave
+  never commit them, and the pipeline's clean-tree checks ignore them.
+  (A project that tracked them earlier: `git rm --cached` them once,
+  by PR.)
 - **Don't fabricate stats.** If the activation log is empty
   or the mode definition is missing, render the empty state
   honestly. Never guess deltas from memory.

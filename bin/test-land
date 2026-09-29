@@ -1107,6 +1107,255 @@ git --git-dir="$R" show chore/handoff-welcome-from-a-branch:.claude/welcome.md 2
   && ok "  the PR still carries the rolling content" || bad "  the PR still carries the rolling content" "$(git --git-dir="$R" show chore/handoff-welcome-from-a-branch:.claude/welcome.md 2>&1)"
 git checkout -q -f main; git branch -q -D task/TASK-902-own-welcome; clean
 
+echo "round four — appends, stale bases, failed syncs, planning worktrees"
+clean
+out="$(python3 -B - "$P/.claude/skills/land" <<'PY' 2>&1
+import os, sys; sys.path.insert(0, sys.argv[1]); import land
+repo = land.Repo(os.getcwd()); os.makedirs(repo.state, exist_ok=True)
+m = lambda b, o, t: land.merge_bytes(repo, b, o, t, union=True)
+unread = b"# Inbox\n\n### `#0001` `[unread]` from `@t`\nhi\n"
+read = b"# Inbox\n\n### `#0001` `[read]` from `@t` *(read)*\nhi\n"
+two = b"# Inbox\n\n### `#0002` `[unread]` from `@u`\nyo\n"
+v1 = b"# Notes\nn1\nn2\nn3\nn4\nn5\nn6\n"
+fixed = v1.replace(b"n5\n", b"n5 FIXED\n")
+cases = [
+    ("a message added in two versions", m(b"", unread, read) is None),
+    ("a flip on one side is an edit", m(unread, unread, read) == read),
+    ("two appends keep both", (m(b"# Inbox\n", unread, two) or b"").count(b"`#000") == 2),
+    ("appends clash beside an edit elsewhere", m(v1, fixed + b"n10\n", v1 + b"n11\n") == fixed + b"n10\nn11\n"),
+    ("one line edited both ways", m(b"a\nb\nc\n", b"a\nB1\nc\n", b"a\nB2\nc\n") is None),
+    ("an edit next to the other side's append", m(b"a\nb\n", b"a\nB\n", b"a\nb\nc\n") is None),
+    ("git joining two clashes would write the blank line twice", m(b"a\n\nb\n", b"a\nX1\n\nX2\nb\n", b"a\nY1\n\nY2\nb\n") is None),
+    ("a shared first addition is kept once", m(b"a\n", b"a\nn10\nn11\n", b"a\nn10\nn12\n") == b"a\nn10\nn11\nn12\n"),
+    ("lines that look like conflict markers", m(b"a\n=======\n", b"a\n=======\nx\n", b"a\n=======\ny\n") == b"a\n=======\nx\ny\n"),
+]
+os.environ.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="merge.conflictStyle", GIT_CONFIG_VALUE_0="diff3")
+cases.append(("the same under a user's diff3 conflict style", m(b"a\n", b"a\nn10\nn11\n", b"a\nn10\nn12\n") == b"a\nn10\nn11\nn12\n"))
+bad = [name for name, good in cases if not good]
+print("union_rules=%s %s" % (not bad, bad))
+PY
+)"
+expect "a union keeps both sides' appends and never doubles or drops a line" 0 0 "union_rules=True" "$out"
+out="$(python3 -B - "$P/.claude/skills/land" <<'PY' 2>&1
+import base64, os, subprocess, sys; sys.path.insert(0, sys.argv[1]); import land
+repo = land.Repo(os.getcwd())
+data = ("a start copy gc pruned %s\n" % os.urandom(8).hex()).encode()
+blob = subprocess.run(["git", "hash-object", "--stdin"], input=data, stdout=subprocess.PIPE).stdout.decode().strip()
+gone = lambda: subprocess.run(["git", "cat-file", "-e", blob], stderr=subprocess.DEVNULL).returncode != 0
+entry = {"blob": blob, "head": "e" * 40}
+cases = [("not in the object store to begin with", gone()),
+         ("pruned, nothing saved: dropped", land.record_base(repo, entry, "e" * 40) == (None, False))]
+entry["data"] = base64.b64encode(data).decode()
+cases += [("HEAD moved under it: dropped", land.record_base(repo, entry, "f" * 40) == (None, False)),
+          ("pruned, content saved: written back", land.record_base(repo, entry, "e" * 40) == (blob, True) and not gone()),
+          ("committed since: still the start copy", land.record_base(repo, entry, blob) == (blob, True))]
+bad = [name for name, good in cases if not good]
+print("record_rules=%s %s" % (not bad, bad))
+PY
+)"
+expect "a saved start copy is used only while it describes this checkout, and survives gc" 0 0 "record_rules=True" "$out"
+mkdir -p .claude/inbox
+PATH="$GHPATH" bash "$L" pending --skill inbox --title "msgs for fay" -- .claude/inbox/fay.md >/dev/null 2>&1
+printf '# Inbox\n\n### `#0001` `[unread]` from `@t`\nhi\n' > .claude/inbox/fay.md
+PATH="$GHPATH" bash "$L" pr --rolling --skill inbox --title "msgs for fay" -- .claude/inbox/fay.md >/dev/null 2>&1
+FB="chore/inbox-msgs-for-fay"; FT="$(git --git-dir="$R" rev-parse "refs/heads/$FB")"
+FN="$(grep -l "^$FB\$" "$T"/gh/pr-*.head | head -1 | sed 's/.*pr-\([0-9]*\)\.head/\1/')"
+bash "$T/squash.sh" "$FN" >/dev/null 2>&1; git --git-dir="$R" update-ref "refs/heads/$FB" "$FT"   # the branch outlives the merge
+( cd "$O" && git checkout -q main && git pull -q --ff-only origin main 2>/dev/null \
+  && sed 's/`\[unread\]` from `@t`/`[read]` from `@t` *(read)*/' .claude/inbox/fay.md > "$T/fay" && cp "$T/fay" .claude/inbox/fay.md \
+  && git commit -qam "fay reads #0001" && git push -q origin main 2>/dev/null )
+out="$(PATH="$NOGH" bash "$L" pending --skill inbox --title "msgs for fay" -- .claude/inbox/fay.md 2>&1)"; rc=$?
+expect "no gh, a merged PR's kept branch, the trunk flipped a message: pending stops rather than doubling it" 5 "$rc" "conflicts" "$out"
+has "--pr-state merged" "$out" && ok "  and the hint names --pr-state merged" || bad "  hint names --pr-state merged" "$out"
+out="$(PATH="$NOGH" bash "$L" pending --skill inbox --title "msgs for fay" --pr-state merged -- .claude/inbox/fay.md 2>&1)"; rc=$?
+expect "  with --pr-state merged it starts from the trunk" 0 "$rc" "source=trunk" "$out"
+[ "$(grep -c '#0001' .claude/inbox/fay.md)" = 1 ] && ok "  one copy of the message" || bad "  one copy of the message" "$(cat .claude/inbox/fay.md)"
+git checkout -q -- . 2>/dev/null; clean
+
+clean
+mkdir -p docs/notes; printf '# Notes\nn1\nn2\nn3\nn4\nn5\nn6\n' > docs/notes/INDEX.md; git add docs/notes/INDEX.md; git commit -qm "index v1"; git push -q origin main 2>/dev/null
+git branch -q task/old
+( cd "$O" && git checkout -q main && git pull -q --ff-only origin main 2>/dev/null && sed 's/^n5$/n5 FIXED ON TRUNK/' docs/notes/INDEX.md > "$T/ix" \
+  && cp "$T/ix" docs/notes/INDEX.md && git commit -qam "trunk fixes n5" && git push -q origin main 2>/dev/null )
+bash "$L" sync >/dev/null 2>&1
+PATH="$GHPATH" bash "$L" pending --skill lessons --title "notes index stale" -- docs/notes/INDEX.md >/dev/null 2>&1
+printf 'n10\n' >> docs/notes/INDEX.md
+PATH="$GHPATH" bash "$L" pr --rolling --skill lessons --title "notes index stale" -- docs/notes/INDEX.md >/dev/null 2>&1
+git checkout -q task/old
+printf 'n11\n' >> docs/notes/INDEX.md
+out="$(PATH="$GHPATH" bash "$L" pr --rolling --skill lessons --title "notes index stale" -- docs/notes/INDEX.md 2>&1)"; rc=$?
+body="$(git --git-dir="$R" show chore/lessons-notes-index-stale:docs/notes/INDEX.md 2>/dev/null)"
+has "n5 FIXED ON TRUNK" "$body" && has "n10" "$body" && has "n11" "$body" \
+  && ok "after switching to an older branch, a rolling run keeps the trunk's change (the stale base is not used)" \
+  || bad "older branch keeps the trunk's change" "$(printf '%s' "$body" | tr '\n' '|') :: $out"
+git checkout -q -f main; git branch -q -D task/old; clean
+
+clean
+printf 'a\nB\nc\nd\n' > src/c.py
+PATH="$GHPATH" bash "$L" pr --skill dev --title cc -- src/c.py >/dev/null 2>&1
+CN="$(grep -l '^chore/dev-cc$' "$T"/gh/pr-*.head | head -1 | sed 's/.*pr-\([0-9]*\)\.head/\1/')"
+bash "$T/squash.sh" "$CN" >/dev/null 2>&1
+PATH="$GHPATH" bash "$L" settle --branch chore/dev-cc >/dev/null 2>&1
+( cd "$O" && git pull -q --ff-only origin main 2>/dev/null && printf 'a\nB2\nc\nd\n' > src/c.py && git commit -qam "B2 on the trunk" && git push -q origin main 2>/dev/null )
+bash "$L" sync >/dev/null 2>&1
+printf 'a\nB2\nC\nd\n' > src/c.py
+out="$(PATH="$GHPATH" bash "$L" pr --skill dev --title cc -- src/c.py 2>&1)"; rc=$?
+expect "after its PR merged and the trunk moved on, the same title proposes the new edit cleanly" 0 "$rc" "pushed=chore/dev-cc" "$out"
+has "combined=" "$out" && bad "  with no false combined= line" "$out" || ok "  with no false combined= line"
+git checkout -q -- src/c.py 2>/dev/null; clean
+
+clean
+printf 'k1\n' > src/kept.py
+PATH="$GHPATH" bash "$L" pr --skill dev --title "kept work" -- src/kept.py >/dev/null 2>&1
+KN="$(grep -l '^chore/dev-kept-work$' "$T"/gh/pr-*.head | head -1 | sed 's/.*pr-\([0-9]*\)\.head/\1/')"
+echo closed > "$T/gh/pr-$KN.state"
+out="$(PATH="$GHPATH" bash "$L" pr --skill dev --title "kept work" -- src/kept.py 2>&1)"; rc=$?
+expect "re-running after the PR was closed (branch kept) says the change went up on it" 0 "$rc" "whose PR is closed" "$out"
+has "new --title" "$out" && ok "  and names the way to propose it again" || bad "  names a new --title" "$out"
+rm -f src/kept.py; clean
+
+clean
+printf 'a\nb\nc\n' > src/w.py; git add src/w.py; git commit -qm "w base"; git push -q origin main 2>/dev/null
+printf 'a\nB1\nc\n' > src/w.py
+PATH="$GHPATH" bash "$L" pr --skill dev --title "w work" -- src/w.py >/dev/null 2>&1
+WN="$(grep -l '^chore/dev-w-work$' "$T"/gh/pr-*.head | head -1 | sed 's/.*pr-\([0-9]*\)\.head/\1/')"
+echo closed > "$T/gh/pr-$WN.state"
+( cd "$O" && git pull -q --ff-only origin main 2>/dev/null && printf 'a\nB2\nc\n' > src/w.py && git commit -qam "B2 on the trunk" && git push -q origin main 2>/dev/null )
+printf 'a\nB1x\nc\n' > src/w.py
+out="$(PATH="$GHPATH" bash "$L" pr --skill dev --title "w work" -- src/w.py 2>&1)"; rc=$?
+expect "after its PR closed, an edit overlapping the trunk's change stops and names the trunk" 5 "$rc" "main has changes this checkout never saw" "$out"
+git checkout -q -- src/w.py 2>/dev/null; clean
+
+clean
+printf 'x1\n' > src/gone.py
+PATH="$GHPATH" bash "$L" pr --skill dev --title "gone work" -- src/gone.py >/dev/null 2>&1
+GN="$(grep -l '^chore/dev-gone-work$' "$T"/gh/pr-*.head | head -1 | sed 's/.*pr-\([0-9]*\)\.head/\1/')"
+echo closed > "$T/gh/pr-$GN.state"; git --git-dir="$R" update-ref -d refs/heads/chore/dev-gone-work
+out="$(PATH="$GHPATH" bash "$L" pr --skill dev --title "gone work" -- src/gone.py 2>&1)"; rc=$?
+expect "re-running after the PR was closed and its branch deleted says the change was already proposed" 0 "$rc" "nothing new to propose" "$out"
+has "gone from origin" "$out" && has "new --title" "$out" && ok "  says the branch is gone and names a new --title" || bad "  says the branch is gone and names a new --title" "$out"
+rm -f src/gone.py; clean
+
+clean
+printf '# staged doc\n' > docs/audits/stg.md
+out="$(PATH="$NOGH" bash "$L" docs --skill audit --title stg -- docs/audits/stg.md 2>&1)"
+SGB="$(printf '%s\n' "$out" | sed -n 's/^branch=//p')"; SGN="$(open_pr "$SGB")"; bash "$T/squash.sh" "$SGN" >/dev/null 2>&1
+git add docs/audits/stg.md
+( cd "$O" && git pull -q --ff-only origin main 2>/dev/null && printf 'theirs\n' > clash2.txt && git add clash2.txt && git commit -qm clash2 && git push -q origin main 2>/dev/null )
+printf 'mine\n' > clash2.txt
+out="$(bash "$L" sync 2>&1)"; rc=$?
+expect "a failed sync (untracked file in the way)" 5 "$rc" "" "$out"
+[ "$(git status --porcelain -- docs/audits/stg.md)" = "A  docs/audits/stg.md" ] && ok "  leaves a staged file staged" || bad "  staged file still staged" "$(git status --porcelain -- docs/audits/stg.md)"
+rm -f clash2.txt; git reset -q; bash "$L" sync >/dev/null 2>&1; clean
+
+clean
+out="$(python3 -B - "$P/.claude/skills/land" "$P" <<'PY' 2>&1
+import os, sys, time, queue, multiprocessing
+sys.path.insert(0, sys.argv[1]); import land
+repo = land.Repo(sys.argv[2])
+lk = os.path.join(repo.state, "lock")
+real_stale = land.Lock._stale
+def slow_stale(self):
+    # A waiter descheduled right after judging the lock stale: the window a
+    # takeover must survive (another waiter replaces the lock meanwhile).
+    r = real_stale(self)
+    if r:
+        time.sleep(0.2)
+    return r
+land.Lock._stale = slow_stale
+def worker(i, q):
+    with land.Lock(repo):
+        t0 = time.time(); time.sleep(0.05); q.put((t0, time.time()))
+ctx = multiprocessing.get_context("fork")  # spawn cannot re-import a script read from stdin
+over = 0
+for trial in range(3):
+    os.makedirs(lk, exist_ok=True)
+    open(os.path.join(lk, "owner"), "w").write("999999 %d proc:1 deadbeef\n" % int(time.time()))
+    q = ctx.Queue()
+    ps = [ctx.Process(target=worker, args=(i, q)) for i in range(8)]
+    [p.start() for p in ps]; [p.join(120) for p in ps]
+    spans = []
+    try:
+        for _ in range(8):
+            spans.append(q.get(timeout=5))
+    except queue.Empty:
+        print("crash=%d of 8 never held the lock" % (8 - len(spans)))
+    spans.sort()
+    over += sum(1 for a, b in zip(spans, spans[1:]) if b[0] < a[1])
+    bad = [p.exitcode for p in ps if p.exitcode != 0]
+    if bad: print("crash=%s" % bad)
+print("overlaps=%d" % over)
+PY
+)"
+expect "a stale lock taken over by 8 waiters that pause after judging it stale: never two holders, no crash" 0 0 "^overlaps=0$" "$out"
+has "crash=" "$out" && bad "  no crash" "$out" || true
+
+clean
+git checkout -q -b task/TASK-903-plan
+$TASK new --type change --phase P1 --by tester "Plan one" >/dev/null 2>&1; git add -A tasks; git commit -qm "branch ledger" >/dev/null 2>&1
+WT="$(git rev-parse --show-toplevel)/../trunk-land-t"; SUB="$(git rev-parse --show-prefix)"
+plan_wt() { [ -d "$WT" ] || { git worktree prune; git worktree add -q --detach "$WT" origin/main 2>/dev/null; }; }   # land/SKILL.md
+rm -rf "$WT"; git worktree prune
+plan_wt
+out="$(cd "$WT/$SUB" && bash .claude/skills/land/land.sh sync 2>&1 && python3 .claude/bin/task new --type change --phase P1 --by tester "Planned in the worktree" >/dev/null 2>&1 \
+  && F1="$(ls tasks/backlog/*planned-in-the-worktree*.md | head -1)" \
+  && PATH="$GHPATH" bash .claude/skills/land/land.sh docs --skill task --title "planned 1" -- "$F1" tasks/history.tsv tasks/ROADMAP.md 2>&1)"; rc=$?
+expect "the planning worktree lands a filed task" 0 "$rc" "merged=#" "$out"
+[ "$(git -C "$WT" rev-parse HEAD)" = "$(git -C "$WT" rev-parse origin/main)" ] && ls "$WT/$SUB"tasks/backlog/*planned-in-the-worktree*.md >/dev/null 2>&1 \
+  && ok "  and settle moves the worktree onto the trunk that now holds it" || bad "  settle moves the detached worktree on" "$(git -C "$WT" log --oneline -1) :: $(git -C "$WT" status --porcelain)"
+advance
+out="$(cd "$WT/$SUB" && bash .claude/skills/land/land.sh sync 2>&1 && python3 .claude/bin/task new --type change --phase P1 --by tester "Planned again" >/dev/null 2>&1 \
+  && F2="$(ls tasks/backlog/*planned-again*.md | head -1)" \
+  && PATH="$GHPATH" bash .claude/skills/land/land.sh docs --skill task --title "planned 2" -- "$F2" tasks/history.tsv tasks/ROADMAP.md 2>&1)"; rc=$?
+expect "  and again after the trunk moved (sync moves the detached worktree on)" 0 "$rc" "merged=#" "$out"
+[ -z "$(git -C "$WT" status --porcelain)" ] && ok "  and the worktree is clean afterwards" || bad "  worktree clean" "$(git -C "$WT" status --porcelain)"
+rm -rf "$WT"
+plan_wt && [ -f "$WT/$SUB/.claude/skills/land/land.sh" ] && ok "  and the documented setup recovers a worktree folder deleted by hand" \
+  || bad "  worktree re-added after rm -rf" "$(git worktree list 2>&1)"
+git worktree remove --force "$WT" 2>/dev/null; git checkout -q -f main; git branch -q -D task/TASK-903-plan; clean
+
+clean
+PATH="$GHPATH" bash "$L" pending --skill handoff --title "welcome overlap" -- .claude/welcome.md >/dev/null 2>&1
+printf '# Welcome back\n\nsession one\n' > .claude/welcome.md
+PATH="$GHPATH" bash "$L" pr --rolling --skill handoff --title "welcome overlap" -- .claude/welcome.md >/dev/null 2>&1
+S4="$T/fourth"; rm -rf "$S4"; git clone -q "$R" "$S4" 2>/dev/null; (cd "$S4" && git config user.email s4@x && git config user.name s4)
+printf '# Welcome back\n\nsession two, overlapping\n' > "$S4/.claude/welcome.md"
+out="$(cd "$S4" && PATH="$GHPATH" bash .claude/skills/land/land.sh pr --rolling --skill handoff --title "welcome overlap" -- .claude/welcome.md 2>&1)"; rc=$?
+expect "an overlapping rolling edit stops" 5 "$rc" "Run \`land.sh pending\`" "$out"
+out="$(cd "$S4" && PATH="$GHPATH" bash .claude/skills/land/land.sh pending --skill handoff --title "welcome overlap" -- .claude/welcome.md 2>&1)"; rc=$?
+expect "  then pending brings the PR's copy in and keeps yours aside (no loop)" 0 "$rc" "is kept at" "$out"
+KEPT="$(printf '%s\n' "$out" | sed -n 's/.*is kept at \([^)]*\)).*/\1/p' | head -1)"
+grep -q "session one" "$S4/.claude/welcome.md" && [ -n "$KEPT" ] && grep -q "session two" "$KEPT" \
+  && ok "  the checkout holds the PR's copy, and yours is where it says" || bad "  PR copy in, yours kept" "kept=$KEPT :: $(cat "$S4/.claude/welcome.md")"
+
+clean
+EXC="$(git rev-parse --git-path info/exclude)"
+sed "/rasa land: this checkout's own state/,/rasa land: this checkout's own state/d" "$EXC" > "$T/exc" && cp "$T/exc" "$EXC"
+grep -q "rasa land: this checkout's own state" "$EXC" && bad "fixture: the exclude block was not removed" "$(cat "$EXC")"
+bash "$L" session >/dev/null 2>&1
+grep -q "rasa land: this checkout's own state" "$EXC" && ok "session keeps the checkout's own state in .git/info/exclude" || bad "info/exclude block" "missing"
+printf -- '---\nmode: task\n---\n' > .claude/mode.md
+[ -z "$(git status --porcelain -- .claude/mode.md)" ] && ok "  so .claude/mode.md never shows up to be committed" || bad "  mode.md hidden" "$(git status --porcelain)"
+rm -f .claude/mode.md
+printf 'code\n' > src/closing.py
+PATH="$GHPATH" bash "$L" pr --skill dev --title "closing code" -- src/closing.py >/dev/null 2>&1
+git --git-dir="$R" update-ref -d refs/heads/chore/dev-closing-code
+bash "$L" session >/dev/null 2>&1
+grep '"chore/dev-closing-code"' .git/land/log.jsonl | tail -1 | grep -q '"closed"' && ok "session closes a code row whose branch is gone" || bad "code row closed" "$(grep closing-code .git/land/log.jsonl | tail -1)"
+rm -f src/closing.py; clean
+
+clean
+mkdir -p docs/notes; printf '# Notes\nd1\n' > docs/notes/INDEX.md; git add docs/notes/INDEX.md; git commit -qm "index d1"; git push -q origin main 2>/dev/null
+PATH="$GHPATH" bash "$L" pending --skill lessons --title "notes del" -- docs/notes/INDEX.md >/dev/null 2>&1
+printf 'd2\n' >> docs/notes/INDEX.md
+PATH="$GHPATH" bash "$L" pr --rolling --skill lessons --title "notes del" -- docs/notes/INDEX.md >/dev/null 2>&1
+rm -f docs/notes/INDEX.md
+out="$(PATH="$GHPATH" bash "$L" pending --skill lessons --title "notes del" -- docs/notes/INDEX.md 2>&1)"; rc=$?
+expect "pending after the file was deleted here brings the PR's copy back and says so" 0 "$rc" "you had deleted it" "$out"
+grep -q '^d2$' docs/notes/INDEX.md 2>/dev/null && has "INDEX.md, deleted" "$out" && ok "  the PR's copy is in the checkout, and next= names the deletion" \
+  || bad "  PR copy back, deletion named" "$out :: $(cat docs/notes/INDEX.md 2>&1)"
+git checkout -q -- . 2>/dev/null; clean
+
 echo "guard table — what must be refused and what must pass"
 out="$(python3 -B - "$P" <<'PYTABLE'
 import json, subprocess, sys

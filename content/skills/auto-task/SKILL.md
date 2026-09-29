@@ -67,7 +67,11 @@ the repo doesn't hold is a flagged assumption, surfaced loudly.
    if none fits, file to `tasks/triage/` (omit `--phase`). Then
    sync and file — ids come from the local ledger, so it must hold
    the latest trunk (report a non-zero sync exit; never retry it
-   blindly):
+   blindly).
+   On a work branch (anything but the trunk or a `wip/` branch), run
+   this and the landing from the planning worktree of `land/SKILL.md`
+   "Planning from a work branch": the branch's ledger carries its own
+   transitions, and `land.sh docs` refuses it there (exit 3).
 
    ```bash
    bash .claude/skills/land/land.sh sync

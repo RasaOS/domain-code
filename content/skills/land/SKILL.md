@@ -74,6 +74,7 @@ Exit 0 has more than one meaning, so report from the output keys:
 | `combined=<path>` (`land.sh pr`) | That file also carries changes another session or a reviewer made on the PR branch |
 | `unchanged=<branch>` (`land.sh pr`) | The PR already carries these files |
 | `result=nothing to propose` (`land.sh pr`) | Nothing to propose: the files would match the trunk |
+| `result=nothing new to propose` (`land.sh pr`) | Nothing pushed: the checkout's change already went up on a PR that is over (merged, closed, or its branch gone). Say so; to propose it again, run with a new `--title` |
 
 ## What `land.sh docs` does
 
@@ -86,8 +87,8 @@ Exit 0 has more than one meaning, so report from the output keys:
    a commit made with plumbing, replayed onto the fresh trunk in a
    hook-less scratch worktree. Ledger files that carry commits of a work
    branch (a task branch's `start`/`submit` rows ride its PR) are refused
-   (exit 3): planning moves land from a checkout of the trunk, such as a
-   worktree (`git worktree add ../trunk-land origin/<trunk>`). Ledger files
+   (exit 3): planning moves land from a checkout of the trunk (see
+   "Planning from a work branch" below). Ledger files
    (`tasks/history.tsv`, `ROADMAP.md`, `AUDIT.md`) merge line by line;
    `history.tsv` is kept in date order. A conflict stops here (exit 5)
    with nothing pushed. A change that would add a `check-tasks` error
@@ -159,15 +160,18 @@ last push to that branch; with no record, the file where this checkout
 left the trunk (so a change committed on a local trunk ahead of origin
 is proposed too). A revert is a revert; a change someone else made on
 the branch (a reviewer, the trunk, another session or worktree) is kept,
-and overlapping edits stop the run (exit 5, `land.sh pending` then redo).
+and overlapping edits stop the run (exit 5): `land.sh pending` then
+brings in that copy, keeps yours aside (it prints where), and you redo the
+change on it.
 Once the branch's PR has merged or been closed, the next run starts
 again from the trunk and opens a new PR; a rejected change is not
 carried forward. Without `gh` the PR's state cannot be read: pass it
 with `--pr-state open|closed|merged` (read with the session's GitHub
 tooling); left out, the branch is treated as an open PR and the output
-says so (`pr_state=unknown`). Your files stay as they are; after the
-PR merges, `land.sh settle --branch <b>` (or `--pr <N>`) brings the
-checkout up to date. `--switch` instead moves the checkout onto the new
+says so (`pr_state=unknown`). A GitHub PR's branch usually outlives the
+merge, so after one merges pass `--pr-state merged`. Your files stay as
+they are; after the PR merges, `land.sh settle --branch <b>` (or
+`--pr <N>`) brings the checkout up to date. `--switch` instead moves the checkout onto the new
 branch, carrying your uncommitted work, for when you will keep working
 there, or when verification (`./build/build`, `./build/test`) must run
 on the committed change; from a local trunk that has commits origin
@@ -187,8 +191,10 @@ one rolling PR, keyed by `--skill` and `--title`:
 2. After editing, `land.sh pr --rolling --skill S --title T -- <file>`
    builds the PR's branch aside from the latest trunk, whatever branch
    is checked out, merging line by line with anything another session
-   pushed there meanwhile (the inbox and the notes index are
-   append-only), and pushes it.
+   pushed there meanwhile, and pushes it. In the inbox and the notes
+   index (append-only), additions both sides made at the same place
+   are both kept; an edit there, such as an inbox status flip against
+   the unflipped message, stops with exit 5 rather than doubling it.
 3. The checkout's copy goes back to its committed version (a copy is
    kept in the land state), so the tree stays clean for `./build/build`
    and `/release`. The content lives on the PR until a reviewer merges
@@ -203,6 +209,26 @@ once the PR has been closed or merged, as above.
 does. For task work, `/open-pr` owns the ready PR (§10 body) and marks a
 draft ready.
 
+### Planning from a work branch
+
+A task branch's ledger carries its own transitions (`start`, `submit`),
+which ride its PR, so `land.sh docs` refuses a ledger landing from it
+(exit 3). File and land planning moves (a new task, a spec, a phase edit)
+from a checkout of the trunk instead: a planning worktree beside this
+one, made once and synced before every use (ids come from the local
+ledger). From the install folder:
+
+```bash
+WT="$(git rev-parse --show-toplevel)/../trunk-land"; SUB="$(git rev-parse --show-prefix)"
+[ -d "$WT" ] || { git worktree prune; git worktree add --detach "$WT" "origin/<trunk>"; }
+cd "$WT/$SUB" && bash .claude/skills/land/land.sh sync
+```
+
+Then `.claude/bin/task new …` there and `land.sh docs` from there. The
+worktree is a detached checkout of the trunk: `sync` moves it on, and a
+landing's settle leaves it clean. If something was already filed on the
+work branch, undo it there first: it is not on the trunk.
+
 ## Sync
 
 `land.sh sync` brings the latest trunk into the checkout: a fast-forward
@@ -214,7 +240,9 @@ origin; otherwise they are put on a `rescue/<trunk>-<utc>` branch,
 pushed, to propose by PR (`/push`, or `land.sh pr` from that branch),
 and then the trunk moves (a later sync reuses that branch rather than
 making another). A conflicting merge is undone and reported (exit 5),
-and the checkout is left as it was. `land.sh fresh --sha <sha>` answers "does
+and the checkout is left as it was, staged work included. A detached
+checkout of the trunk (a planning worktree) is moved on to the latest
+trunk. `land.sh fresh --sha <sha>` answers "does
 this commit contain the latest trunk?" for merge gates, and
 `land.sh sync-pr --branch <b>` merges the trunk into a PR's branch
 without touching the checkout.
@@ -264,7 +292,9 @@ session start arms pre-push once it is):
   and `delete_file` on the trunk (or with no branch) are refused.
 
 Hook commands run through `$CLAUDE_PROJECT_DIR`, so a `cd` does not
-switch them off.
+switch them off. The session start also keeps this checkout's own state
+(`.claude/mode.md`, `mode-stats.md`, `inbox/_me.md`) out of git through
+`.git/info/exclude`, so `/push` and autosave never commit it.
 
 **The honest ceiling.** A hook sees what a tool call says, not what it
 means; a determined enough command can get around it. The server is the

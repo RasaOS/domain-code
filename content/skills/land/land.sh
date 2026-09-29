@@ -28,7 +28,7 @@
 #                                       goes back to HEAD for those files
 #   land.sh pending --skill S --title T [--pr-state S] -- <path>...
 #                                       before editing files a rolling PR carries:
-#                                       bring the PR's copy into the checkout
+#                                       bring its copy in (yours kept aside on overlap)
 #   land.sh show    --skill S --title T [--pr-state S] -- <path>...
 #                                       print that copy; the checkout is untouched
 #                                       (--pr-state open|closed|merged: the PR's

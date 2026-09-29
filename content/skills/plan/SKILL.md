@@ -185,7 +185,10 @@ task files, name those too (both paths of a moved one) and
 file that lands without its row breaks the ledger, and the landing
 refuses (exit 5). Exit 4 (no `gh`): finish with the
 session's GitHub tooling per `land/SKILL.md` "Without `gh`".
-Exits 5/6/7: report, never retry blindly. As a step of
+Exits 5/6/7: report, never retry blindly. Exit 3 (a work branch,
+whose ledger carries its own transitions): undo the edit here and
+redo it, and the landing, from the planning worktree of
+`land/SKILL.md` "Planning from a work branch". As a step of
 `/mission`, `/self-heal` or `/self-improve`, skip this: the
 orchestrator's branch and PR carry the files. The report gets one
 line: `Landed: PR #N merged` or `Not landed: exit N — <message>`.
