@@ -1089,9 +1089,23 @@ out="$(ENV_CLASS=prod bash build/gates/git-clean.sh 2>&1)"; rc=$?
 expect "the clean-tree gate ignores the checkout's own mode files" 0 "$rc" "" "$out"
 rm -f .claude/mode.md .claude/mode-stats.md
 out="$(bash "$L" session 2>&1)"
-has "held for a person" "$out" && has "chore/" "$out" && bad "session does not call code PRs held" "$out" || ok "session does not call code PRs held for a person"
+has "code PR branch(es) pushed from here" "$out" && ! has "held for a person" "$out" \
+  && ok "session counts code PRs, and does not call them held for a person" || bad "session and code PRs" "$out"
 NG2="$T/nogit2"; mkdir -p "$NG2"; out="$("$ELEMENT/bin/init" "$NG2" </dev/null 2>&1)"
 has "could not install the trunk guard" "$out" && bad "bin/init outside git reports a deferral, not a failure" "$out" || ok "bin/init outside git reports a deferral, not a failure"
+out="$(RASA_ROOT="$NG2" bash "$L" hooks 2>&1)"; rc=$?
+expect "  land.sh hooks outside git: the Claude hooks go in, pre-push is deferred (exit 0)" 0 "$rc" "prepush: deferred" "$out"
+clean
+git checkout -q -b task/TASK-902-own-welcome
+printf '# Welcome (the branch has its own)\n' > .claude/welcome.md; git commit -qam "the branch's own welcome"
+PATH="$GHPATH" bash "$L" pending --skill handoff --title "welcome from a branch" -- .claude/welcome.md >/dev/null 2>&1
+printf '# Welcome back\n\nrolling from a branch\n' > .claude/welcome.md
+PATH="$GHPATH" bash "$L" pr --rolling --skill handoff --title "welcome from a branch" -- .claude/welcome.md >/dev/null 2>&1
+out="$(PATH="$GHPATH" bash "$L" pr --rolling --skill handoff --title "welcome from a branch" -- .claude/welcome.md 2>&1)"; rc=$?
+expect "a rolling re-run from a branch with its own copy of the file changes nothing" 0 "$rc" "unchanged=" "$out"
+git --git-dir="$R" show chore/handoff-welcome-from-a-branch:.claude/welcome.md 2>/dev/null | grep -q "rolling from a branch" \
+  && ok "  the PR still carries the rolling content" || bad "  the PR still carries the rolling content" "$(git --git-dir="$R" show chore/handoff-welcome-from-a-branch:.claude/welcome.md 2>&1)"
+git checkout -q -f main; git branch -q -D task/TASK-902-own-welcome; clean
 
 echo "guard table — what must be refused and what must pass"
 out="$(python3 -B - "$P" <<'PYTABLE'
@@ -1118,7 +1132,7 @@ DENY = [
  "git update-ref refs/remotes/origin/HEAD feat",
  "git send-pack ../r HEAD:refs/heads/main", "git http-push x main",
  "rm .git/hooks/pre-push", "echo x > .git/hooks/pre-push", "chmod -x .git/hooks/pre-push", "mv .git/hooks/pre-push /tmp/",
- "cd .git && rm hooks/pre-push", "rm -rf .git/land", "sed -i s/x/y/ .git/hooks/pre-push",
+ "cd .git && rm hooks/pre-push", "rm -rf .git/land", "sed -i s/x/y/ .git/hooks/pre-push",  # rfm-ok: guard payloads (strings), never run
  "gh api -X PUT repos/o/r/pulls/5/merge", "gh api --method=PUT repos/o/r/pulls/5/merge", "gh api repos/o/r/merges -f base=main -f head=feat",
  "gh api -X PATCH repos/o/r/git/refs/heads/main -f sha=abc", "gh api repos/o/r/contents/x.md -X PUT -f message=m -f content=Y",
  "gh api graphql -f query='mutation { mergeBranch(input:{}) { clientMutationId } }'", "GH_TOKEN=x gh api -X PUT repos/o/r/pulls/5/merge",
