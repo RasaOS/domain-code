@@ -19,7 +19,7 @@ Confirm exact wording with the user before writing anything.
   paraphrases unilaterally. The user agrees on the exact text
   before any file is touched.
 - **Default scope is project.** Most rules are project-specific.
-  Promotion to kit-level needs explicit user say-so. (And if the
+  Promotion to Element-level needs explicit user say-so. (And if the
   user later finds the rule applies across projects, they run
   `/rule-promote` to graduate it.)
 - **One rule per invocation.** Don't bulk-codify. Each rule is a
@@ -30,11 +30,14 @@ Confirm exact wording with the user before writing anything.
 - **Place in the right section.** Read the target file first;
   find the section where the rule belongs (testing, schema,
   process, etc.). If no section fits, ask before creating one.
-- **Never auto-commit.** Edits land in the working tree. The
-  user reviews with `git diff`.
-- **Kit-level rules go through `/contribute`.** This skill
-  drafts the kit edit; the actual PR happens via `/contribute`.
-  Keeps the kit-write path single-channel.
+- **Land by PR, never merge.** Rule files and `CLAUDE.md` are
+  agent instructions, so code class (`/land`): the approved edit
+  goes up in a PR this skill never merges (Step 7). The user
+  reviews it there.
+- **Element-level rules go through `/contribute`** from a project.
+  This skill drafts the Element edit; the actual PR happens via
+  `/contribute`. Keeps the Element write path single-channel. (In
+  the Element repository itself, Step 7 opens that PR.)
 
 ## Process
 
@@ -69,19 +72,20 @@ Where does this rule belong?
 
 1. **Project** — only applies to this project. Goes in
    `CLAUDE.md`.
-2. **Kit (universal)** — applies to every project. Goes in
+2. **Element (universal)** — applies to every project. Goes in
    `content/code-task-rules.md` (via `/contribute` PR back to
    `rasa.domain.code`).
-3. **Kit (platform-specific)** — applies to all projects on a
+3. **Element (platform-specific)** — applies to all projects on a
    given platform. Goes in `content/<platform>-task-rules.md`.
 
 Default: project.
 ```
 
-If the user picks kit-level but the working directory isn't the
-kit repo, that's fine — the skill drafts the edit and routes
-through `/contribute`. If working in the kit repo directly, the
-edit applies in place but still doesn't auto-commit.
+If the user picks Element-level but the working directory isn't
+the Element repository, that's fine — the skill drafts the edit
+and routes through `/contribute`. If working in the Element
+repository directly, the edit applies in place and goes up in a
+PR (Step 7).
 
 ### Step 3 — Find the right section
 
@@ -114,7 +118,7 @@ Which?
 
 ### Step 4 — Draft the edit
 
-Compose the rule entry. Pattern for the kit's existing style:
+Compose the rule entry. Pattern for the Element's existing style:
 
 ```markdown
 - **<short imperative claim>** — <one-line rationale, optionally
@@ -143,14 +147,37 @@ prompted it in the current conversation>.
 
 ### Step 6 — Apply (or route)
 
-- **Project scope** → write the edit to `CLAUDE.md` in the
-  working tree. Don't commit. Tell the user to `git diff` and
-  commit when ready.
-- **Kit scope** → write the edit to the kit-managed file (if
-  in the kit repo) or stage the diff for `/contribute` to
-  package. Either way: don't commit.
+- **Project scope** → write the edit to `CLAUDE.md`, then land
+  it (Step 7).
+- **Element scope** → in the Element repository, write the edit to
+  the rule file under `content/` and land it (Step 7). In
+  a project, stage the diff for `/contribute` to package; it
+  opens the upstream PR, so skip Step 7.
 
-### Step 7 — Closing summary
+### Step 7 — Land the edit
+
+Rule files and `CLAUDE.md` are code class, so the edit goes up in
+a PR this skill never merges (`land/SKILL.md`). Name only the
+file this run edited. In a project:
+
+```bash
+bash .claude/skills/land/land.sh pr --skill codify --title "<rule>" -- CLAUDE.md
+```
+
+In the Element repository itself, the same command runs by its
+content path, with `RASA_ROOT` set to the repository:
+
+```bash
+RASA_ROOT="$PWD" bash content/skills/land/land.sh pr --skill codify --title "<rule>" -- content/<file>
+```
+
+Exit 4 → finish with the session's GitHub tooling per
+`land/SKILL.md` "Without `gh`". Exits 5, 6, 7 → report, never
+retry blindly. Run as a step of `/mission`, `/self-heal` or
+`/self-improve`, skip this step: the orchestrator's branch and PR
+carry the file.
+
+### Step 8 — Closing summary
 
 ```markdown
 # ✍️ Codified
@@ -159,12 +186,11 @@ prompted it in the current conversation>.
 
 - **Where it landed:** `<path>` *(section: <section>)*
 - **Source.** <one-line context>
-- **Status:** uncommitted in working tree.
+- **PR:** #<N> open, never merged by this skill
+  *(or: Not landed: exit <N> — <message>)*
 
-`git diff <path>` to review. Commit when ready.
-
-*(If kit scope:)* Run `/contribute` to package this as a PR
-upstream.
+*(If Element scope, from a project:)* no PR here; run `/contribute`
+to package this as a PR upstream.
 ```
 
 ## Style rules
@@ -186,13 +212,14 @@ upstream.
   the user has three, run the skill three times.
 - **Don't auto-place.** When section choice is ambiguous, ask.
   Wrong placement = forgotten rule.
-- **Don't auto-commit.** Standard kit rule.
+- **Don't merge the PR or commit to the trunk.** The edit goes
+  up by `land.sh pr` (Step 7) and waits for a reviewer.
 - **Don't infer scope from context.** Ask. The user knows
   whether the rule generalizes; you don't.
-- **Don't promote project rules to kit-level unilaterally.**
+- **Don't promote project rules to Element-level unilaterally.**
   That's `/rule-promote`'s job, and it requires the rule
   appearing in 2+ projects.
-- **Don't edit kit-managed files in a project repo without
+- **Don't edit Element-managed files in a project repo without
   routing through `/contribute`.** The single-channel write
   path is intentional.
 
@@ -207,13 +234,13 @@ upstream.
   to reconcile.
 - **CLAUDE.md doesn't exist yet.** Ask whether to create it.
   Don't create it silently.
-- **The user wants a rule that's about the kit itself**
+- **The user wants a rule that's about the Element itself**
   (e.g. "/sync should check X first"). That's not a rule for
   `code-task-rules.md`; that's a feature request for a skill. Route
   to a normal conversation about the skill.
 - **Working tree is dirty in the file being edited.** Warn
   before writing — the user may be in the middle of an unrelated
-  edit.
+  edit, and the Step 7 PR would carry it too.
 
 ## When NOT to use this skill
 
@@ -229,7 +256,8 @@ upstream.
 ## What "done" looks like for a /codify session
 
 One rule, exact wording approved by the user, written to the
-right section of either `CLAUDE.md` or a kit-managed file (with
-`/contribute` queued if kit-level). Working tree dirty,
-uncommitted. The user knows where the rule landed and what to
+right section of either `CLAUDE.md` or an Element-managed file (with
+`/contribute` queued if Element-level from a project). Otherwise in
+an open PR this skill never merges, or the report names the
+`/land` exit. The user knows where the rule landed and what to
 do next.

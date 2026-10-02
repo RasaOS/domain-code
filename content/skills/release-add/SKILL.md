@@ -11,8 +11,9 @@ landed on `main`, find the top "🚧 Next" entry in
 running twice for the same task is a no-op.
 
 Per CLAUDE.md ethos: small skills do one thing well. This skill
-manages one append operation on one file. It does not commit, it
-does not bump versions, it does not ship.
+manages one append operation on one file, and lands it (with any
+ledger move it made) through `land.sh docs`. It does not bump
+versions, it does not ship.
 
 ## Behavior contract
 
@@ -103,9 +104,11 @@ does not bump versions, it does not ship.
   `<title from spec — fill in later>` and flag it.
 - **Append, don't reorder.** The task list under "🚧 Next" is in
   merge order. Append the new task at the bottom of the list.
-- **Never auto-commit.** Same as the rest of the kit's
-  non-`/release` skills. The user reviews `git diff` and commits
-  the RELEASES.md change in their next commit.
+- **Land it, don't commit it by hand.** `tasks/RELEASES.md` and any
+  ledger move this skill made (a `pass` into `tasks/completed/`,
+  `tasks/history.tsv`) are docs class: `land.sh docs` lands them at
+  the end (Step 8) — also when `/peer-review` runs this skill after a
+  merge, so the merge no longer leaves `tasks/RELEASES.md` dirty.
 
 ## The `--since-last-tag` mode
 
@@ -159,10 +162,31 @@ Behavior:
 7. **Render a one-line confirmation** in chat:
    `→ Tracked TASK-NNN for v0.38.0 (next release).` or
    `→ Already tracked TASK-NNN for v0.38.0.`
-8. **Don't commit.** The file change sits in the working tree.
+8. **Land.** The files are docs class, so they land by themselves
+   (a PR from the latest trunk that merges after CI):
+
+   ```bash
+   bash .claude/skills/land/land.sh docs --skill release-add --title "bundle <ids> into <version>" --tasks "<ids>" -- <files>
+   ```
+
+   Name `tasks/RELEASES.md`, plus, when this run passed a task, both
+   paths of each task file a verb moved (its old `review/` or
+   `active/` path and its `tasks/completed/` path) and
+   `tasks/history.tsv`. Nothing changed ("already tracked") →
+   nothing to land. Exit 4 (no `gh`): finish with the session's
+   GitHub tooling per `land/SKILL.md` "Without `gh`". Exits 5/6/7:
+   report, never retry blindly. Exit 3 (a work branch, whose ledger
+   carries its own transitions): undo the edit here and redo it, and
+   the landing, from the planning worktree of `land/SKILL.md`
+   "Planning from a work branch". As a step of `/mission`,
+   `/self-heal` or `/self-improve`, skip this: the orchestrator's
+   branch and PR carry the files. Add one line under the
+   confirmation: `Landed: PR #N merged` or
+   `Not landed: exit N — <message>`.
 
 For `--since-last-tag` bulk mode, replace Steps 2 and the
-single-add steps with a loop, and at the end render:
+single-add steps with a loop, land once after it (Step 8, every
+id tracked or passed), and at the end render:
 
 ```
 → Tracked N new task(s) for v0.38.0 (next release):
@@ -185,6 +209,9 @@ single-add steps with a loop, and at the end render:
 ## What "done" looks like
 
 A modified `tasks/RELEASES.md` with the task ID appended to the
-"🚧 Next" entry's bullet list, uncommitted. One short
-confirmation line in chat. Re-running the skill for the same ID
-exits cleanly with "already tracked" and changes nothing.
+"🚧 Next" entry's bullet list, landed with `land.sh docs` (merged
+PR) together with any ledger move, left to the orchestrator in a
+composed run, or the exit code and what is still open reported.
+One short confirmation line in chat, plus the landing line.
+Re-running the skill for the same ID exits cleanly with "already
+tracked" and changes nothing.

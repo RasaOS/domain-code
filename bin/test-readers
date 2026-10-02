@@ -33,6 +33,9 @@
 # Portable on purpose: bash 3.2, POSIX tools. Exit 0 only if every case passes.
 
 set -u
+# bin/init installs land.sh's pre-push guard, which refuses Claude's pushes
+# to a trunk. These fixtures push their own throwaway trunks.
+unset CLAUDECODE
 here="$(cd "$(dirname "$0")" && pwd -P)"
 ELEMENT="${TEST_READERS_ELEMENT:-$here/..}"
 ELEMENT="$(cd "$ELEMENT" && pwd -P)"

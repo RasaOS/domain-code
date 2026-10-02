@@ -53,7 +53,12 @@ not.
   commit to a `feat/self-improve-<scope-slug>` branch; the draft
   PR opens when the two-pass re-walk is clean. Merge to main
   remains the user's call per `git-flow-rules.md` Rule 2 — there
-  is no carve-out for self-improve.
+  is no carve-out for self-improve. The audits it writes under
+  `docs/audits/` ride that same branch and draft PR (a composed
+  run does not land them separately; see `land/SKILL.md`
+  "Composed runs"), and the branch is synced with the latest
+  trunk (`bash .claude/skills/land/land.sh sync`) before the PR
+  opens.
 
 ## The scope argument
 

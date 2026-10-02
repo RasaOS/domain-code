@@ -36,9 +36,11 @@ context-switching from another project — because they will.
 - **Read view filters to you.** `/inbox` (no args) reads all
   inbox files where you're the recipient and surfaces unread
   messages. Read messages stay in the file as history.
-- **Never auto-commit.** Inbox writes land in the working tree;
-  the user commits + pushes for the message to reach the
-  recipient.
+- **Deliver by PR, never merge.** Inbox files sit under
+  `.claude/` and are read by agents, so they are code class
+  (`/land`): each write goes up with `land.sh pr` in one rolling
+  PR per inbox file, which this skill never merges. The message
+  reaches the recipient when a reviewer merges it.
 - **Refuse secrets.** Same rule as `/lessons` — if the message
   body contains credentials, refuse and flag. Inboxes are in
   git history forever.
@@ -81,7 +83,16 @@ Parse the user's invocation:
 
 For every file under `.claude/inbox/` where I'm the recipient
 (filename = my handle, or the file's "addressed to" frontmatter
-matches me):
+matches me). Messages still waiting in that inbox's rolling PR (self-
+notes included) are not in the checkout until a reviewer merges it;
+read them without touching the checkout:
+
+```bash
+bash .claude/skills/land/land.sh show --skill inbox --title "messages for <my-handle>" -- .claude/inbox/<my-handle>.md
+```
+
+It prints the PR's copy when one is open (else the trunk's). Show its
+messages too, marked *(waiting to merge)*.
 
 ```markdown
 # 📬 Inbox — @<my-handle>
@@ -123,8 +134,17 @@ Parse `/inbox to <name>: <message body>`:
 - Message body: everything after the colon.
 - Sender: my handle (Step 1).
 - Timestamp: `YYYY-MM-DD HH:MM` local time.
-- Message ID: 4-digit incrementing per recipient file (next
-  unused number).
+
+Before drafting, read that inbox's rolling PR, if one is open, without
+touching the checkout: it holds messages other senders wrote that
+nobody has merged yet, and the new message's id must follow theirs.
+
+```bash
+bash .claude/skills/land/land.sh show --skill inbox --title "messages for <recipient>" -- .claude/inbox/<recipient>.md
+```
+
+- Message ID: 4-digit incrementing per recipient file (the next
+  number unused in the copy `show` printed).
 
 **Confirm before writing:**
 
@@ -140,19 +160,36 @@ Parse `/inbox to <name>: <message body>`:
 Apply? *(yes / edit / cancel)*
 ```
 
-On confirm: append to `.claude/inbox/<recipient>.md`. Create
-the file if it doesn't exist. Working tree dirty,
-uncommitted.
+On cancel, nothing was changed. On confirm, bring the PR's copy in,
+then append to `.claude/inbox/<recipient>.md` (create it if it doesn't
+exist; if another message took the drafted id meanwhile, use the next
+free one and say so):
+
+```bash
+bash .claude/skills/land/land.sh pending --skill inbox --title "messages for <recipient>" -- .claude/inbox/<recipient>.md
+```
+
+Then propose it in the same rolling PR (the same title):
+
+```bash
+bash .claude/skills/land/land.sh pr --rolling --skill inbox --title "messages for <recipient>" -- .claude/inbox/<recipient>.md
+```
+
+`--rolling` builds the PR's branch aside from the latest trunk,
+whatever branch is checked out, reuses the PR while it is open,
+and merges line by line with messages another sender pushed there
+meanwhile. The checkout's copy then goes back to its committed
+version (the message is on the PR branch). Never merge it. Exit 4
+(no `gh`): finish with the session's GitHub tooling per
+`land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never retry
+blindly.
 
 ```markdown
 ✉️ Written to `.claude/inbox/<recipient>.md`.
 
-`<recipient>` will see the message on their next `/inbox` after
-they pull. Commit + push when ready:
-
-    git add .claude/inbox/<recipient>.md
-    git commit -m "inbox: note for @<recipient>"
-    git push
+PR #N open (the rolling `messages for <recipient>` PR)
+*(or `Not proposed: exit N — <message>`)*. `<recipient>` sees
+the message on their next `/inbox` once it merges and they pull.
 ```
 
 ### Step 5 — Self-write mode
@@ -171,10 +208,18 @@ flips its status from `unread` to `read` with a `*(read on
 
 `/inbox done all` flips every unread message in my file.
 
+The flip is a write like any other: `land.sh pending` before it
+and `land.sh pr --rolling` after it, as in Step 4, with
+`--title "messages for <me>"`, so it rides that inbox's rolling
+PR along with any messages still waiting there.
+
 ### Step 7 — Sent mode
 
 Read every `.claude/inbox/*.md` (skip my own); surface messages
-where sender = my handle:
+where sender = my handle. A message still waiting in an inbox's
+rolling PR is not in the checkout; `land.sh show --skill inbox --title
+"messages for <name>" -- .claude/inbox/<name>.md` prints that inbox's
+waiting copy:
 
 ```markdown
 # 📤 Sent — @<my-handle>
@@ -254,9 +299,9 @@ The per-recipient inbox file at `.claude/inbox/<recipient>.md`:
 
 ## What you must NOT do
 
-- **Don't auto-commit.** Same rule as every kit-write skill.
-  The user commits + pushes; that's the message-delivery
-  step.
+- **Don't commit to the trunk or merge the inbox PR.** `land.sh
+  pending` before each write and `land.sh pr --rolling` after it
+  (Step 4); a reviewer's merge is the message-delivery step.
 - **Don't delete messages.** Status flip only. Inboxes are
   history.
 - **Don't store secrets.** Refuse if a credential or key
@@ -320,11 +365,12 @@ The per-recipient inbox file at `.claude/inbox/<recipient>.md`:
 ## What "done" looks like for a /inbox session
 
 - **Read mode:** unread messages surfaced; user can mark done.
-- **Write mode:** message appended to recipient's inbox file,
-  uncommitted, ready to commit + push.
-- **Self-write mode:** self-note captured for future-you.
-- **Done mode:** statuses flipped; file dirty, uncommitted.
+- **Write mode:** message appended to recipient's inbox file and
+  in that inbox's rolling PR, never merged by this skill.
+- **Self-write mode:** self-note captured for future-you, the
+  same way.
+- **Done mode:** statuses flipped, in the same rolling PR.
 
-In all cases: working tree dirty, no commits made, the user
-knows the next step (commit + push to deliver to teammates,
-or just commit for self-notes).
+In every write: the PR link, or the `/land` exit and what is
+still open, so the user knows the message reaches its reader
+when that PR merges.

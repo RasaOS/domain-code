@@ -72,7 +72,8 @@ the spec, the test should fail, and that failure is the finding.
   invoke `/goal` or `/mission` itself — slash commands are the
   user-input layer (per `autonomy-rules.md`).
 - **Hard gates stop the run.** Per `autonomy-rules.md`. Never
-  auto-commit the tests.
+  merge: it commits the tests only to the task's branch, through
+  a draft PR (`autonomy-rules.md` Exception 5).
 
 ## Test type selection
 
@@ -145,9 +146,26 @@ operation.
 6. **Run them.** Capture real pass/fail.
 7. **Triage failures.** For each failure, decide test-bug vs.
    code-bug, grounded — and say which.
-8. **Render the autonomy report** — tests written, pass/fail
+8. **Land the tests as a draft PR** (`autonomy-rules.md`
+   Exception 5). Name the test files, stamps and suites the run
+   wrote (plus any bootstrap config), and nothing else:
+
+   ```bash
+   bash .claude/skills/land/land.sh pr --skill auto-test --title "<task title>" --tasks TASK-NNN --draft -- <files>
+   ```
+
+   If `/auto-develop` already opened the draft for this branch,
+   `land.sh` reuses it (the push updates it). It never merges.
+   Exit 4 (no `gh`): finish with the session's GitHub tooling per
+   `land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never
+   retry blindly. As a step of `/mission`, `/self-heal` or
+   `/self-improve`, skip this: the orchestrator's branch and PR
+   carry the files.
+9. **Render the autonomy report** — tests written, pass/fail
    counts, each failure's triage, every assumption, any hard gate,
-   and the test type(s) chosen.
+   the test type(s) chosen, and one landing line:
+   `PR: #N open (draft), never merged by this skill` or
+   `Not landed: exit N — <message>`.
 
 ## When NOT to use this skill
 
@@ -161,8 +179,10 @@ operation.
 ## What "done" looks like
 
 The task or feature has real tests — written in the native
-framework, stamped per `test-rules.md`, and run — uncommitted. One
-autonomy report carries the pass/fail counts, the triage of any
-failure, and every test-design decision made. The user reviews,
-acts on any code-bug findings, and commits — or runs `/open-pr` to
-commit, open the task's PR and submit it for review in one step.
+framework, stamped per `test-rules.md`, and run — in the task's
+draft PR, which this skill never merges (in a composed run, the
+orchestrator's PR carries them). One autonomy report carries the
+pass/fail counts, the triage of any failure, every test-design
+decision made, and the PR. The user reviews, acts on any code-bug
+findings, and `/open-pr` marks the PR ready; the merge is a
+reviewer's.

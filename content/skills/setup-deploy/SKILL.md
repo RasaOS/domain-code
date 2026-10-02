@@ -101,7 +101,7 @@ The setup is a conversation, not a form. Walk the user through:
 8. **Hooks** (optional)
    - "Any post-deploy notifications? (e.g. Slack webhook, status-page update)" → wire into `pipeline-config.toml` `[hooks]`.
 
-### Write incrementally, never auto-commit
+### Write incrementally, land as a PR
 
 After each user confirmation:
 
@@ -109,15 +109,25 @@ After each user confirmation:
 2. Tell the user what was written and where.
 3. Continue to the next question.
 
-**Never run `git commit`.** Same convention as every other Element skill: leave changes staged for the human to review and commit themselves. The verification step below needs a clean tree, so it comes **after** the human commits — ask them to, then run it.
+**Never run `git commit` or merge yourself.** Everything this skill writes (`build/` scripts, `pipeline-config.toml`, environment files, runtime stamps, test suites, `.gitignore`) is code class: environment and deploy changes are reviewed. `land.sh pr` carries them (next section). The verification step below needs a clean tree, so it comes **after** the landing.
+
+### Land as a PR
+
+Once all questions are answered, name every file this run wrote (files, not directories; `.claude/environments.json` and `.gitignore` too if touched), and nothing else:
+
+```bash
+bash .claude/skills/land/land.sh pr --switch --skill setup-deploy --title "set up deploy for <envs>" -- <files>
+```
+
+It commits only those files on a branch from the latest trunk, pushes and opens a PR (or updates the open one for the branch), and leaves the checkout on that branch (`--switch`), so the verification below runs on exactly what the PR carries. **It never merges**; a reviewer does. A run that wrote nothing lands nothing. Exit 4 (no `gh`): finish with the session's GitHub tooling per `land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never retry blindly. As a step of `/mission`, `/self-heal` or `/self-improve`, skip this: the orchestrator's branch and PR carry the files.
 
 ### Verify at the end
 
 Once all questions are answered:
 
-1. Run `./build/build` then `./build/test` (commit first — both refuse a dirty tree), then `./build/deploy --env=<first-env> --intent=deploy --dry-run` to validate the wiring (stages discover correctly, env folder exists, no syntax errors, the verified-build gate finds the run).
+1. On the PR branch the landing left you on, run `./build/build` then `./build/test` (both refuse a dirty tree, which is why the landing comes first), then `./build/deploy --env=<first-env> --intent=deploy --dry-run` to validate the wiring (stages discover correctly, env folder exists, no syntax errors, the verified-build gate finds the run).
 2. Surface the dry-run output to the user.
-3. If anything errors, flag the specific file + line that needs attention. Don't try to fix silently.
+3. If anything errors, flag the specific file + line that needs attention. Don't try to fix silently. A fix the user confirms lands the same way: re-run `land.sh pr` and the push updates the open PR.
 
 ### Resume gracefully
 
@@ -140,6 +150,7 @@ When the skill finishes, render a summary like this:
 **Project type:** container (Node + Docker)
 **Environments:** dev, staging, prod
 **Requires approval:** prod
+**PR:** #N open, never merged by this skill *(or `Not landed: exit N — <message>`)*
 
 ### Generated files
 
@@ -159,10 +170,10 @@ When the skill finishes, render a summary like this:
 
 ### Next steps
 
-1. Review the diff: `git diff --staged`
+1. Review the PR: #N
 2. Run a real deploy to a dev-class environment: `./build/deploy --env=<that env> --intent=deploy`
 3. Add project-specific tests under `tests/stamps/` and add their names to `tests/suites/pre-deploy.md`
-4. Commit when satisfied: `git commit -m "feat: configure deploy pipeline"`
+4. Merge the PR once reviewed; this skill never merges it
 ```
 
 ## What this skill does NOT do
@@ -170,7 +181,7 @@ When the skill finishes, render a summary like this:
 - **Doesn't run actual deploys.** Run them after setup with `./build/deploy --env=<env> --intent=deploy` or `/deploy <env>`.
 - **Doesn't invent approval policy.** Approval follows the environment's class
   (`environment-rules.md`); the skill makes sure each environment's class is right.
-- **Doesn't auto-commit.** Stages changes; the human commits.
+- **Doesn't merge.** Its files go to a PR through `land.sh pr`; a reviewer merges environment and deploy changes.
 - **Doesn't fetch secrets.** References them by env var name (`$ASC_KEY_ID`, etc.); user wires the source (CI variable group, 1Password, secret manager).
 - **Doesn't replace `/ios-release`.** For iOS-specific TestFlight uploads, the env's `deploy.sh` can delegate: `exec ./bin/release-testflight.sh` or invoke the existing skill.
 
@@ -185,4 +196,4 @@ If `build/` is fully configured and the user just wants to *run* a deploy, use `
 
 ---
 
-**See also:** `pipeline-rules.md`, `test-rules.md`, `migration-rules.md`, the universal `task-rules.md` for the never-auto-commit convention.
+**See also:** `pipeline-rules.md`, `test-rules.md`, `migration-rules.md`, `land/SKILL.md` for how its files reach the trunk.

@@ -31,6 +31,9 @@
 # passes.
 
 set -u
+# bin/init installs land.sh's pre-push guard, which refuses Claude's pushes
+# to a trunk. These fixtures push their own throwaway trunks.
+unset CLAUDECODE
 here="$(cd "$(dirname "$0")" && pwd -P)"
 LIB="$here/../content/lib/domain-code/frontmatter.sh"
 GG="${TEST_GIT_GUARD_SCRIPT:-$here/../content/skills/git-guard/git-guard.sh}"

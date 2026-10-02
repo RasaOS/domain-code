@@ -41,8 +41,11 @@ legible. Then do what they say.
 
 ## Behavior contract
 
-- **Read state first.** `tasks/ROADMAP.md` for the phase
-  registry; `tasks/backlog/`, `tasks/active/`, `tasks/review/`,
+- **Read state first, from the latest trunk.** Before reading
+  or filing anything, run `bash .claude/skills/land/land.sh sync`:
+  task ids are allocated from the local ledger, so it must hold
+  the latest trunk. Report a non-zero exit; never retry it
+  blindly. Then `tasks/ROADMAP.md` for the phase registry; `tasks/backlog/`, `tasks/active/`, `tasks/review/`,
   `tasks/blocked/`, `tasks/completed/`, `tasks/closed/` for
   current state. Never spec from memory.
 - **One phase per session.** If the user wants more than one
@@ -51,13 +54,16 @@ legible. Then do what they say.
   `tasks/review/`, `tasks/completed/` or `tasks/closed/`, or
   backlog tasks already in full-spec form, are skipped. Show them
   in the rollup but don't re-spec them.
-- **Don't commit during the session.** Drafts are written to
+- **Land once, at the end.** Drafts are written to
   `tasks/backlog/<file>.md` (overwriting the stub in place), each
   followed by `.claude/bin/check-tasks --fix` (I-34).
-  Show the user the result; they decide when to commit.
-- **Don't open branches or PRs.** That's per-task work, done
-  outside this skill. The deliverable here is filesystem state
-  + a proposed working order.
+  Show the user the result. Nothing is committed mid-session;
+  once every spec is filed and validated, they land together
+  (Step 5).
+- **Don't open task branches or PRs.** That's per-task work, done
+  outside this skill. The deliverable here is the phase's specs
+  on the trunk + a proposed working order; the `land.sh docs` PR
+  in Step 5 is the only PR this skill makes.
 - **Respect dependency hints.** If a task has been deliberately
   split into siblings (e.g. `TASK-XXXa/b/c`), the split exists
   because shipping the original as one lift was the wrong move.
@@ -183,7 +189,28 @@ After all stubs are either expanded or explicitly deferred:
 5. **Wait for confirmation** on the working order. The user may
    override.
 
-### Step 5 — Closing report
+### Step 5 — Land the specs
+
+Once the specs are filed and validated, land them together. Task
+specs and the ledger are docs class, so they land by themselves
+(a PR from the latest trunk that merges after CI):
+
+```bash
+bash .claude/skills/land/land.sh docs --skill spec-phase --title "phase <id> specs" --tasks "<ids>" -- tasks/backlog/TASK-XXX-slug.md tasks/backlog/TASK-YYY-slug.md tasks/ROADMAP.md tasks/history.tsv
+```
+
+Name each `tasks/backlog/TASK-*.md` this session wrote, plus
+`tasks/ROADMAP.md` and `tasks/history.tsv`; `--tasks` lists their
+ids. Exit 4 (no `gh`): finish with the session's GitHub tooling
+per `land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never
+retry blindly. Exit 3 (a work branch, whose ledger carries its own
+transitions): undo the filing here and redo it, and the landing,
+from the planning worktree of `land/SKILL.md` "Planning from a
+work branch" (ids come from that ledger). As a step of `/mission`,
+`/self-heal` or `/self-improve`, skip this: the orchestrator's
+branch and PR carry the specs.
+
+### Step 6 — Closing report
 
 ```markdown
 # /spec-phase — Phase N prepped
@@ -205,8 +232,7 @@ vX.Y / vX.Y+1 / piecemeal>
 - tasks/backlog/TASK-XXX-slug.md (stub → full spec)
 - tasks/backlog/TASK-YYY-slug.md (stub → full spec)
 
-**Uncommitted.** Run `git status` to see the draft state. Commit
-when you're ready to lock in the batch.
+Landed: PR #N merged *(or `Not landed: exit N — <message>`)*
 
 **Next step**: start TASK-<first-in-order> via `/task` (or
 `.claude/bin/task start TASK-<first-in-order>`), then begin the
@@ -217,9 +243,9 @@ implementation.
 
 - **Don't write code.** This skill produces specs, not
   implementations.
-- **Don't commit.** The user owns the commit gate. Drafts are
-  uncommitted by design.
-- **Don't open branches or PRs.** Per-task plumbing happens
+- **Don't commit or push the specs yourself.** `land.sh docs`
+  lands them once, after validation (Step 5), never mid-session.
+- **Don't open task branches or PRs.** Per-task plumbing happens
   outside this skill.
 - **Don't promote tasks across phases** mid-session. If a stub
   turns out to belong elsewhere, surface that as an observation
@@ -253,6 +279,7 @@ implementation.
   - Explicitly deferred with the user's sign-off.
 - A proposed working order is on the table.
 - A proposed release strategy is on the table.
-- The worktree is dirty with draft spec files; the user holds
-  the commit gate.
+- The specs are on the trunk (the Step 5 `land.sh docs` PR
+  merged), carried by the orchestrator's PR in a composed run,
+  or the report names the exit code and what is still open.
 - The user knows the next concrete action ("start TASK-X").

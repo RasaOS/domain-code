@@ -21,25 +21,35 @@ or whether they're sure. Decide and do it.
 ## Behavior contract
 
 - **Script-driven mechanics.** `push.sh` owns the git plumbing —
-  branch logic, staging, the secret-shaped skip, commit, push, the
-  PR-ready note. Per `script-craft.md`. The AI synthesizes the
-  commit message and, when on the trunk, the branch name; the
-  script does everything else. Always invoke as
+  branch logic, staging, the secret-shaped skip, commit, the trunk
+  merge, push, the PR-ready note. Per `script-craft.md`. The AI
+  synthesizes the commit message and, when on the trunk, the branch
+  name; the script does everything else. Always invoke as
   `bash <skill-dir>/push.sh …`.
 - **No questions.** This is the defining trait. The commit message
   and the branch name are decided by the AI, not asked. Run it.
-- **It commits and pushes — on purpose.** Every other kit skill
-  leaves changes uncommitted ("never auto-commit"). `/push` is the
-  deliberate exception: committing and pushing *is* its job. That
-  is what the user asked for by invoking it.
+- **It commits and pushes the whole tree — on purpose.** Other
+  skills hand only the files they wrote to `/land` (docs land by
+  themselves; code goes up as a PR). `/push` is the blunt button:
+  committing and pushing everything *is* its job. That is what the
+  user asked for by invoking it.
 - **Never touches the trunk.** On the trunk (or detached HEAD),
   `push.sh` creates a new branch and commits there — it never
   commits to or pushes `main`. This keeps `/push` inside
   `git-flow-rules.md` Rules 1 and 4.
+- **Built on the latest trunk.** A branch cut on the trunk starts
+  from the freshly fetched `origin/<trunk>`, carrying the staged
+  work; it falls back to the local trunk only when it must (no
+  remote, the fetch failed, or the trunk moved under the staged
+  files). Before a side branch goes up (the one you were on or the
+  one just cut), `push.sh` merges the latest trunk in — a merge,
+  never a rebase or a force. A conflict is undone and reported, and
+  the work is still pushed so nothing is lost.
 - **Branches from the trunk are PR-ready, not PR'd.** When `/push`
   cuts a branch off the trunk, it pushes it with upstream tracking
-  and surfaces the PR link. It does **not** open the PR — opening
-  it stays the user's call.
+  and surfaces the PR link. It never opens or merges a PR —
+  opening it stays the user's call (`/open-pr` or `land.sh pr`);
+  docs that should reach the trunk go through `land.sh docs`.
 - **Secret-shaped files are skipped, not pushed.** `push.sh` leaves
   out files that look credential-bearing (and oversized ones) and
   reports what it skipped. This is not a question — it's the job
@@ -106,9 +116,9 @@ and the PR is deliberately left for the user to open.
 
 - **Don't ask the user anything.** Not the message, not the
   branch, not "are you sure". `/push` exists to be frictionless.
-- **Don't open the PR.** `/push` leaves a PR-ready branch. Opening
-  the PR is a separate, deliberate user action — `/open-pr` for a
-  task's PR.
+- **Don't open or merge a PR.** `/push` leaves a PR-ready branch.
+  Opening the PR is a separate, deliberate user action — `/open-pr`
+  for a task's PR, `land.sh pr` for any other.
 - **Don't commit or push the trunk.** If on the trunk, the script
   branches first — never override that.
 - **Don't paraphrase the script output.** Surface it as-is.
@@ -123,9 +133,14 @@ and the PR is deliberately left for the user to open.
   commit.
 - **Only skipped files are dirty** — nothing real to commit;
   `push.sh` reports "nothing to push" and does not push.
-- **Push failed (offline)** — the commit is safe locally; the
-  script says so and exits 1. Tell the user to re-run `/push` when
-  back online.
+- **Conflicts with the latest trunk** — `push.sh` undoes the
+  merge, pushes the branch as is, and says so. Surface it; resolve
+  with `bash .claude/skills/land/land.sh sync` and a fresh look,
+  never a rebase or a force-push.
+- **Push failed** — the commit is safe locally; the script prints
+  git's own message and exits 1. Surface it as-is. Offline: re-run
+  `/push` when back online. Rejected: run
+  `bash .claude/skills/land/land.sh sync` first, then `/push`.
 - **Rebase/merge in progress** — `push.sh` refuses (exit 3).
   Surface it; the user finishes the operation first.
 
@@ -136,6 +151,12 @@ and the PR is deliberately left for the user to open.
 - **A durable handoff for someone else** → use `/handoff`.
 - **A task's work is done and should go up for review** → use
   `/open-pr` — branch, commit, push, the §10 PR, and `task submit`.
+- **Any other change that should go up as a PR** →
+  `bash .claude/skills/land/land.sh pr --skill <name> --title "<what>" -- <file>...`
+  (a PR the skill never merges).
+- **Docs that should reach the trunk** →
+  `bash .claude/skills/land/land.sh docs --skill <name> --title "<what>" -- <file>...`
+  (a PR that merges itself after CI).
 - **Cutting a production release** (merge, tag, deploy) → use
   `/release`. `/push` never merges or tags.
 - **Automatic background capture** without invoking anything →
@@ -145,7 +166,8 @@ and the PR is deliberately left for the user to open.
 
 The working tree is committed and pushed — to the current branch
 if you were on one, or to a freshly created branch if you were on
-the trunk. Nothing is left uncommitted (except deliberately
+the trunk — with the latest trunk merged in, or the conflict
+reported. Nothing is left uncommitted (except deliberately
 skipped secret-shaped files). If a branch was cut from the trunk,
 it's pushed and PR-ready, and the user has the link to open the PR
 when they choose. No questions were asked.

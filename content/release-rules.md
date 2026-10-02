@@ -196,8 +196,9 @@ At ship time:
    release theme summary if it was a placeholder.
 3. **Create the next "🚧 Next" entry** above the stamped entry,
    with the next expected version and an empty task list.
-4. **Commit** the RELEASES.md change as part of `/release`'s
-   audit commit (per `/release` Step 7).
+4. **Land** the RELEASES.md change with the 🚀 AUDIT entry
+   through `land.sh docs` (per `/release` Step 7): a docs
+   landing, never a commit pushed to `main`.
 
 ### What's no longer here — moved to AUDIT
 
@@ -208,9 +209,14 @@ complementary, not redundant.
 
 ## Production deploy tagging (mandatory)
 
-Every successful production deploy from `main` is tagged. Tags are
-the version-controlled record of what shipped to users and when —
-`git log --tags` becomes the deploy history.
+Every successful production deploy is tagged. Tags are the
+version-controlled record of what shipped to users and when —
+`git log --tags` becomes the deploy history. The tag is on the
+**release commit**: the integration head, synced with the latest
+`main`, that was built, tested and deployed. The release PR merges
+that exact commit into `main` (a merge commit, pinned to it), so
+the tag is part of `main`'s history without `main` ever being
+pushed.
 
 ### Format
 
@@ -251,12 +257,18 @@ exact command, or use `/release` which orchestrates the full
 sequence. The shape:
 
 ```sh
-<project's deploy command per CLAUDE.md>     # e.g. npm run deploy, fastlane release, etc.
-# After deploy succeeds — build the tag, then tag and push:
+RELEASE_SHA=$(git rev-parse HEAD)            # the synced integration head
 TAG="$(bash .claude/skills/environment/environment.sh version prod --semver vX.Y.Z)"
-git tag -a "$TAG" -m "<release notes>"       # on main HEAD
-git push origin "$TAG"
+git tag -a "$TAG" -m "<release notes>"       # on RELEASE_SHA, local until deploy succeeds
+<project's deploy command per CLAUDE.md>     # e.g. npm run deploy, fastlane release, etc.
+# After deploy succeeds — trunk unchanged, merge pinned to what shipped, then the tag:
+bash .claude/skills/land/land.sh fresh --sha "$RELEASE_SHA"
+gh pr merge <N> --merge --match-head-commit "$RELEASE_SHA"
+git push origin "$TAG"                       # tags only; main is never pushed
 ```
+
+If `main` moved during the deploy (`fresh` exits 5), do not merge:
+the deploy is live but unrecorded, and `/release` is re-run.
 
 Release-note message format (annotated tag body, multi-line):
 
@@ -278,7 +290,8 @@ Include in the deploy completion report:
 - The tag (`vX.Y.Z`) with a clickable link to its GitHub page
   (`https://github.com/<owner>/<repo>/releases/tag/<tag>`)
 - Confirmation the tag was pushed to origin
-- The merge-commit SHA that the tag points to
+- The release commit (`RELEASE_SHA`) the tag points to, and the
+  release PR that merged it into `main`
 
 ### Rollback semantics
 

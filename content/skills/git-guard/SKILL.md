@@ -51,8 +51,10 @@ An autosave: rescues you onto an isolated `wip/<host>-<date>` branch
 if you were on trunk or detached → stages tracked changes + untracked
 files → **skips and warns on secret-shaped or oversized untracked
 files** → makes a `wip: autosave [<host>] <ts>` commit → pushes it
-(best-effort; commit still succeeds offline). Squash-merge collapses
-all the `wip:` noise at PR time, so it never reaches trunk.
+(best-effort; commit still succeeds offline). A PR merged with
+`method: squash` (the merge manifest) collapses the `wip:` noise into
+one commit; `merge` or `rebase` carries every `wip:` commit onto the
+trunk, so squash a branch that holds autosaves.
 
 ## Interface
 
@@ -83,7 +85,7 @@ Exit codes: `0` success/clean, `1` operational, `2` usage, `3` refused.
 | `GIT_GUARD_MINUTES` | `20` | autosave trigger — time backstop |
 | `GIT_GUARD_MAX_MB` | `5` | skip untracked files larger than this |
 | `GIT_GUARD_PUSH` | `1` | `0` = commit only, never push |
-| `GIT_GUARD_ALLOW_MAIN` | unset | `1` = permit one commit/push to trunk |
+| `GIT_GUARD_ALLOW_MAIN` | unset | `1` = permit one commit/push to trunk (people only; refused for Claude) |
 | `GIT_GUARD_ALLOW_SECRET` | unset | `1` = permit one commit with a secret-shaped file |
 
 `GIT_GUARD_ALLOW_*` are the deliberate escape hatches — used instead
@@ -111,6 +113,28 @@ of `--no-verify`, which `task-rules.md` forbids.
   untracked gap.
 - **Quiet during normal operation.** `checkpoint` is silent unless it
   actually saved. Autosave prints one line when it commits.
+
+## How it relates to `/land`
+
+- **`/land`'s guard is always on, for Claude.** `land.sh` installs its
+  own pre-push trunk guard on every install and `/sync`, and arms it
+  again at every session start. It acts only when `CLAUDECODE=1`, and
+  it refuses `GIT_GUARD_ALLOW_MAIN`: Claude moves the trunk only through
+  a merged PR.
+- **git-guard is the opt-in, per-machine layer for people** — autosave,
+  the session-start audit, and the commit/push guards on your own
+  terminal.
+
+Autosave on the trunk moves the work onto `wip/<host>-<ts>`. Doc
+outputs stranded there (an audit, a decision, the ledger) still land:
+run `land.sh docs` from that branch — files new on a branch land from
+their committed content.
+
+```bash
+bash .claude/skills/land/land.sh docs --skill <name> --title "<what>" -- <file>...
+```
+
+Exit 4 means no `gh`: finish as `land/SKILL.md` "Without `gh`" says.
 
 ## Process
 
@@ -154,7 +178,8 @@ The git hooks and `pull.ff` are active immediately.
   the credential** — assume it's burned the moment it was pushed.
   A full history purge is a separate, human-driven, coordinated op.
 - **Don't bypass the guards with `--no-verify`.** Use the
-  `GIT_GUARD_ALLOW_*` env vars — deliberate and visible.
+  `GIT_GUARD_ALLOW_*` env vars — deliberate and visible. Not
+  `GIT_GUARD_ALLOW_MAIN` from Claude: it is refused; use `/land`.
 - **Don't enable git-guard and assume `audit` already ran** this
   session. `SessionStart` fired before the hook existed.
 

@@ -226,14 +226,37 @@ cmd_run() {
   # commit or push the trunk directly. The staged index comes along.
   if [ -z "$branch" ] || [ "$branch" = "$trunk" ]; then
     local target="$want_branch"
-    [ -n "$target" ] || target="chore/push-$(host_tag)-$(date '+%Y%m%d-%H%M')"
-    if ! git checkout -q -b "$target" 2>/dev/null; then
+    [ -n "$target" ] || target="chore/push-$(host_tag)-$(date '+%Y%m%d-%H%M%S')"
+    # Cut from the freshly fetched trunk, not a possibly stale local one,
+    # so the PR this branch becomes starts from the latest code. The staged
+    # work comes along; if it cannot (the trunk moved under those files),
+    # cut from here and merge the trunk in after the commit.
+    local fresh_base=""
+    if has_remote && git fetch -q origin "+refs/heads/$trunk:refs/remotes/origin/$trunk" 2>/dev/null; then
+      fresh_base="origin/$trunk"
+    fi
+    # Only when nothing committed here would be left behind: a local trunk
+    # ahead of origin, or commits on a detached HEAD, must ride the branch.
+    if [ -n "$fresh_base" ] && ! git merge-base --is-ancestor HEAD "$fresh_base" 2>/dev/null; then
+      fresh_base=""
+    fi
+    if [ -n "$fresh_base" ] && git checkout -q --no-track -b "$target" "$fresh_base" 2>/dev/null; then
+      echo "push: on the trunk → moved work onto new branch '$target', cut from the latest $fresh_base."
+    elif git checkout -q -b "$target" 2>/dev/null; then
+      echo "push: on the trunk → moved work onto new branch '$target' (cut from the local $trunk; the latest trunk is merged in after the commit)."
+      # The trunk's own commits now ride this branch; the local trunk goes
+      # back to origin so it does not keep commits that only land by PR.
+      if [ "$branch" = "$trunk" ] && git rev-parse -q --verify "refs/remotes/origin/$trunk" >/dev/null 2>&1 \
+         && ! git merge-base --is-ancestor "$trunk" "refs/remotes/origin/$trunk" 2>/dev/null; then
+        git branch -f "$trunk" "refs/remotes/origin/$trunk" 2>/dev/null \
+          && echo "push: local $trunk is back at origin/$trunk; its commits are on '$target'."
+      fi
+    else
       echo "✗ push: could not create branch '$target'." >&2
       return 1
     fi
     branch="$target"
     created=1
-    echo "push: on the trunk → moved work onto new branch '$branch'."
   fi
 
   # Commit whatever is staged.
@@ -243,15 +266,46 @@ cmd_run() {
     echo "push: committed — \"$message\""
   fi
 
+  # Someone else (e.g. /auto-merge's sync-pr) may have pushed to this branch:
+  # take their commits first, by a merge, so the push is a fast-forward.
+  if has_remote && [ "$branch" != "$trunk" ] \
+     && git fetch -q origin "+refs/heads/$branch:refs/remotes/origin/$branch" 2>/dev/null \
+     && ! git merge-base --is-ancestor "origin/$branch" HEAD 2>/dev/null; then
+    if git merge -q --no-edit "origin/$branch" >/dev/null 2>&1; then
+      echo "push: took the commits pushed to '$branch' elsewhere."
+    else
+      git merge --abort >/dev/null 2>&1 || true
+      echo "✗ push: '$branch' on origin has commits that conflict with yours — merge origin/$branch by hand, then /push." >&2
+      return 1
+    fi
+  fi
+
+  # Bring the latest trunk in before the branch goes up: a merge, never a
+  # rebase or a force (the branch may already be shared). A conflict is
+  # undone and reported; the work is still pushed so nothing is lost.
+  if has_remote && [ "$branch" != "$trunk" ] \
+     && git fetch -q origin "+refs/heads/$trunk:refs/remotes/origin/$trunk" 2>/dev/null \
+     && ! git merge-base --is-ancestor "origin/$trunk" HEAD 2>/dev/null; then
+    if git merge -q --no-edit "origin/$trunk" >/dev/null 2>&1; then
+      echo "push: brought the latest $trunk into '$branch'."
+    else
+      git merge --abort >/dev/null 2>&1 || true
+      echo "push: '$branch' conflicts with the latest $trunk — pushed as is; resolve with: land.sh sync" >&2
+    fi
+  fi
+
   # Push.
   if ! has_remote; then
     echo "push: no remote configured — committed locally, not pushed." >&2
     return 0
   fi
-  if git push -q -u origin "$branch" 2>/dev/null; then
+  local perr
+  if perr="$(git push -q -u origin "$branch" 2>&1)"; then
     echo "push: pushed → origin/$branch"
   else
-    echo "push: commit is safe locally, but the push failed (offline?). Re-run /push when back online." >&2
+    echo "push: commit is safe locally, but the push failed:" >&2
+    printf '%s\n' "$perr" | grep -E '^( ?!|error:|fatal:|remote:|hint:)' | head -6 | sed 's/^/      /' >&2
+    echo "      Re-run /push once the cause above is fixed (a refused push to the trunk means: use a branch and a PR)." >&2
     return 1
   fi
 

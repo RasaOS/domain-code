@@ -20,15 +20,212 @@ a consumer, and an entry without it is invisible in that report.
 
 ## Unreleased
 
-- **Fix (TASK-077):** `git-guard`'s `autosave` no longer switches a checkout
-  off trunk when there is nothing to save. `PreCompact` fires on every
-  context compaction whether or not anything changed, and the trunk-rescue
-  checkout used to run before checking for anything staged — so a clean
-  checkpoint on trunk was silently stranded on a fresh, empty `wip/` branch
-  every time. The rescue now only runs once something is actually staged
-  to carry there; a `checkout -b` failure resets the index instead of
-  leaving it half-staged. New: `bin/test-git-guard`, wired into both CI
-  jobs.
+(no entries yet)
+
+---
+
+## v0.61.0 — 2026-09-29
+
+**Nothing lost, nothing straight in: `/land`.** A skill's doc outputs
+(audits, decisions, plans, the task ledger) now reach `main` by themselves,
+through a PR built on the latest `main`. Code, and anything agents load as
+instructions, goes through a PR the skill never merges. ⚠ After `/sync`,
+Claude can no longer push to `main` from a session: the new guard refuses it.
+
+To migrate:
+1. Re-run the Element's `bin/init` (or `/sync`). It installs `/land`, seeds
+   `.claude/landing.json` (skip-if-exists) and runs `land.sh hooks`, which
+   arms a git `pre-push` hook and adds three PreToolUse hooks to
+   `.claude/settings.json`. The hook is re-armed at every session start, so
+   fresh cloud clones have it too.
+2. Commit `.claude/` through a PR, as usual.
+3. Recommended: add a server-side ruleset that requires a PR on the trunk.
+   `land.sh status` reports whether one exists; `land/SKILL.md` has the
+   command. The hooks see what a command says, not what it means; the
+   ruleset is the real guard.
+
+**Why.** An audit, a decision or a plan used to be left uncommitted in the
+session's working tree ("never auto-commit"). In a cloud container that tree
+is gone when the session ends, and the record with it. And nothing stopped an
+agent from pushing code to `main` directly.
+
+**The two classes.** `land.py` decides, and nothing else does.
+`.claude/landing.json` can make docs wait for a person (`"docs": "pr"`, or
+per skill); it can never widen the class.
+
+| Class | Paths | How it lands |
+|---|---|---|
+| **docs** | `docs/{audits,decisions,postmortems,retros,notes,handoff,blast-radius,scope,exports,regrets,mvp,wrangle,refinement}/**/*.md`, `docs/glossary.md`, `tasks/**/*.md`, `tasks/history.tsv` | `land.sh docs`: merges itself after CI |
+| **code** | everything else, and always: `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md` at any depth, whatever any `CLAUDE.md` in the repository `@`-imports (checkout or trunk, transitively), a `.claude/` or `.github/` folder at any depth, `tasks/tasks.config.yml`, `tasks/proto/**`, `docs/proto/**`, symlinks, submodules, executable files | `land.sh pr`: a PR the skill never merges |
+
+**`land.sh docs`** — the flow, in order:
+1. Fetch the trunk with an explicit refspec.
+2. Classify every file and scan it for credentials.
+3. Build the commit with plumbing, without touching the checkout, from
+   what the files hold against the point where the checkout left the trunk
+   (so a doc committed on a branch or a `wip/` autosave lands too), and
+   replay it onto the fresh trunk in a hook-less scratch worktree. Ledger
+   files carrying a work branch's own transitions are refused: planning
+   moves land from a planning worktree, a detached checkout of the trunk
+   that `sync` moves on.
+   - `tasks/history.tsv`, `ROADMAP.md` and `AUDIT.md` merge line by line, and
+     the history stays in date order.
+   - A change that adds a `check-tasks` error to the ledger's shape (a task
+     id the trunk already used) stops here, as does a conflict (exit 5).
+     Nothing is pushed.
+4. Push `land/<skill>-<utc>-<hex>` and open a PR (`kind: chore`, label
+   `docs-land`).
+5. Verify the PR by git alone:
+   - its head is exactly what was pushed and its base is the trunk;
+   - every file (both sides of a rename) is docs class;
+   - no symlinks, submodules or executable files;
+   - it contains the latest trunk.
+6. Wait for CI, without holding the landing lock. Only results for the
+   verified head count. While a trunk workflow will report on the PR
+   (`pull_request`, or a `push` its branch filters let through), a pass
+   needs its check runs; otherwise "no checks" passes only once the head is
+   old enough for any CI to have registered.
+7. If the trunk moved, merge it in (never a rebase or force-push) and
+   repeat.
+8. Merge with `--squash --match-head-commit <verified sha>`, never `--admin`.
+   Failing CI or a branch-protection refusal leaves the PR open (exit 6), and
+   `land.sh merge` finishes it later.
+9. Settle the checkout: fast-forward on the trunk, merge on a branch. A file
+   changed since it landed is kept and reported.
+
+**Holds.** `.claude/landing.json` is read from the fetched trunk as well as
+the checkout (a hold either declares applies), and `land.sh merge` tells the
+skill from the PR's own `land/<skill>-…` branch, so a stale checkout or a
+fresh clone cannot merge a held landing.
+
+**Without `gh`** (cloud sessions), exit 4 hands off exactly: open the PR
+with the session's GitHub tooling, then run
+`land.sh merge --pr N --sha S --pr-json P --checks-json F` (every gate above
+still runs by git; the PR read must be of that PR at that head), merge with
+`expectedHeadSha`, then run `land.sh settle --pr N`.
+
+**`land.sh pr`** commits only the named files. On the trunk it builds the
+branch aside from the latest trunk, with a stable name (`task/<ID>-<slug>`
+or `chore/<skill>-<slug>`, hashed when the title does not survive as a
+slug), so a re-run updates the same PR and the checkout is not touched.
+Each file is resolved on its own: the checkout's change, against the copy
+it started from (recorded per worktree), is merged into the branch's copy,
+so a revert is a revert and a reviewer's or another session's change is
+kept. Once that PR has merged or been closed, the next run starts again
+from the trunk (a change that already went up on it is reported, not
+proposed again; a new `--title` proposes it again); without `gh`,
+`--pr-state` says which. `--switch` moves the checkout onto the branch
+instead, and carries a local trunk's own commits there. `--branch` never
+names the trunk. On a branch it takes commits others pushed to it
+(`sync-pr`), then merges the trunk in. It pushes and opens or reuses the
+PR (a draft for autonomous skills). It never merges.
+`land.sh auto` splits a mixed list by class.
+
+**Rolling PRs** for the side files a skill rewrites on every run
+(`/handoff`'s `.claude/welcome.md`, `/lessons`' `docs/notes/INDEX.md`,
+`/inbox`, `/brainstorm`'s `.claude/tradeoffs/`): `land.sh pending` brings
+the open PR's copy in before the edit (`land.sh show` prints it without
+touching the checkout); `land.sh pr --rolling` builds the PR aside from any
+branch, merges what other sessions pushed there (line by line; where
+both sides added lines at the same place, both additions are kept whole,
+and an edit there, or one record in two versions such as an inbox status
+flip, stops instead of doubling a line), and puts
+the checkout's copy back, so the tree stays clean for `./build/build` and
+`/release`. A re-run with no edit changes nothing. When `pending` meets
+overlapping uncommitted edits, it keeps them aside and brings the PR's copy
+in.
+
+**`land.sh sync`** fast-forwards on the trunk and merges on a branch; it
+never rebases or forces. Local trunk commits origin lacks go to a pushed
+`rescue/<trunk>-<utc>` branch (or are dropped when origin already has their
+content, after a squash-merge), and the trunk moves to origin; a failed
+sync leaves the checkout as it was, staged work included. `push.sh` and
+`open-pr.sh` move the trunk back too once they have carried its commits
+onto a branch. `fresh` and `sync-pr` give merge gates the same rule.
+
+**The guard.** It keeps the trunk PR-only for Claude (`CLAUDECODE=1`); people
+at their own terminal are not constrained.
+- A git `pre-push` hook refuses a push that would move the trunk on origin.
+  It lives in a managed block, always first in the hook, that keeps any
+  existing hook and chains `pre-push.land-chained*` (a symlinked hook is
+  chained, never written through). It fails closed if `land.sh` or python3
+  is missing.
+- A PreToolUse Bash hook refuses whatever would switch the guard off or go
+  around it:
+  - `--no-verify`, `commit -n`, `core.hooksPath`, `--config-env` and
+    `GIT_CONFIG_*`, and git aliases defined to skip hooks;
+  - writes to `.git/hooks` or the land state;
+  - re-pointing `refs/remotes/*/HEAD`, `send-pack`, `push --all/--mirror`;
+  - `gh api` repository writes;
+  - plain trunk pushes, including through wrappers, `bash -c`, `eval` and
+    git aliases.
+
+  Tags, branches and PR merges pass.
+- A PreToolUse Edit/Write hook refuses writes under `.git/`.
+- A PreToolUse GitHub-tools hook refuses `push_files`,
+  `create_or_update_file` and `delete_file` on the trunk.
+
+**Wired skills.**
+- **Docs, landing by themselves:** `/audit`, `/decision`, `/postmortem`,
+  `/retro`, `/lessons` (the note), `/blast-radius`, `/scope-check`,
+  `/regret`, `/export-project`, `/handoff` (the dated doc), `/plan`,
+  `/spec-phase`, `/release-plan`, `/release-add`, `/reconcile`,
+  `/auto-task`, `/auto-phase`, `/auto-bug`, `/auto-hotfix`, `/ios-release`,
+  `/prototype graduate`, and the project-manager mode's `docs/refinement/`
+  log.
+- **Split by class:** `/glossary`, `/mvp`, `/wrangle`, `/update-docs`.
+- **By PR, never merged by the skill:**
+  - `/auto-develop` and `/auto-test` (drafts on the task branch);
+  - `/test` and `/setup-deploy` (`--switch`, so verification runs on the
+    committed change), `/pin-behavior`, `/new-skill`, `/contract`,
+    `/codify`, `/import-env`, `/export-env`, `/secrets`, `/install-hook`,
+    `/lint-kit`, `/contribute` (the lockfile), and `/sync`'s result;
+  - rolling PRs: `/handoff`'s `.claude/welcome.md`, `/lessons`'
+    `docs/notes/INDEX.md`, `/inbox` writes and `/brainstorm`'s
+    `.claude/tradeoffs/` file.
+- **Still left to the user:** `/rule-promote` (its Element edit goes up as
+  `/contribute`'s PR; per-project cleanups are in other repositories) and
+  `/mode` (`.claude/mode.md` is this checkout's drive, not worth a PR).
+  Every session start keeps it, `mode-stats.md` and `inbox/_me.md` out of
+  git through the clone's `.git/info/exclude`, and the pipeline's
+  clean-tree checks ignore them.
+- **Syncing with the latest trunk before they push or merge:**
+  - `push.sh` cuts from `origin/<trunk>` and merges the trunk in;
+  - `open-pr.sh branch` cuts from `origin/<trunk>`, and `open` refuses a
+    branch that lacks it;
+  - `/peer-review` (and `batch-handoff`) merge only a head that is still
+    fresh after the CI wait, pinned to the `head_sha=` it checked;
+  - `/auto-merge` marks a PR behind the trunk as `behind` and syncs it;
+  - `/mission`, `/self-heal`, `/self-improve` and `/git-guard`.
+- **`/release`:**
+  1. Sync the integration branch and open the release PR.
+  2. Once its CI has finished, check that the PR can merge.
+  3. Tag and deploy the synced head.
+  4. Merge the PR pinned to it with `--merge`, and check the merge
+     commit's first parent is the trunk `fresh` saw.
+  5. Push only the tag.
+  6. Land AUDIT/RELEASES through `land.sh docs`.
+
+**Rules.**
+- `autonomy-rules.md`: Exception 2 is now "Docs landing", classified by
+  program; the old `spec-gate` / `spec-only` flow is superseded. The new
+  Exception 5 lets `/auto-develop` and `/auto-test` open draft PRs.
+- `git-flow-rules.md`: Rule 2 gains the docs-landing carve-out, and every
+  branch is cut from the freshly fetched trunk.
+- `release-rules.md`: now describes the tag on the release commit.
+- `code-task-rules.md`: §10 and §16 updated.
+
+**Fix (TASK-077):** `git-guard`'s `autosave` no longer switches a checkout
+off trunk when there is nothing to save. `PreCompact` fires on every context
+compaction, whether or not anything changed. The trunk-rescue checkout ran
+before the check for anything staged, so every clean checkpoint on trunk was
+silently stranded on a fresh, empty `wip/` branch. The rescue now runs only
+once something is staged to carry there. A `checkout -b` failure resets the
+index instead of leaving it half-staged. New: `bin/test-git-guard`, wired
+into both CI jobs.
+
+New: `bin/test-land` (both CI jobs). The other suites unset `CLAUDECODE` so
+the guard does not refuse their fixture pushes.
 
 ---
 

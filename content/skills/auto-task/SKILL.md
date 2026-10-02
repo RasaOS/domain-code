@@ -47,16 +47,15 @@ the repo doesn't hold is a flagged assumption, surfaced loudly.
   criteria in step 9, the questions only the user can answer in
   step 10 — is resolved by picking the best-grounded option and
   recording it as a ⚠️ assumption in the report.
-- **Spec-file fast-path is the default.** Per
-  `autonomy-rules.md` "Exception 2", `/auto-task` auto-commits the
-  spec and auto-merges a `spec-only` PR to `main` when the
-  working tree contains *only* allowlisted spec files
-  (`tasks/**/*.md`, `tasks/PHASES.md`, `tasks/ROADMAP.md`,
-  `tasks/RELEASES.md`, `tasks/history.tsv`). If any non-spec file
-  is dirty, fall back to "leave uncommitted" — the file lands in
-  `tasks/backlog/` (or `tasks/triage/`), the user commits
-  manually, and the autonomy report notes why the fast-path was
-  skipped.
+- **Docs landing is the default.** Per `autonomy-rules.md`
+  "Exception 2", `/auto-task` lands what it wrote — the spec, its
+  `tasks/history.tsv` and `tasks/ROADMAP.md` lines, and the run
+  record — with `land.sh docs`: a PR from the latest trunk that
+  merges itself after CI. **Never code:** the landing names only
+  those files, never `tasks/tasks.config.yml` or anything else;
+  `land.sh` classifies each one and refuses a code-class file
+  (exit 3), with no bypass. Other changes in the working tree
+  neither block it nor ride along — landing is path-scoped.
 
 ## Process
 
@@ -65,9 +64,17 @@ the repo doesn't hold is a flagged assumption, surfaced loudly.
 2. **Run `/task`'s File a task autonomously, as a `change`.**
    Determine the phase from the `## Phase` headings and scope
    paragraphs in `tasks/ROADMAP.md` — pick the best-fitting phase;
-   if none fits, file to `tasks/triage/` (omit `--phase`). Then:
+   if none fits, file to `tasks/triage/` (omit `--phase`). Then
+   sync and file — ids come from the local ledger, so it must hold
+   the latest trunk (report a non-zero sync exit; never retry it
+   blindly).
+   On a work branch (anything but the trunk or a `wip/` branch), run
+   this and the landing from the planning worktree of `land/SKILL.md`
+   "Planning from a work branch": the branch's ledger carries its own
+   transitions, and `land.sh docs` refuses it there (exit 3).
 
    ```bash
+   bash .claude/skills/land/land.sh sync
    .claude/bin/task new --type change --phase <P> \
      --by "$(bash .claude/skills/task-enforce/task-enforce.sh who)" "<title>"
    ```
@@ -87,46 +94,28 @@ the repo doesn't hold is a flagged assumption, surfaced loudly.
    (`tasks/backlog/TASK-NNN-slug.md`, or `tasks/triage/…`), in
    `.claude/task-templates/change.md`'s shape, then run
    `.claude/bin/check-tasks --fix` (I-34).
-5. **Spec-file fast-path** (per `autonomy-rules.md` Exception 2).
-   Check the working tree:
-   - If every dirty file matches the spec-file allowlist
-     (`tasks/**/*.md`, `tasks/PHASES.md`, `tasks/ROADMAP.md`,
-     `tasks/RELEASES.md`, and `tasks/history.tsv` — the log
-     `bin/task` appends to on every filing; never
-     `tasks/tasks.config.yml`) and nothing else is dirty: create a
-     `spec/TASK-NNN-slug` branch from a fresh `main`, commit the
-     spec there (`TASK-NNN spec — <title>`), push, open a PR
-     labeled `spec-only` with the autonomy report's assumptions in
-     the body and a merge manifest (`.claude/skills/auto-merge/pr-manifest.sh
-     block --kind chore --tasks TASK-NNN --merge manual --on-merge hold`)
-     so the `pr-manifest` check passes, and merge via `gh pr merge --squash --delete-branch`.
+5. **Land the spec** (per `autonomy-rules.md` Exception 2). Once
+   the spec is written and validated and the run record is closed
+   (`.claude/skills/runs/runs.sh close`, per `autonomy-rules.md`),
+   land the spec, the ledger and the run record together:
 
-     **Run the gate before you push, and again before you merge.**
-     The allowlist is enforced by a program, not by your reading of
-     it:
+   ```bash
+   bash .claude/skills/land/land.sh docs --skill auto-task --title "spec TASK-NNN: <title>" --tasks TASK-NNN -- tasks/backlog/TASK-NNN-slug.md tasks/history.tsv tasks/ROADMAP.md tasks/runs/<RUN-id>.md
+   ```
 
-     ```bash
-     .claude/skills/task-enforce/task-enforce.sh spec-gate            # pre-push
-     .claude/skills/task-enforce/task-enforce.sh spec-gate --pr <N>   # pre-merge
-     ```
-
-     The `--pr` form is the load-bearing one: it reads the file list
-     from the **pushed artifact**, not from local state, because the
-     merge acts on the PR and not on your working tree. A non-zero
-     exit means the fast-path does not apply — leave the work
-     uncommitted and say so in the autonomy report. There is no flag
-     that skips it.
-
-     If branch protection refuses the merge, leave the PR open
-     and report it.
-   - If any non-spec file is dirty: skip the fast-path, leave the
-     spec uncommitted, and note in the autonomy report that the
-     fast-path was skipped because of `<files>`.
+   Name the file `task new` reported (`tasks/triage/…` for a
+   triage filing, which also leaves `tasks/ROADMAP.md` out).
+   `land.sh` does the rest — the classification (a program, no
+   bypass), the sync with the latest trunk, the PR, CI and the
+   merge pinned to the verified head. Exit 4 (no `gh`): finish
+   with the session's GitHub tooling per `land/SKILL.md` "Without
+   `gh`". Exits 5/6/7: report, never retry blindly. As a step of
+   `/mission`, `/self-heal` or `/self-improve`, skip this: the
+   orchestrator's branch and PR carry the spec.
 6. **Render the autonomy report** (template in `autonomy-rules.md`)
-   — the spec path, every assumption, any hard gate hit, and the
-   fast-path result: the merged PR URL, or "fast-path skipped —
-   non-spec files in working tree", or "PR open, merge blocked
-   by branch protection".
+   — the spec path, every assumption, any hard gate hit, and one
+   landing line: `Landed: PR #N merged` or
+   `Not landed: exit N — <message>`.
 
 ## When NOT to use this skill
 
@@ -143,12 +132,13 @@ A complete, implementation-ready spec in `tasks/backlog/` (or
 one autonomy report listing every decision made on the user's
 behalf.
 
-If the spec-file fast-path engaged: the spec is on `main` via a
-merged `spec-only` PR, the team has visibility, the autonomy
-report carries the PR URL. The user reviews the report and the
-PR after the fact; corrections happen by re-running or by
-amending the spec.
+Landed: the spec, its ledger lines and the run record are on the
+trunk via a merged `land.sh docs` PR, the team has visibility, the
+autonomy report carries the landing line. The user reviews the
+report and the PR after the fact; corrections happen by re-running
+or by amending the spec.
 
-If the fast-path was skipped (non-spec dirty files): the spec is
-in the working tree, uncommitted — same as the pre-v0.32.0
-behavior. The user commits manually.
+Not landed: the report names the exit code and what is still open
+(a PR waiting on CI or branch protection, or files still in the
+working tree). In a composed run, the orchestrator's PR carries
+the spec instead.

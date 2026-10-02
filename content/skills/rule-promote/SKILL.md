@@ -262,8 +262,11 @@ update.
   README or a doc folder, it's not in scope for this skill.
   Surface that as adjacent observation, but don't include in
   the cluster set.
-- **Don't auto-commit anywhere.** Same rule as every kit-write
-  skill.
+- **Don't auto-commit anywhere.** The Element edit goes up only
+  as `/contribute`'s PR. Per-project cleanups stay in each
+  project's working tree; each is a `CLAUDE.md` edit, so it
+  reaches that project's trunk only by a PR the user opens
+  there (`/land`), never by a direct commit or push.
 
 ## Edge cases
 

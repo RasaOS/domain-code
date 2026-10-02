@@ -1,6 +1,6 @@
 ---
 name: auto-merge
-description: Merge open pull requests unattended once each has opted in and proven itself. A run lists the open PRs and merges each eligible one. Eligible means it carries the auto-merge label and its merge manifest says `merge: auto`, CI is green, it is mergeable, every PR it waits on has merged, and nothing holds it. Every merge goes through /peer-review with the manifest's merge method. After each merge the run carries out the manifest's `on_merge`, but only for non-production targets. A deploy to a dev or staging environment runs build → test → deploy on the trunk; production and releases are queued for a person. Off by default; scheduled with /loop or a Claude routine. Also owns the merge manifest every PR body carries (pr-manifest.sh) and the PR template. Triggered by "/auto-merge", "/auto-merge run", "turn on auto-merge", "merge the ready PRs", "what would auto-merge do", "why didn't PR 42 merge".
+description: Merge open pull requests unattended once each has opted in and proven itself. A run lists the open PRs and merges each eligible one. Eligible means it carries the auto-merge label and its merge manifest says `merge: auto`, CI is green, it is mergeable and contains the latest trunk, every PR it waits on has merged, and nothing holds it. A PR behind the trunk gets the trunk merged into its branch and waits for the next run. Every merge goes through /peer-review with the manifest's merge method. After each merge the run carries out the manifest's `on_merge`, but only for non-production targets. A deploy to a dev or staging environment runs build → test → deploy on the trunk; production and releases are queued for a person. Off by default; scheduled with /loop or a Claude routine. Also owns the merge manifest every PR body carries (pr-manifest.sh) and the PR template. Triggered by "/auto-merge", "/auto-merge run", "turn on auto-merge", "merge the ready PRs", "what would auto-merge do", "why didn't PR 42 merge".
 ---
 
 # /auto-merge: ready PRs merge themselves; nothing else does
@@ -52,7 +52,8 @@ bash .claude/skills/auto-merge/pr-manifest.sh block --kind chore --merge auto --
 ```
 
 Any skill that opens a PR puts a manifest in its body. For PRs that are
-not a task (a ledger reconcile, a spec-only PR, a `/mission` draft),
+not a task (a `/mission` draft, a `land.sh pr` change; `land.sh docs`
+writes its own),
 `block` prints a valid block to paste in.
 
 ## Behavior contract
@@ -70,6 +71,11 @@ not a task (a ledger reconcile, a spec-only PR, a `/mission` draft),
   every rule in one fixed order and names the first one a PR fails. The
   skill never overrides a skip. A skip is a reason, and the PR's author
   fixes the reason.
+- **Only on the latest trunk.** A PR that is mergeable but does not
+  contain the latest trunk is `behind` (GitHub's `BEHIND` flag, or git
+  against `refs/pull/N/head`). That is the one reason the run fixes
+  itself: it merges the trunk into the PR's branch (never a rewrite) and
+  leaves it for the next run, when CI has run on the synced head.
 - **Every merge is a `/peer-review`.** It reviews with the
   context-isolated auditor, passes the task inside the PR, re-reads CI,
   then merges with the manifest's `method` and
@@ -145,10 +151,11 @@ whether it is on and how it is scheduled. Merge nothing.
      finds it off says so in one line.
    - Exit 4 (no `gh`): list the open PRs with the session's GitHub
      tooling (e.g. `mcp__github__list_pull_requests`, then
-     `pull_request_read` for each PR's body, mergeability and check
-     runs). Write them to a JSON file in the scratchpad in the shape
-     `plan --from-json` documents, then run
-     `auto-merge.sh run --from-json <file>`.
+     `pull_request_read` for each PR's body, head branch, mergeability,
+     merge state and check runs). Write them to a JSON file in the
+     scratchpad in the shape `plan --from-json` documents, including
+     `headRefName` and `mergeStateStatus` (`BEHIND` marks a PR behind
+     the trunk), then run `auto-merge.sh run --from-json <file>`.
 
 2. **For each `state=eligible` PR, in the order listed.** Follow
    `peer-review/SKILL.md` for PR `<N>`: its invocation authority comes
@@ -182,7 +189,19 @@ whether it is on and how it is scheduled. Merge nothing.
    merge stands: report it with the build, test or deploy record ids,
    and keep going. A queued action is reported for a person to take.
 
-4. **Finish.**
+4. **For each `state=behind` PR:** merge the trunk into its branch.
+
+   ```bash
+   bash .claude/skills/land/land.sh sync-pr --branch <branch>
+   ```
+
+   It merges and pushes; it never rebases or force-pushes. Log it
+   (`auto-merge.sh log <N> synced "<head>"`) and leave the PR for the
+   next run, when CI has run on the synced head. Exit 5 is a conflict
+   with the trunk: log `conflict` and report it for the author. Any
+   other exit: report it, never retry blindly.
+
+5. **Finish.**
 
    ```bash
    bash .claude/skills/auto-merge/auto-merge.sh finish
@@ -191,20 +210,22 @@ whether it is on and how it is scheduled. Merge nothing.
    Always run it, even when a step above failed. Leaving the lock held
    stops every run for two hours.
 
-5. **Report.** Use the template below. An unattended run with nothing
-   eligible and nothing merged reports one line.
+6. **Report.** Use the template below. An unattended run with nothing
+   eligible, synced or merged reports one line.
 
 ## Output structure
 
 ```markdown
 ## 🔀 Auto-merge — <UTC time>
 
-**Merged:** <n> · **Skipped:** <n> · **Queued for you:** <n>
+**Merged:** <n> · **Synced:** <n> · **Skipped:** <n> · **Queued for you:** <n>
 
 | PR | Outcome | After merge |
 |---|---|---|
 | [#N](url) <title> | merged (squash) | deployed to staging · BLD-… |
 | [#N](url) | rejected: <first blocking issue> | — |
+| [#N](url) | behind: trunk merged in (head <sha>); next run, after CI | — |
+| [#N](url) | behind: conflicts with the trunk, for the author | — |
 | [#N](url) | skipped: <plan reason> | — |
 
 **Queued for a person:** <#N: release v1.4.0, run /release> …
@@ -232,5 +253,6 @@ whether it is on and how it is scheduled. Merge nothing.
 The lock is released. Every eligible PR is either merged through
 `/peer-review`, with its `on_merge` carried out or queued and a comment
 on the PR saying which, or rejected with the reason logged. Every
-skipped PR has the one reason the plan named. The report names each
-item a person has to act on.
+behind PR has the trunk merged into its branch, or its conflict
+reported. Every skipped PR has the one reason the plan named. The
+report names each item a person has to act on.

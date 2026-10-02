@@ -34,27 +34,35 @@ for the whole phase.
 - **One report for the whole phase.** Don't render a report per
   stub. The autonomy report at the end covers every spec, groups
   the assumptions by task, and lists the proposed working order.
-- **Spec-file fast-path is the default.** Per
-  `autonomy-rules.md` "Exception 2", `/auto-phase` auto-commits
-  the phase's new specs and auto-merges a `spec-only` PR to
-  `main` when the working tree contains *only* allowlisted spec
-  files (`tasks/**/*.md`, `tasks/PHASES.md`, `tasks/ROADMAP.md`,
-  `tasks/RELEASES.md`, `tasks/history.tsv`). A whole-phase
-  fast-path is a *single* PR carrying every new spec, not one PR
-  per spec. If any non-spec file is dirty, fall back to "leave
-  uncommitted" — and the autonomy report says why.
-- **Watch for phase-collision.** Other in-flight branches may
-  already have task numbers reserved against the same phase.
-  Any task `/auto-phase` files gets its `TASK-NNN` from
+- **The specs land by themselves, once.** Per
+  `autonomy-rules.md` "Exception 2" (docs landing): `land.sh
+  sync` before filing anything, then one `land.sh docs` call at
+  the end (Process step 5) naming every spec file written,
+  `tasks/PHASES.md` / `tasks/ROADMAP.md` / `tasks/history.tsv`
+  when they changed, and the run record. A whole phase is a
+  *single* landing carrying every new spec, not one PR per spec.
+  It merges itself after CI, built on the latest trunk (see
+  `land/SKILL.md`).
+- **Watch for phase-collision.** Other sessions may already have
+  task numbers filed against the same phase. Any task
+  `/auto-phase` files gets its `TASK-NNN` from
   `.claude/bin/task new`, which allocates from the local
-  `tasks/history.tsv` and disk — if a feature branch has filed
-  ids the local ledger doesn't yet know about, collisions surface
-  on merge. The fast-path doesn't make this worse than committing
-  by hand; just be aware.
+  `tasks/history.tsv` and disk — a stale ledger hands out an id
+  the trunk already used. So `land.sh sync` first (Process step
+  1), and `land.sh docs` refuses (exit 5) a landing whose task id
+  the trunk already used: report it, never retry blindly.
 
 ## Process
 
-1. **Read `autonomy-rules.md` and `spec-phase/SKILL.md`.**
+1. **Read `autonomy-rules.md` and `spec-phase/SKILL.md`, then
+   sync.** `bash .claude/skills/land/land.sh sync` before filing
+   anything: ids come from the local ledger, so it must hold the
+   latest trunk. A non-zero exit: report it, never retry blindly.
+   On a work branch (anything but the trunk or a `wip/` branch), do
+   the filing and the landing from the planning worktree of
+   `land/SKILL.md` "Planning from a work branch": the branch's ledger
+   carries its own transitions, and `land.sh docs` refuses it there
+   (exit 3).
 2. **Identify the phase.** From the user's argument, or — if
    absent — the current active phase in `tasks/PHASES.md`.
 3. **Walk every stub in the phase.** For each, run the autonomous
@@ -64,39 +72,28 @@ for the whole phase.
    `.claude/bin/check-tasks --fix` (I-34).
 4. **Propose a working order** with dependency analysis, as
    `/spec-phase` does.
-5. **Spec-file fast-path** (per `autonomy-rules.md` Exception 2).
-   Check the working tree:
-   - If every dirty file matches the spec-file allowlist: create
-     a `spec/PHASE-<id>-<slug>` branch from a fresh `main`,
-     commit all of the phase's new specs in a single commit
-     (`PHASE-<id> specs — <title>` with each task listed in the
-     body), push, open a PR labeled `spec-only` with the autonomy
-     report's assumptions and working order in the body, and
-     merge via `gh pr merge --squash --delete-branch`. If branch
-     protection refuses the merge, leave the PR open and report
-     it.
+5. **Land the phase** (per `autonomy-rules.md` Exception 2, docs
+   landing). One call, once every spec is written and validated:
 
-     **Run the gate before you push, and again before you merge.**
-     The allowlist is enforced by a program, not by your reading of
-     it:
+   ```bash
+   bash .claude/skills/land/land.sh docs --skill auto-phase --title "PHASE-<id> specs — <title>" --summary "<working order; assumptions>" --tasks "<ids>" -- <spec files> tasks/PHASES.md tasks/ROADMAP.md tasks/history.tsv tasks/runs/<RUN-id>.md
+   ```
 
-     ```bash
-     .claude/skills/task-enforce/task-enforce.sh spec-gate            # pre-push
-     .claude/skills/task-enforce/task-enforce.sh spec-gate --pr <N>   # pre-merge
-     ```
-
-     The `--pr` form is the load-bearing one: it reads the file list
-     from the **pushed artifact**, not from local state, because the
-     merge acts on the PR and not on your working tree. A phase
-     fast-path is a single PR carrying every new spec, so one stray
-     file disqualifies the whole batch. A non-zero exit means the
-     fast-path does not apply — leave the specs uncommitted and say
-     so in the autonomy report. There is no flag that skips it.
-   - If any non-spec file is dirty: skip the fast-path, leave
-     every spec uncommitted, and note why in the autonomy report.
+   Name every `tasks/backlog/TASK-*.md` (or `tasks/triage/…`)
+   this run wrote; `tasks/PHASES.md`, `tasks/ROADMAP.md` and
+   `tasks/history.tsv` only when they changed; and the run record,
+   closed first so the copy that lands is final. `land.sh`
+   classifies every file and refuses (exit 3) any that is not docs
+   class, so pass only what this run wrote. Exit 4 (no `gh`):
+   finish with the session's GitHub tooling per `land/SKILL.md`
+   "Without `gh`". Exits 5/6/7: report, never retry blindly; on 6
+   the PR stays open. As a step of `/mission`, `/self-heal` or
+   `/self-improve`, skip this: the orchestrator's branch and PR
+   carry the specs.
 6. **Render one autonomy report** covering the whole phase — specs
    written, assumptions grouped by task, working order, any hard
-   gate hit, and the fast-path result.
+   gate hit, and the landing line: `Landed: PR #N merged` or
+   `Not landed: exit N — <message>`.
 
 ## When NOT to use this skill
 
@@ -112,10 +109,10 @@ Every stub in the named phase is now a full, implementation-ready
 spec, with a proposed working order and one autonomy report
 covering every decision made across the phase.
 
-If the spec-file fast-path engaged: every new spec is on `main`
-via a single merged `spec-only` PR. The team has the full phase
-visible. The user reviews the report and the PR after the fact.
+Every new spec is on the trunk via a single merged `land.sh docs`
+PR (in a composed run, the orchestrator's PR carries them). The
+team has the full phase visible. The user reviews the report and
+the PR after the fact.
 
-If the fast-path was skipped (non-spec dirty files): all specs
-sit uncommitted — same as the pre-v0.32.0 behavior. The user
-reviews and commits manually.
+If the landing did not merge, the report names the exit code and
+what is still open.

@@ -31,9 +31,10 @@ does one thing — wire up hooks — and exposes no extra knobs.
   doesn't exist, the script creates it with `{ "hooks": {...} }`.
 - **Doesn't validate that the command actually works.** Wires it
   up as-is. The user is responsible for the command being correct.
-- **Never auto-commits.** Standard kit rule. The settings file may
-  be `.claude/settings.json` (committed) or `.claude/settings.local.json`
-  (gitignored); either way, the script doesn't run git.
+- **The script never runs git.** `.claude/settings.local.json` (the
+  default) is local and gitignored: nothing to land. The committed
+  `.claude/settings.json` is code class (harness config): Step 4
+  lands it by PR.
 
 ## The script
 
@@ -128,6 +129,25 @@ Surface the script's stdout to the user (single line per add/remove).
 
 For `list`, surface the formatted output.
 
+### Step 4 — Land (`.claude/settings.json` only)
+
+The default `settings.local.json` is gitignored and `~/.claude/settings.json`
+is outside the repo: nothing to land. When the run changed the committed
+`.claude/settings.json`, name that file and nothing else:
+
+```bash
+bash .claude/skills/land/land.sh pr --skill install-hook --title "<hook>" -- .claude/settings.json
+```
+
+**It never merges** — a reviewer merges shared hook changes. `list`,
+or an add / remove that was a no-op, lands nothing. Exit 4 (no `gh`):
+finish with the session's GitHub tooling per `land/SKILL.md` "Without
+`gh`". Exits 5/6/7: report, never retry blindly. As a step of
+`/mission`, `/self-heal` or `/self-improve`, skip this: the
+orchestrator's branch and PR carry the file. Add one line to the
+report: `PR: #N open, never merged by this skill` or
+`Not landed: exit N — <message>`.
+
 ## Style rules
 
 - **Minimal output.** One line per action. No preamble, no closing
@@ -180,4 +200,6 @@ For `list`, surface the formatted output.
 
 The target `settings.json` (or `settings.local.json`) has the
 requested hook added / removed. The hook fires at its event next
-session start. No other files modified, no commits.
+session start. No other files modified. A `.claude/settings.json`
+change is in an open PR, never merged by this skill;
+`settings.local.json` lands nothing.

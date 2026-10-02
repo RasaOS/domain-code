@@ -128,7 +128,8 @@ Wait for the user's response. Don't batch — handle one at a time.
 - Show a diff preview: source removal + target append.
 - Ask one more time: "Apply this move? (yes/no)"
 - Only on explicit `yes`, write the changes (Edit / Write tool).
-- The change lands in the working tree, uncommitted.
+- The change stays in the working tree until Step 6 proposes every
+  approved edit in one PR.
 
 ### Step 4 — On (b) Rephrase
 
@@ -164,11 +165,23 @@ Files touched:
   - <path:line>
   - <path:line>
 
-Diff:
-  git diff <list of files>
-
-Commit when ready.
+PR: #<N> open, never merged by this skill
+  *(or: Not proposed: exit <N> — <message>)*
 ```
+
+Skill files are agent instructions, so code class: the approved edits
+go up in one PR this skill never merges (`land/SKILL.md`), naming only
+the files it touched. In the Element repository (not installed into
+itself), run the shipped script by its source path:
+
+```bash
+RASA_ROOT="$PWD" bash content/skills/land/land.sh pr --skill lint-kit --title "lint-kit fixes" -- <files>
+```
+
+In a project, `bash .claude/skills/land/land.sh pr --skill lint-kit
+--title "lint-kit fixes" -- <files>`. Exit 4 (no `gh`): finish with the
+session's GitHub tooling per `land/SKILL.md` "Without `gh`". Exits
+5/6/7: report, never retry blindly.
 
 ## Output structure
 
@@ -227,8 +240,8 @@ The output rendered by `bin/lint`:
   classification, log it as a false positive and keep moving. Regex
   tuning is a separate task — file a `/contribute` PR, not an
   inline edit.
-- **Don't commit.** Standard kit rule. Edits land uncommitted; the
-  user reviews with `git diff` and commits.
+- **Don't commit, push or merge yourself.** The approved edits go up
+  in one PR through `land.sh pr` (Step 6); a reviewer merges it.
 - **Don't expand scope unilaterally.** If something out-of-scope
   catches your eye while reading a file (a typo, a stale link),
   surface it in a one-line "Adjacent observations" footer at most.
@@ -289,7 +302,7 @@ The output rendered by `bin/lint`:
 A rendered §6 Severity audit in chat, with HIGH / MEDIUM / LOW
 counts and the finding rows. The user knows the exit code. If
 they ran `/lint-kit fix`, the working tree has applied moves and
-rewrites for the findings they approved (uncommitted), plus a
-note about any they marked as false positives. The next step is
-either commit (if changes were applied) or — if the report was
-clean — nothing.
+rewrites for the findings they approved in one open PR this skill
+never merges (or the `/land` exit reported), plus a note about any
+they marked as false positives. If the report was clean, nothing
+more happens.

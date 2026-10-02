@@ -32,6 +32,8 @@ If it's stale, say what's stale and why. Don't manufacture work.
 - **Honest about confidence.** "This is wrong, the code says X" vs
   "I think this is stale, but couldn't fully verify" — distinguish
   them in the report.
+- **Land the edits, don't commit them by hand.** Once approved
+  edits are applied, `land.sh auto` lands them (Step 5).
 
 ## Doc surfaces in scope
 
@@ -124,7 +126,32 @@ After edits:
 - If an edit changes process — the task rules, the done-gate —
   `code-task-rules.md` §12 wants a 📜 entry; append one to
   `AUDIT.md`.
-- Don't commit unless the user says so.
+- Land every file you wrote (Step 5).
+
+### Step 5 — Land the edits
+
+This skill writes both classes; `auto` splits them. Doc outputs
+under `docs/` (audits, decisions, notes, …) and `tasks/*.md`
+(`PHASES.md`, `ROADMAP.md`, `AUDIT.md`) are docs class and land by
+themselves (a PR from the latest trunk that merges after CI).
+`README.md`, `CLAUDE.md`, `.claude/**`, `.env.example`, the package
+manifest and every other file are code class — the process files
+among them are gated (`code-task-rules.md` §9) — and go by a PR the
+skill never merges. `land.sh classify` decides.
+
+```bash
+bash .claude/skills/land/land.sh auto --skill update-docs --title "<what was updated>" -- <every file written>
+```
+
+Name every file this run wrote, and nothing else. Exit 4 (no
+`gh`): finish with the session's GitHub tooling per
+`land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never retry
+blindly. As a step of `/mission`, `/self-heal` or `/self-improve`,
+skip this: the orchestrator's branch and PR carry the files.
+
+Close with one landing line per class written: `Landed: PR #N
+merged` (docs), `PR: #N open, never merged by this skill` (code),
+or `Not landed: exit N — <message>`.
 
 ## Severity rubric
 
@@ -237,8 +264,9 @@ red", or "skip everything", and I'll edit accordingly.>
 - **Don't propose edits to user-voice docs** (vision statements,
   marketing copy, personal notes) without asking. You can flag
   them in ⚪ Notes.
-- **Don't commit.** Doc-sync edits flow through the user's normal
-  git approval like any other change.
+- **Don't commit or push the edits yourself.** `land.sh auto`
+  lands them (Step 5): docs by themselves, code by a PR the skill
+  never merges.
 
 ## When NOT to use this skill
 
@@ -255,6 +283,9 @@ The user leaves with one or more of:
 - A clear report of what's drifted, ready for them to triage
 - Approved edits applied surgically across the affected docs
 - An `AUDIT.md` entry recording the doc-sync (when edits were made)
+- Those edits landed with `land.sh auto` (docs merged, code in an
+  open PR), left to the orchestrator in a composed run, or the
+  exit code and what is still open reported
 - Confidence that the docs reflect reality again
 
 If the report comes back "everything's accurate, nothing to do" —

@@ -298,6 +298,7 @@ Durable records — each writes to a typed location under `docs/`.
 | `/push` | Commit and push the working tree in one step — no questions; branches off the trunk |
 | `/open-pr` | Hand a task from build to review — branch, commit, push, the §10 PR with its merge manifest (tasks, phase, release, merge method, what runs on merge) filled from the ledger, `task submit`; refuses a PR the spec does not support |
 | `/auto-merge` | When enabled, merge opted-in PRs unattended (the `auto-merge` label plus `merge: auto`, CI green, mergeable, dependencies merged) through `/peer-review`, then carry out the manifest's `on_merge` for non-prod targets only; prod and releases are queued for a person. Owns the PR template and `pr-manifest.sh` |
+| `/land` | Get a skill's outputs onto the trunk by class, always from the latest trunk: doc outputs (audits, decisions, retros, handoffs, the task ledger) land by themselves through a verified, CI-gated, pinned PR; code, and anything agents load as instructions, goes through a PR the skill never merges. Also `sync`, and the guard that keeps the trunk PR-only for Claude |
 | `/reconcile` | Clean the task ledger against reality — merged PRs passed through the done-gate, closed PRs rejected, ready PRs submitted automatically; stale work proposed for park/close in one batch; one ledger PR |
 | `/save` | Mid-session state-save for an active thread of work |
 | `/load` | Rehydrate context from the most recent `/save` snapshot |
@@ -573,8 +574,12 @@ Or pin to an older commit by editing `.claude/rasa.lock.json`'s
 - **Honest reporting both ways.** Same ethos as [Anthropic's CLAUDE.md
   conventions]. Skills report failures plainly; sync surfaces conflicts
   rather than silently merging.
-- **Never auto-commit.** Every skill that modifies files leaves changes
-  staged or unstaged for the human to review.
+- **Nothing lost, nothing straight in.** A skill's outputs never stay
+  stranded in a working tree, and `main` only moves through a merged
+  PR built on the latest `main`. Doc outputs (audits, decisions, plans,
+  the task ledger) land by themselves once CI passes; code, and
+  anything agents load as instructions, goes up in a PR the skill
+  never merges (`/land`).
 - **Solo-dev-friendly first.** No team-mode features (codeowners,
   required reviewers, multi-author workflows) until they're actually
   needed.

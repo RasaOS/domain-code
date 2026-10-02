@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: Snapshot in-flight project context into a single durable doc that another contributor (or future-you in six months) can pick up cold. Captures active branches, dirty working tree, in-flight tasks, blockers, recent decisions, recent postmortems, and the things you almost figured out before stepping away. Output lands at `docs/handoff/<YYYY-MM-DD>.md` AND a tight 10-15 line summary at `.claude/welcome.md` (the file Claude reads on session start). Distinct from `/onboard` (which assumes a stable, documented project) — `/handoff` is for in-flight handovers when things are unfinished. Triggered when the user is stepping away mid-project — e.g. "/handoff", "I'm going on leave", "snapshot the context", "create a handoff doc", "package what I know for the next person".
+description: Snapshot in-flight project context into a single durable doc that another contributor (or future-you in six months) can pick up cold. Captures active branches, dirty working tree, in-flight tasks, blockers, recent decisions, recent postmortems, and the things you almost figured out before stepping away. Output is written to `docs/handoff/<YYYY-MM-DD>.md` AND a tight 10-15 line summary at `.claude/welcome.md` (the file Claude reads on session start). Distinct from `/onboard` (which assumes a stable, documented project) — `/handoff` is for in-flight handovers when things are unfinished. Triggered when the user is stepping away mid-project — e.g. "/handoff", "I'm going on leave", "snapshot the context", "create a handoff doc", "package what I know for the next person".
 ---
 
 # /handoff — Snapshot in-flight context for a clean handover
@@ -24,7 +24,12 @@ proportional to its honesty about the messy parts.
      Claude reads on session start (via the CLAUDE.md `@`-import).
      Always rewritten in full on each `/handoff` run.
 
-  No source-code edits. Never auto-commits.
+  No source-code edits. The dated handoff doc is docs class and
+  lands by itself (Step 5). `.claude/welcome.md` is code class
+  (CLAUDE.md `@`-imports it, so every session loads it), so it
+  goes up in a PR this skill never merges: one rolling PR that
+  every handoff updates, built aside so the checkout stays clean
+  (Step 5).
 - **Read multiple sources, synthesize one doc.** A handoff is
   not a doc dump — it's a curated synthesis. Pull from git
   state, tasks/, docs/decisions/, docs/postmortems/, and
@@ -98,9 +103,16 @@ structure** below.
 
 ### Step 4 — Rewrite `.claude/welcome.md`
 
-Always rewrite (don't append) `.claude/welcome.md` with a tight
-summary derived from the same inputs. Keep it under ~15 lines.
-This is what future Claude sessions read on start.
+First bring in the copy the rolling `welcome pointer` PR holds, if
+one is still open (it is newer than the trunk's):
+
+```bash
+bash .claude/skills/land/land.sh pending --skill handoff --title "welcome pointer" -- .claude/welcome.md
+```
+
+Then always rewrite (don't append) `.claude/welcome.md` with a
+tight summary derived from the same inputs. Keep it under ~15
+lines. This is what future Claude sessions read on start.
 
 ```markdown
 # 👋 Welcome back
@@ -132,24 +144,62 @@ This is what future Claude sessions read on start.
 ```
 
 If `.claude/welcome.md` doesn't exist yet (project pre-dates the
-welcome.md template), create it.
+welcome.md template), create it. Step 5 proposes it by PR; it
+never lands by itself.
 
-### Step 5 — Closing summary
+### Step 5 — Land the handoff doc
+
+The dated handoff doc is docs class, so it lands by itself (a PR
+from the latest trunk that merges after CI):
+
+```bash
+bash .claude/skills/land/land.sh docs --skill handoff --title "Handoff <YYYY-MM-DD>" -- docs/handoff/<YYYY-MM-DD>.md
+```
+
+Name only the dated doc this run wrote (the `<date>-2.md` file if
+date-suffixed). **Never pass `.claude/welcome.md` to `land.sh
+docs`**: CLAUDE.md `@`-imports it, so every session loads it as
+instructions, which makes it code class. It goes by PR instead:
+the rolling `welcome pointer` PR, which every handoff updates
+(same title, same `--skill` as the `pending` in Step 4):
+
+```bash
+bash .claude/skills/land/land.sh pr --rolling --skill handoff --title "welcome pointer" -- .claude/welcome.md
+```
+
+`--rolling` builds that PR's branch aside from the latest trunk,
+whatever branch is checked out, and reuses the PR while it is
+open (once it has merged or been closed, the next run opens a
+new one). Then it puts `.claude/welcome.md` in this checkout back
+to its committed version: the content is on the PR branch, a copy
+is kept in the land state, and `./build/build` and `/release` see
+a clean tree. The skill never merges the PR.
+
+Exit 4 (no `gh`): finish with the session's GitHub tooling per
+`land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never retry
+blindly. As a step of `/mission`, `/self-heal` or
+`/self-improve`, skip this step: the orchestrator's branch and PR
+carry both files.
+
+### Step 6 — Closing summary
 
 ```markdown
 # 📨 Handoff snapshot written
 
 - **Deep snapshot.** `docs/handoff/<YYYY-MM-DD>.md` — <line count> lines.
+  Landed: PR #N merged *(or `Not landed: exit N — <message>`)*
 - **Welcome.** `.claude/welcome.md` — rewritten (~<line count> lines).
-  Future sessions read this on start.
+  In the rolling `welcome pointer` PR #N, never merged by this
+  skill *(or `Not proposed: exit N — <message>`)*. Future
+  sessions read it on start once it merges.
 
 **The three things most worth knowing:**
 1. <terse>
 2. <terse>
 3. <terse>
 
-Review with `git diff`, edit anything that misrepresents reality,
-commit when ready.
+If anything misrepresents reality, fix it and re-run `/handoff`
+(update in place); the corrected doc lands the same way.
 
 If you come back to this project later, run `/onboard` first
 (for the documented context), then read the most recent handoff
@@ -341,7 +391,13 @@ handoff is dated and additive.*
   password, or credential while answering tacit-knowledge
   questions, **flag it and refuse to write it down**. Suggest
   they put it in a secret-manager note or password vault.
-- **Don't auto-commit.** Same rule as every kit-write skill.
+- **Don't commit or push the handoff doc yourself.** `land.sh
+  docs` lands it (Step 5).
+- **Don't pass `.claude/welcome.md` to `land.sh docs`, and don't
+  merge its PR.** It is code class (CLAUDE.md `@`-imports it):
+  `land.sh pending` before the rewrite (Step 4), `land.sh pr
+  --rolling` after it (Step 5), both with the title `welcome
+  pointer`.
 - **Don't fabricate state.** If `tasks/active/` is empty,
   say so.
 - **Don't spam the project's CLAUDE.md.** This skill writes one
@@ -382,14 +438,19 @@ handoff is dated and additive.*
 
 ## What "done" looks like for a /handoff session
 
-Two artifacts on disk, uncommitted:
+Two artifacts:
 1. The deep dated snapshot at `docs/handoff/<YYYY-MM-DD>.md`
-   — full state, doc-driven + tacit knowledge.
+   — full state, doc-driven + tacit knowledge. Landed with
+   `land.sh docs` (merged PR), left to the orchestrator in a
+   composed run, or the exit code and what is still open
+   reported.
 2. A rewritten `.claude/welcome.md` (~15 lines) that future
    Claude sessions auto-load on start via the CLAUDE.md
-   `@`-import.
+   `@`-import, in the rolling `welcome pointer` PR this skill
+   never merges.
 
-The user knows the next person (or next session) can read
-`.claude/welcome.md` for the quick orient, then drill into
-`docs/handoff/<YYYY-MM-DD>.md` for the deep state — without
-you in the room.
+The user knows that once the `welcome pointer` PR merges, every
+session reads `.claude/welcome.md` for the quick orient, and that
+the next person (on any clone) can already drill into
+`docs/handoff/<YYYY-MM-DD>.md` on the trunk for the deep state —
+without you in the room.

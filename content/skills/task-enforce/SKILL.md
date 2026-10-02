@@ -1,6 +1,6 @@
 ---
 name: task-enforce
-description: Toggle and operate change-time task enforcement — no code change without a linked task, enforced by a PreToolUse hook that denies the edit, files a task into tasks/triage/ through .claude/bin/task, and lets the retry through. Also stamps this domain's x- frontmatter keys and runs the spec-only merge gate. Use for "/task-enforce", "turn on task enforcement", "require a task for every change", "why was my edit blocked", "link this work to a task", "what task am I on", "stamp x-outcome on TASK-N". Ships off; turn it on deliberately.
+description: Toggle and operate change-time task enforcement — no code change without a linked task, enforced by a PreToolUse hook that denies the edit, files a task into tasks/triage/ through .claude/bin/task, and lets the retry through. Also stamps this domain's x- frontmatter keys. Use for "/task-enforce", "turn on task enforcement", "require a task for every change", "why was my edit blocked", "link this work to a task", "what task am I on", "stamp x-outcome on TASK-N". Ships off; turn it on deliberately.
 ---
 
 # /task-enforce — No code change without a task
@@ -89,18 +89,18 @@ state; move it with `.claude/bin/task`), `phase` is
 `backlog/` — start it first (I-14). The old names `origin`, `owner`,
 `outcome`, `severity` still land, as their `x-` form.
 
-### The spec-only merge gate
+### The spec-only merge gate (superseded)
 
 ```bash
 task-enforce.sh spec-gate            # the working tree (pre-push)
 task-enforce.sh spec-gate --pr 88    # the pushed PR (pre-merge)
 ```
 
-The program behind `autonomy-rules.md` Exception 2. It passes only if
-every path in the change set is `tasks/**/*.md` or `tasks/history.tsv` —
-the transition log `.claude/bin/task` appends to on every filing and
-move. Anything else, `tasks/tasks.config.yml` included, refuses the
-fast-path. There is no flag or variable that skips it.
+Superseded by `/land`: `autonomy-rules.md` Exception 2 is now docs
+landing, and `land.py` decides the docs class and checks the pushed
+commit (`land.sh verify`). `spec-gate` still answers for the `tasks/`
+subset (`tasks/**/*.md`, `tasks/history.tsv`; `tasks/tasks.config.yml`
+refused) and stays for scripts that call it; no shipped skill does.
 
 ### Check every record — read-only
 

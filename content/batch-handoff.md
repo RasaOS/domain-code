@@ -37,11 +37,16 @@ clicking through tabs to find a URL.
 Wait for the reviewer's verdict. While waiting:
 
 - **Do** accept new task ideas, bug reports, or notes the reviewer
-  surfaces during testing. File them with `/task`
-  (`.claude/bin/task new` — `tasks/triage/`, or `tasks/backlog/`
-  with `--phase`) and draft the specs there **without committing**
-  — keep the worktree clean for their session. Same pattern used
-  during the prior review window.
+  surfaces during testing. File them with `/task` from a checkout of
+  the trunk, not the integration branch (its ledger carries the
+  batch's own transitions, which ride its PR, so `land.sh docs`
+  refuses a ledger landing from it): the planning worktree of
+  `land/SKILL.md` "Planning from a work branch", synced before each
+  idea. There, `.claude/bin/task new` (`tasks/triage/`, or
+  `tasks/backlog/` with `--phase`), draft the spec, and land it with
+  `land.sh docs` (the task files, `tasks/history.tsv` and
+  `tasks/ROADMAP.md`). The integration worktree stays clean for the
+  reviewer's session, and the specs reach the trunk.
 - **Do** answer questions about what's in the integration branch.
 - **Do not** start new feature work. Don't speculatively merge more
   PRs. Don't auto-deploy. Don't kill the running process.
@@ -52,11 +57,32 @@ take minutes or hours.
 
 ### Step 4a — On approval ("merge", "ship it", "looks good")
 
-- Merge integration → main with `gh pr merge --merge --delete-branch`
+- Sync the integration branch with the latest trunk first: on it,
+  `bash .claude/skills/land/land.sh sync` (a merge, never a rebase or
+  force), push, and let CI run on the new head. Exit 5 (conflict) or
+  7 (push refused): report, do not merge, never retry blindly.
+- Once CI has passed on that head, check it is still fresh (the trunk
+  may have moved during the wait): `bash .claude/skills/land/land.sh
+  fresh --sha <sha>`. Exit 5 → sync again and wait for CI again.
+- Merge integration → main pinned to that head with
+  `gh pr merge --merge --delete-branch --match-head-commit <sha>`
+  (`<sha>` = the synced head CI passed on; a refusal means something
+  was pushed after it — stop and report)
 - Verify the child PRs auto-close as merged, then
   `.claude/bin/task pass <id> --by <who>` each task — its PR is
   merged, so the done-gate's "Merged" gate now holds (`review/` →
-  `completed/`)
+  `completed/`). Land the passes in one call, never committed by
+  hand: both paths of each moved task file, `tasks/history.tsv`, and
+  any `tasks/RELEASES.md` edit:
+
+  ```bash
+  bash .claude/skills/land/land.sh docs --skill batch-handoff --title "pass <ids>" --tasks "<ids>" -- <files>
+  ```
+
+  Exit 4 (no `gh`): finish with the session's GitHub tooling per
+  `land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never retry
+  blindly. Put the landing line (`Landed: PR #N merged` or
+  `Not landed: exit N — <message>`) in the reply.
 - Clean up local + remote stale branches and pull main fresh
 - **Ask** explicitly: "Deploy now, or hold? If yes, I'll tag the
   release as `vX.Y.Z` — confirm the version." Do not auto-deploy.

@@ -22,6 +22,9 @@
 # Portable on purpose: bash 3.2, POSIX tools. Exit 0 only if every case passes.
 
 set -u
+# bin/init installs land.sh's pre-push guard, which refuses Claude's pushes
+# to a trunk. These fixtures push their own throwaway trunks.
+unset CLAUDECODE
 here="$(cd "$(dirname "$0")" && pwd -P)"
 ELEMENT="$(cd "$here/.." && pwd -P)"
 
@@ -103,14 +106,15 @@ PY
 mkpr() {
   python3 - "$@" <<'PY'
 import json, sys
-a = sys.argv[1:] + [""] * 8
-n, labels, bodyf, draft, base, mergeable, checks = a[:7]
+a = sys.argv[1:] + [""] * 10
+n, labels, bodyf, draft, base, mergeable, checks, state, head = a[:9]
 roll = {"green": [{"__typename": "CheckRun", "name": "ci", "status": "COMPLETED", "conclusion": "SUCCESS"}],
         "pending": [{"__typename": "CheckRun", "name": "ci", "status": "IN_PROGRESS"}],
         "failing": [{"__typename": "CheckRun", "name": "ci", "status": "COMPLETED", "conclusion": "FAILURE"}],
         "none": []}[checks or "green"]
 print(json.dumps({"number": int(n), "title": "PR %s" % n, "url": "https://github.com/o/r/pull/%s" % n,
-                  "isDraft": draft == "draft", "baseRefName": base or "main", "headRefOid": "abc%s" % n,
+                  "isDraft": draft == "draft", "baseRefName": base or "main", "headRefOid": head or ("abc%s" % n),
+                  "headRefName": "task/pr-%s" % n, "mergeStateStatus": state or "CLEAN",
                   "labels": [{"name": l} for l in labels.split(",") if l],
                   "mergeable": mergeable or "MERGEABLE", "body": open(bodyf).read(),
                   "statusCheckRollup": roll}))
@@ -198,6 +202,11 @@ printf 'no manifest here\n' > "$T/b-none.md"
 body "after: [#98]" > "$T/b-after-merged.md"
 body "after: [#99]" > "$T/b-after-open.md"
 echo '{"state":"MERGED"}' > "$T/gh/pr-98.json"
+# PR 25's head is a real commit that does not contain the trunk, reachable
+# only as refs/pull/25/head on the remote (as on GitHub).
+STALE="$(git commit-tree "$(git hash-object -w -t tree /dev/null)" -m "stale head")"
+git push -q origin "$STALE:refs/pull/25/head" 2>/dev/null
+git update-ref -d refs/land/pr-25 2>/dev/null; git gc -q --prune=now 2>/dev/null
 {
   echo "["
   mkpr 10 auto-merge "$T/b-ok.md";                                    echo ","
@@ -214,11 +223,13 @@ echo '{"state":"MERGED"}' > "$T/gh/pr-98.json"
   mkpr 21 auto-merge "$T/b-ok.md" "" "" "" pending;                   echo ","
   mkpr 22 auto-merge "$T/b-ok.md" "" "" "" failing;                   echo ","
   mkpr 23 auto-merge "$T/b-ok.md" "" "" "" none;                      echo ","
+  mkpr 24 auto-merge "$T/b-ok.md" "" "" "" green BEHIND;              echo ","
+  mkpr 25 auto-merge "$T/b-ok.md" "" "" "" green "" "$STALE";         echo ","
   mkpr 99 "" "$T/b-ok.md"
   echo "]"
 } > "$T/gh/list.json"
 out="$(PATH="$GHPATH" bash "$A" plan 2>&1)"; rc=$?
-expect "plan runs" 0 "$rc" "auto-merge plan: 15 open" "$out"
+expect "plan runs" 0 "$rc" "auto-merge plan: 17 open" "$out"
 row() { printf '%s\n' "$out" | grep "^pr=$1 " | head -1; }
 expect "labelled, merge: auto, mergeable, green → eligible" 0 0 "state=eligible method=squash on_merge=hold" "$(row 10)"
 expect "no opt-in label → skipped" 0 0 "not opted in" "$(row 11)"
@@ -235,6 +246,9 @@ expect "running checks are skipped" 0 0 "checks still running: ci" "$(row 21)"
 expect "failing checks are skipped" 0 0 "checks failing: ci" "$(row 22)"
 expect "no checks at all is skipped, never green" 0 0 "no checks reported" "$(row 23)"
 expect "the eligible list" 0 0 "^eligible=10 17$" "$out"
+expect "GitHub's BEHIND flag: the PR is behind, not eligible" 0 0 "state=behind branch=task/pr-24" "$(row 24)"
+expect "a head that lacks the trunk (checked by git): behind" 0 0 "state=behind" "$(row 25)"
+expect "the behind list names both" 0 0 "^behind=24 25$" "$out"
 out="$(PATH="$GHPATH" bash "$A" plan --json 2>&1)"; rc=$?
 expect "--json is JSON with the eligible list" 0 "$rc" "" "$out"
 printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d["eligible"]==[10,17] else 1)' \

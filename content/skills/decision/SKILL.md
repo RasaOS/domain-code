@@ -51,8 +51,8 @@ ADR scale, not commit-message scale. Use this for:
   this still the right call?" — frame the ADR so that question
   is answerable later. What was true then? What conditions would
   change the answer?
-- **Don't auto-commit.** ADR file gets drafted; user reviews
-  and commits.
+- **Land it, don't commit it by hand.** Once the ADR and its
+  AUDIT entry are written, `land.sh docs` lands both (Step 5).
 
 ## Process
 
@@ -164,13 +164,28 @@ Per `code-task-rules.md` §12 (the audit log):
   See [`docs/decisions/NNNN-…md`](docs/decisions/NNNN-….md).
 ```
 
-Don't auto-commit; leave the AUDIT edit alongside the ADR file
-for the user to commit.
+### Step 5 — Land the ADR and the AUDIT entry
 
-### Step 5 — Show the user
+Both are docs class, so they land by themselves (a PR from the
+latest trunk that merges after CI):
 
-Render the drafted ADR in the response so they can review without
-opening the file. Ask if they want edits before committing.
+```bash
+bash .claude/skills/land/land.sh docs --skill decision --title "ADR NNNN: <short title>" -- docs/decisions/NNNN-short-slug.md tasks/AUDIT.md
+```
+
+Name only the files this run wrote (add the superseded ADR if you
+changed its **Status**). Exit 4 (no `gh`): finish with the session's
+GitHub tooling per `land/SKILL.md` "Without `gh`". Exits 5/6/7:
+report, never retry blindly. As a step of `/mission`, `/self-heal`
+or `/self-improve`, skip this: the orchestrator's branch and PR
+carry both files.
+
+### Step 6 — Show the user
+
+Render the ADR in the response so they can review without opening
+the file, with one landing line: `Landed: PR #N merged` or
+`Not landed: exit N — <message>`. Edits they ask for afterwards
+land the same way.
 
 ## Status field
 
@@ -200,8 +215,8 @@ the old one and says what changed.
 
 ## What you must NOT do
 
-- **Don't auto-commit.** ADR + AUDIT entry are reviewed and
-  committed by the user.
+- **Don't commit or push the ADR or AUDIT entry yourself.**
+  `land.sh docs` lands them (Step 5).
 - **Don't propose ADRs for things that aren't decisions.** A
   refactor isn't an ADR. A bug fix isn't an ADR. A code-style
   choice isn't an ADR.
@@ -222,5 +237,7 @@ the old one and says what changed.
 
 - ADR file drafted at `docs/decisions/NNNN-….md`.
 - AUDIT.md entry appended.
-- Both shown to the user, uncommitted.
-- User decides what to commit and when.
+- Both landed with `land.sh docs` (merged PR), left to the
+  orchestrator in a composed run, or the exit code and what is
+  still open reported.
+- The ADR shown to the user with its landing line.

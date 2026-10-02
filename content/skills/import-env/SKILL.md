@@ -72,9 +72,7 @@ Defaults from `suggest` are accept-or-edit. Don't auto-write — always confirm.
 
 4. Run `import-env.sh add <KEY> --required <bool> --group <path> --purpose <enum> --type <enum> --description "..." --environments <profile> --used-by-runtimes <list>` to generate the stamp.
 
-The script writes `env/stamps/<kebab-name>.md`, stages it with `git add` is NOT done by the script — leave it as an untracked file so the user can review.
-
-Actually let the user know they can run `git add env/stamps/` at the end.
+The script writes `env/stamps/<kebab-name>.md`; it does not stage or commit it. Keep a list of every stamp this run creates or changes — they land together at the end (see "Land as a PR").
 
 ### Bulk mode for large files
 
@@ -134,6 +132,16 @@ If yes:
 
 The AI can write this directly — no values involved.
 
+### Land as a PR
+
+After the last write, name every file this run created or changed — new stamps, stamps touched by `add-profile` or a `status: retired` flip, and `env/ENV.md` if the rollup ran — and nothing else:
+
+```bash
+bash .claude/skills/land/land.sh pr --skill import-env --title "import env vars from <file> into stamps" -- <files>
+```
+
+`env/ENV.md` and `env/stamps/*` are code class: they describe the environment every runtime reads, so a reviewer merges them. `land.sh pr` commits only those files on a branch from the latest trunk, pushes and opens a PR (or updates the open one for the branch). **It never merges.** They hold KEYs and metadata only — secret values never go in them (see "What `add` refuses" below). A run that wrote nothing lands nothing. Exit 4 (no `gh`): finish with the session's GitHub tooling per `land/SKILL.md` "Without `gh`". Exits 5/6/7: report, never retry blindly. As a step of `/mission`, `/self-heal` or `/self-improve`, skip this: the orchestrator's branch and PR carry the files.
+
 ### Resume gracefully
 
 `/import-env` is safe to re-run. The script's `diff` subcommand identifies what's new vs known, so the second run on the same file is a no-op (or just adds the profile to already-stamped vars).
@@ -156,6 +164,7 @@ When the skill finishes, render:
 **Source:** `.env.staging`
 **Profile recorded:** staging
 **Mode:** one-by-one
+**PR:** #N open, never merged by this skill *(or `Not landed: exit N — <message>`)*
 
 ### Stamps created (12)
 
@@ -186,17 +195,17 @@ These got `description: TODO — describe` — please review:
 
 ### Next steps
 
-1. Review the diff: `git diff env/stamps/`
+1. Review the PR: #N
 2. Sweep TODOs: `grep -l 'TODO — describe' env/stamps/*.md`
 3. Update `env/ENV.md` to reflect new groupings (re-run with the rollup step, or edit by hand)
-4. Stage + commit: `git add env/stamps/ && git commit -m "chore: import env vars from .env.staging into stamps"`
+4. Re-run `land.sh pr` after a sweep or edit — the push updates the open PR; merge it once reviewed (this skill never merges it)
 ```
 
 ## What this skill does NOT do
 
 - **Never reads values into Claude's context.** All file reads go through `import-env.sh` which returns KEYs only.
 - **Never echoes values.** Even in error messages or summaries.
-- **Never auto-commits.** Stamps are untracked files after generation; user stages and commits.
+- **Never merges.** Stamps and `env/ENV.md` go to a PR through `land.sh pr`; a reviewer merges them.
 - **Never writes to `.env*` files.** Only reads (via the script) and writes to `env/stamps/`.
 - **Never enforces the stamp model schema.** Best-effort drafts; user reviews and edits.
 
@@ -252,4 +261,4 @@ If a project has no `.env*` files, this skill has nothing to import. Write stamp
 
 ---
 
-**See also:** `env-rules.md` (full stamp model and conventions), `stamps.md` (universal stamp pattern), `script-craft.md` (doctrine: script owns mechanics, SKILL.md owns choices).
+**See also:** `env-rules.md` (full stamp model and conventions), `stamps.md` (universal stamp pattern), `script-craft.md` (doctrine: script owns mechanics, SKILL.md owns choices), `land/SKILL.md` (how its files reach the trunk).

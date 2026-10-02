@@ -16,7 +16,8 @@
 # Usage:
 #   peer-review.sh scope <N>          resolve the PR, write the diff, emit scope
 #   peer-review.sh checks <N> [--wait <secs>]
-#                                     re-read CI right before a merge -> pass | not;
+#                                     re-read CI right before a merge -> pass | not,
+#                                     and head_sha= the commit those checks ran on;
 #                                     --wait polls while checks are pending
 #   peer-review.sh classify           a rollup on stdin ({"statusCheckRollup": [...]})
 #                                     -> the same classification and exit codes as
@@ -30,7 +31,7 @@
 
 set -euo pipefail
 
-usage() { sed -n '3,27p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,28p' "$0" | sed 's/^# \{0,1\}//'; }
 
 need_gh() {
   command -v gh >/dev/null 2>&1 || {
@@ -149,7 +150,7 @@ cmd_checks() {
   # restarts CI. Poll while checks are pending, bounded; never treat "still
   # running" as passing.
   while :; do
-    meta="$(gh pr view "$n" --json statusCheckRollup 2>/dev/null)" || {
+    meta="$(gh pr view "$n" --json statusCheckRollup,headRefOid 2>/dev/null)" || {
       echo "error: could not read PR $n's checks from the remote" >&2
       return 1
     }
@@ -159,6 +160,11 @@ cmd_checks() {
     sleep "${PEER_REVIEW_POLL:-15}"; waited=$((waited + ${PEER_REVIEW_POLL:-15}))
   done
   printf '%s\n' "$out"
+  # The head these checks describe, from the same read: the merge is pinned
+  # to it (--match-head-commit), so a later push cannot ride along.
+  printf 'head_sha=%s\n' "$(printf '%s' "$meta" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("headRefOid") or "")
+except ValueError: print("")')"
   state="$(printf '%s\n' "$out" | sed -n 's/^checks_state=//p')"
   case "$state" in
     pass)    return 0 ;;

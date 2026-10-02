@@ -167,6 +167,12 @@ jobs:
       - name: Merge manifest and auto-merge
         run: bash bin/test-auto-merge
 
+      # How skill outputs reach the trunk: docs land by themselves through a
+      # verified, CI-gated, pinned PR; code goes by PR and is never merged by
+      # the skill; the trunk guard (pre-push, Bash, GitHub tools).
+      - name: Landing and the trunk guard
+        run: bash bin/test-land
+
   macos:
     name: runs on stock macOS bash
     runs-on: macos-latest
@@ -221,6 +227,9 @@ jobs:
 
       - name: Merge manifest and auto-merge (bash 3.2)
         run: /bin/bash bin/test-auto-merge
+
+      - name: Landing and the trunk guard (bash 3.2)
+        run: /bin/bash bin/test-land
 
       # The approval gate must (a) auto-approve under FORCE_APPROVAL=1 and
       # (b) fail CLOSED with no controlling terminal. A CI runner has no

@@ -417,6 +417,23 @@ if [[ -f "$TE_SH" ]] && command -v python3 >/dev/null 2>&1; then
   ( cd "$TARGET" && RASA_ROOT="$TARGET" bash "$TE_SH" hooks ) 2>&1 | sed 's/^/  /' || true
 fi
 
+# ---------- The trunk guard and landing (every install and sync) ----------
+# land.sh hooks: PreToolUse guards (Bash, GitHub write tools) and a
+# SessionStart hook in the committed .claude/settings.json, plus the git
+# pre-push hook in this clone. The session hook re-arms pre-push in every
+# fresh clone. Unlike the task hooks there is no switch: keeping the trunk
+# PR-only for Claude is not optional. A failure is reported, not swallowed.
+LAND_SH="$TARGET/.claude/skills/land/land.sh"
+if [[ -f "$LAND_SH" ]]; then
+  if command -v python3 >/dev/null 2>&1; then
+    if ! ( cd "$TARGET" && RASA_ROOT="$TARGET" bash "$LAND_SH" hooks ) 2>&1 | sed 's/^/  /'; then
+      echo "  ⚠ land: could not install the trunk guard — run: bash .claude/skills/land/land.sh hooks"
+    fi
+  else
+    echo "  ⚠ land: python3 is missing, so the trunk guard is NOT installed"
+  fi
+fi
+
 # ---------- tasks/history.tsv merges as a union ----------
 # The transition log is append-only and committed, and /open-pr and
 # /peer-review append to it on PR branches. Two PRs each moving a task would

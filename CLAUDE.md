@@ -52,7 +52,7 @@ Element Contract v1.3.0 as of v0.42.0 (2026-05-24).
 `rasa.domain.code` follows the **toolkit shape pattern** (per
 `elements/domain-core/content/SHAPE.md` Pattern 1):
 
-- `content/skills/` — 81 skill folders (one per skill capability)
+- `content/skills/` — 82 skill folders (one per skill capability)
 - `content/agents/` — 4 Claude subagent definitions
 - `content/modes/` — operating modes (drive prose)
 - `content/build/` — pipeline scaffolding
@@ -140,9 +140,20 @@ ELEMENT_CONTRACT §8 + §8a:
   requiring projects to re-init.
 
 Each bump: edit `VERSION`, update `rasa.json#version`, write a
-CHANGELOG.md entry. Commit + tag + push. Update
+CHANGELOG.md entry, and land it through a PR like any other code
+change (a `chore/release-vX.Y.Z` branch cut from the latest
+`origin/main`). Nothing is pushed to `main` directly. Once the PR is
+merged, tag the merge commit on `origin/main` and push the tag. Update
 `~/rAI/rasa-os/elements/REGISTRY.md` + `~/rAI/rasa-os/elements/CHANGELOG.md`
 (workspace orchestrator's seat) with the new SHA + version.
+
+Ledger moves in this repo's own `tasks/` (a `pass` after a PR was
+merged outside `/peer-review`, a reconcile) go the same way the
+Element tells consumers to: a docs landing, never a commit pushed to
+`main`. The Element is not installed into itself, so run the shipped
+script by its source path:
+`RASA_ROOT="$PWD" bash content/skills/land/land.sh docs --skill task --title "pass TASK-NNN" --tasks TASK-NNN -- tasks/review/<TASK-NNN-slug>.md tasks/completed/<TASK-NNN-slug>.md tasks/history.tsv`
+(a pass moves the file, so both of its paths are named).
 
 ## What success looks like
 
