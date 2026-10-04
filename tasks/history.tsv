@@ -112,3 +112,6 @@ date	id	from	to	actor	note
 2026-09-27	TASK-077	backlog	active	claude	reproduced upstream at HEAD; fix + test drafted
 2026-09-27	TASK-077	active	review	claude	PR opening next
 2026-09-27	TASK-077	review	completed	claude	gate: PR #20 merged 0dd0830c; bin/test-git-guard 24/24, and 19/24 (5 fail, exactly the no-op cases) against the unfixed script; CI: manifest+schema, bash-3.2-floor and lint green at merge, macos job corroborated by an identical local run under /bin/bash 3.2.57
+2026-10-03	TASK-078	-	backlog	claude	found when two sessions deploying one project overwrote each other's live site
+2026-10-03	TASK-078	backlog	active	claude	gates, checker, rule text and tests drafted on feat/deploy-never-backwards
+2026-10-03	TASK-078	active	review	claude	on feat/deploy-never-backwards; the operator opens the PR

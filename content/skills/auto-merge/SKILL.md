@@ -188,6 +188,10 @@ whether it is on and how it is scheduled. Merge nothing.
    comments the outcome on the PR. Exit 7 means the deploy failed. The
    merge stands: report it with the build, test or deploy record ids,
    and keep going. A queued action is reported for a person to take.
+   The pipeline's `trunk-sync` and `live-contained` gates
+   (`pipeline-rules.md`, "Deploys never go backwards") also run on that
+   deploy; a refusal there — the environment runs a commit the trunk
+   lacks — is reported, never overridden.
 
 4. **For each `state=behind` PR:** merge the trunk into its branch.
 

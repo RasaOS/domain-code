@@ -48,6 +48,10 @@ merge-bearing skills) and Rule 5 (deploys route through
     fails the remote's protection rules).
   - The trunk moved while the release ran (the deployed commit no
     longer contains the latest trunk): stop before merging.
+  - The release would go backwards: it is behind the trunk, or it
+    does not contain the commit production runs now, or nobody can
+    say what production runs (`deploy-check.sh` / the pipeline's
+    `trunk-sync` and `live-contained` gates refuse).
   - Deploy command itself fails — stop, no retry, report exactly
     what failed.
 - **Pick the version; do not ask.** If invoked with a version arg
@@ -151,7 +155,26 @@ universal flow below.
 
 ### Step 1 — Pre-flight check
 
-Run in parallel:
+**Sync and containment check (mandatory, first).** A deploy replaces
+the whole target, so a production tree that is behind `main`, or that
+lacks the commit live in production now, silently removes what another
+session shipped. Production ships exactly the fetched trunk tip — on the
+integration path, the release commit that contains it and that the
+release PR merges — and only a tree containing what is live
+(canonical: `.claude/pipeline-rules.md`, "Deploys never go backwards").
+The `land.sh sync` below brings the trunk in; then, before Step 3:
+
+```sh
+bash .claude/skills/deploy/deploy-check.sh --env <prod-env> --prod --live-only
+```
+
+`REFUSED` is a hard blocker: report what it names (the live commits this
+release would drop, or that what is live is unknown) and stop. Never set
+an override (`ALLOW_DROP_LIVE`, `LIVE_SHA_UNKNOWN_OK`, `ALLOW_BEHIND_TRUNK`)
+yourself; the first production release with no `live_sha` hook needs
+the user to say `LIVE_SHA_UNKNOWN_OK=1`.
+
+Then run in parallel:
 
 - `git rev-parse --abbrev-ref HEAD` — capture the current branch.
 - The tree must be clean **of source**: `build/gates/git-clean.sh`
@@ -361,8 +384,15 @@ staging environment skips the staging deploy (the gate warns).
 Then promote — the same build, to production:
 
 ```sh
-FORCE_APPROVAL=1 DEPLOY_APPROVAL=invocation ./build/deploy --env=<prod-env> --intent=release
+FORCE_APPROVAL=1 DEPLOY_APPROVAL=invocation RELEASE_PR=<N> ./build/deploy --env=<prod-env> --intent=release
 ```
+
+`RELEASE_PR=<N>` (the release PR from Step 3; omit it on the
+nothing-to-merge path, where the release commit is `main`'s tip) tells
+`gates/trunk-sync.sh` that this commit contains the trunk tip and that PR
+#N merges exactly it — production otherwise accepts only the trunk tip
+itself. `gates/live-contained.sh` refuses a release that does not contain
+what production runs now. Both refusals are hard blockers.
 
 `FORCE_APPROVAL=1` because invocation is this skill's consent and the
 approval prompt needs a terminal an agent does not have; `DEPLOY_APPROVAL
@@ -400,15 +430,23 @@ that contradicts the contract this skill states five times over. A human
 running `./build/deploy` by hand on a terminal still gets
 `gates/approval.sh`, because there a prompt can actually be answered.
 
-**Fallback — no pipeline.** If `./build/deploy` does not exist, use the
-deploy command discovered in Step 1 and run it in the foreground. Say
+**Fallback — no pipeline.** If `./build/deploy` does not exist, run
+`RELEASE_PR=<N> bash .claude/skills/deploy/deploy-check.sh --env <prod-env> --prod`
+(with `--live-sha` / `--live-cmd` if the project documents how to read the
+live commit) **immediately** before the deploy command — `PASS` or hard
+stop — then use the deploy command discovered in Step 1 and run it in the
+foreground. Say
 explicitly in the release report that the deploy did **not** go through
 the pipeline, so it has no ship-log record, no class guard and no
 approval gate. Then suggest `/setup-deploy`.
 
 Capture full output either way.
 
-If it succeeds → continue to Step 6.
+If it succeeds, **confirm what is live**: read the production live commit
+again (the `live_sha` hook / version endpoint) and check it is
+`RELEASE_SHA`. Anything else means another deploy landed on top or this
+one did not take — a partial-state warning in the report. Then continue
+to Step 6.
 
 If it fails → **hard-stop**. Do not retry. Report exactly what
 failed, the exact command, the exact error. The local tag from
@@ -601,6 +639,9 @@ release, which a partial state isn't.
 - **Don't run lightweight tags.** Annotated only.
 - **Don't deploy with a dirty working tree.** Hard-stop at
   pre-flight.
+- **Don't deploy backwards.** Never a tree behind `main`, never one
+  that lacks what production runs now, never an override set on your
+  own judgment (`pipeline-rules.md`, "Deploys never go backwards").
 - **Don't auto-route to a platform skill the user didn't intend.**
   Platform routing in Step 0 is the kit's convention. If the
   user wanted the universal flow despite an iOS project, they

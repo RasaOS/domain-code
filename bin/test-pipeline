@@ -91,8 +91,11 @@ echo "dist" >> "$BUILD_ARTIFACTS"
 EOF
 for e in local staging prod; do
   mkdir -p "build/environments/$e"
-  printf '#!/usr/bin/env bash\nset -e\nrm -rf live-%s && cp -r dist live-%s\n' "$e" "$e" > "build/environments/$e/deploy.sh"
+  printf '#!/usr/bin/env bash\nset -e\nrm -rf live-%s && cp -r dist live-%s\ngit rev-parse HEAD > live-%s/.sha\n' "$e" "$e" "$e" > "build/environments/$e/deploy.sh"
   chmod +x "build/environments/$e/deploy.sh"
+  # The live_sha hook gates/live-contained.sh reads: the commit the last deploy
+  # wrote beside what it shipped, or `none` for an environment never deployed.
+  printf 'live_sha() { if [ -f "live-$1/.sha" ]; then cat "live-$1/.sha"; else echo none; fi; }\n' > "build/environments/$e/env.sh"
 done
 mkdir -p .claude/runtimes
 cat > .claude/runtimes/web.md <<EOF
@@ -364,6 +367,32 @@ reset; q ./build/build; q ./build/test; q ./build/deploy --env=staging --intent=
 q ./build/deploy --env=prod --intent=release
 grep -q "^approval: forced" "$(ls deploys/records/DEP-*prod*.md | tail -1)" && ok "a FORCE_APPROVAL prod release records approval: forced" || bad "a FORCE_APPROVAL prod release records approval: forced" "$(grep approval "$(ls deploys/records/DEP-*prod*.md | tail -1)")"
 grep -q "^approval: none" "$(ls deploys/records/DEP-*staging*.md | tail -1)" && ok "a staging deploy records approval: none" || bad "a staging deploy records approval: none" "wrong"
+
+echo "deploys never go backwards (v0.62.0)"
+# The fixture has no remote, so the local main is the trunk; the env.sh hook
+# above names what is live. bin/test-deploy-sync covers the gates in depth.
+lastrec() { ls deploys/records/DEP-*-"$1".md deploys/records/DEP-*-"$1"-[0-9]*.md 2>/dev/null | LC_ALL=C sort | tail -1; }
+reset; q ./build/build; q ./build/test
+expect "a first deploy over an empty environment passes (hook says none)" 0 "has nothing live" ./build/deploy --env=staging --intent=deploy
+grep -q "^replaces: none" "$(lastrec staging)" && ok "  … and its record says it replaced nothing" || bad "  … and its record says it replaced nothing" "$(grep replaces "$(lastrec staging)")"
+C1="$(git rev-parse HEAD)"
+edit src/index.html 'hello from the app' 'hello again'; q ./build/build; q ./build/test
+expect "a deploy containing the live commit passes" 0 "contains what is live" ./build/deploy --env=staging --intent=deploy
+grep -q "^replaces: $(git rev-parse --short=12 "$C1")" "$(lastrec staging)" && ok "  … and records the commit it replaced" || bad "  … and records the commit it replaced" "$(grep replaces "$(lastrec staging)")"
+C2="$(git rev-parse HEAD)"
+git checkout -q -f --detach "$C1"
+expect "a deploy from a checkout behind the trunk is refused" 1 "behind main" ./build/deploy --env=staging --intent=deploy
+[ "$(cat live-staging/.sha)" = "$C2" ] && ok "  … and what was live is untouched" || bad "  … and what was live is untouched" "live is $(cat live-staging/.sha)"
+git checkout -q -f main
+git checkout -q -f -b other; echo extra > src/extra.txt; commit "other session's feature"; q ./build/build; q ./build/test
+q ./build/deploy --env=staging --intent=deploy
+X="$(cat live-staging/.sha)"
+git checkout -q -f main; q ./build/build; q ./build/test
+expect "a deploy that would drop another session's live commit is refused" 1 "other session's feature" ./build/deploy --env=staging --intent=deploy
+[ "$(cat live-staging/.sha)" = "$X" ] && ok "  … before anything ships" || bad "  … before anything ships" "live is $(cat live-staging/.sha)"
+expect "ALLOW_DROP_LIVE=1 overrides it, loudly" 0 "OVERRIDING" env ALLOW_DROP_LIVE=1 ./build/deploy --env=staging --intent=deploy
+grep -q "^overrides: drop-live" "$(lastrec staging)" && ok "  … and the override is in the ship log" || bad "  … and the override is in the ship log" "$(grep overrides "$(lastrec staging)")"
+git checkout -q -f main && git branch -q -D other
 
 echo
 echo "$pass passed, $fail failed"

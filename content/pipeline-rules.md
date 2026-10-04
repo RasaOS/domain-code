@@ -93,11 +93,15 @@ told gates were skipped and then failed on the gate they asked to skip.)
 1. Validate `--env=<name>` and that `environments/<name>/` exists
 2. Source `environments/<name>/env.sh` (exports env vars)
 3. Gates nothing skips — `--skip-*`, `--dry-run` and `env.sh` all reach
-   them: `class-guard` (direction), `tests-required` (a gate suite that
+   them: `class-guard` (direction), `trunk-sync` (the freshly fetched
+   trunk tip is in HEAD; prod is exactly it — see "Deploys never go
+   backwards"), `tests-required` (a gate suite that
    runs something), `verified-build` (staging/prod: a passing
    `./build/test` of this source whose artifacts are unchanged),
    `promoted-build` (prod: the same build ran in staging)
-4. Take the per-environment deploy lock (`deploys/locks/<env>.lock`)
+4. Take the per-environment deploy lock (`deploys/locks/<env>.lock`),
+   then `live-contained` (the commit live in the environment now is in
+   HEAD), read under the lock so it is the freshest answer
 5. Open the ship-log record `deploys/records/DEP-….md` (refused at prod if
    it cannot be written)
 6. Run `stages/*.sh` in numeric order, passing the env name as `$1` —
@@ -182,6 +186,88 @@ refused — across machines, use your CI's concurrency group too.
 **What the records are not.** They make a skipped, stale or failed step
 impossible to ship by accident. They do not stop someone hand-writing a
 record on purpose — the approval gate and branch protection do that.
+
+## Deploys never go backwards
+
+**The canonical rule.** `release-rules.md`, `git-flow-rules.md` and every
+skill that ships point here.
+
+A deploy **replaces the whole target**. It does not add your change to
+what is live; it swaps what is live for your tree. So a tree that lacks a
+commit which is live right now *removes* that commit — silently, with a
+green deploy. Two rules, both enforced:
+
+1. **Sync with the trunk first.** Fetch the trunk immediately before
+   deploying. **Production ships exactly the trunk tip.** A lower
+   environment (dev, staging) ships a commit that *contains* the trunk
+   tip — a feature branch with the trunk merged in is fine; one behind it
+   is not.
+2. **Never drop what another session shipped.** The commit live in the
+   environment right now must be an **ancestor** of the commit you
+   deploy. If what is live is unknown, or is a commit you do not have
+   even after fetching, **stop and find out** — someone shipped it from a
+   branch you have never seen.
+
+After the deploy, **check that the live commit is now the one you
+deployed** (the same `live_sha` hook, or the service's version
+endpoint), and report the live sha, not just "deploy succeeded".
+
+**Why.** Two sessions, one site. Session A deployed its own merge commit
+minutes after session B had merged and deployed a newer PR on top of it.
+A's tree did not contain B's merge; the deploy replaced the whole site, and
+B's live feature vanished until someone noticed. Both commits were fine.
+The deploy went backwards.
+
+**Where it is enforced.**
+
+| | Pipeline (`./build/deploy`, every `--intent`) | A raw deploy command (a CLI deploy, a project's own script) |
+|---|---|---|
+| Rule 1 | `gates/trunk-sync.sh`, right after `class-guard` | `.claude/skills/deploy/deploy-check.sh --env <name> [--prod]` |
+| Rule 2 | `gates/live-contained.sh`, under the deploy lock, before the ship log opens | the same checker, with `--live-sha <sha>` or `--live-cmd "<cmd>"` |
+
+The checker runs both, prints `PASS` (exit 0) or `REFUSED` with the
+reason (exit 1; 2 is a usage error), and works from any directory and
+from a monorepo sub-directory install. Run it immediately before the
+raw command, from the checkout being deployed.
+
+**The trunk.** `DEPLOY_TRUNK` (`origin/main` or `main`), else
+`[git] trunk` in `build/pipeline-config.toml`, else the remote's `HEAD`,
+else `main`. A failed fetch refuses at prod and warns below it. With no
+remote at all, the local trunk branch is the trunk.
+
+**The live commit.** First found wins:
+
+1. `LIVE_SHA=<sha|none>` in the environment (the checker's `--live-sha`);
+2. the environment's hook in `build/environments/<env>/env.sh`: a
+   `live_sha` function (called with the environment name), else
+   `LIVE_SHA_CMD`. It prints the commit (7–40 hex characters; surrounding
+   text is fine) or `none` for an environment never deployed. Typical:
+   the deploy writes the commit into a version file it ships and the hook
+   reads it back (`curl -fsS https://staging.example.com/version.txt`), or
+   it asks the service for the sha it reports;
+3. with no hook: the newest successful, non-dry-run ship-log record for
+   the environment — `deploys/records/` in this checkout, and those
+   committed on the trunk. **This sees only deploys this checkout ran or
+   whose records were committed.** Another session's deploy from another
+   checkout is invisible to it. The hook is what makes rule 2 complete:
+   every environment more than one session deploys to needs one.
+
+At prod, a live commit nobody can name (no hook, no record) is refused;
+below prod it warns.
+
+**Overrides** — loud, and recorded in the ship-log record's `overrides:`
+(its `replaces:` names the commit that was live before):
+
+| Variable | Overrides | For |
+|---|---|---|
+| `ALLOW_BEHIND_TRUNK=1` | rule 1 | nothing routine — never to "just ship my branch" |
+| `ALLOW_DROP_LIVE=1` | rule 2 | a deliberate rollback to an older build, said out loud first |
+| `LIVE_SHA_UNKNOWN_OK=1` | prod with an unknown live commit | the first deploy, or after checking what is live by hand |
+| `RELEASE_PR=<n>` | prod's "exactly the tip" | `/release` only: its release commit contains the trunk tip, and PR #n merges exactly that commit after the deploy (`land.sh fresh` pins it). Recorded as `release-pr-<n>`. |
+
+**An agent never sets an override on its own judgment.** It reports the
+refusal and the fix (`git merge origin/main`; deploy from `origin/main`;
+find out who shipped the live commit) and asks.
 
 ## Stages
 
@@ -294,6 +380,22 @@ export REQUIRES_APPROVAL=false
 
 Keep secrets out of `env.sh` — reference them via env vars set by the CI runner, 1Password, or a similar source. `env.sh` is committed; secrets are not.
 
+**The live hook.** `env.sh` is also where an environment says what is
+live in it, for `gates/live-contained.sh` and the checker (see "Deploys
+never go backwards"):
+
+```sh
+# Prints the commit live in this environment, or `none` if never deployed.
+live_sha() {
+  curl -fsS "https://staging.mysite.com/version.txt" 2>/dev/null || echo none
+}
+# or, as a string:  export LIVE_SHA_CMD='curl -fsS https://staging.mysite.com/version.txt'
+```
+
+The deploy writes that file (`git rev-parse HEAD > dist/version.txt` in
+`20-build.sh`, or in `deploy.sh`). Without a hook the gate falls back to
+the ship log, which cannot see other checkouts' deploys.
+
 ### `deploy.sh`
 
 The actual deploy command(s). Example for Firebase Hosting staging:
@@ -329,6 +431,14 @@ Optional beside it:
 
 Reusable check scripts. The kit ships a few; projects add more as needed.
 
+### `gates/trunk-sync.sh` and `gates/live-contained.sh`
+
+The two rules of "Deploys never go backwards" (above). The driver runs
+both for every intent, and no `--skip-*` flag reaches them; both share
+`gates/deploy-sync-lib.sh` with the standalone checker. Stdout carries
+only machine lines (`trunk_sha=`, `live_sha=`, `override=`); everything
+for a person goes to stderr.
+
 ### `gates/verified-build.sh`
 
 Run by `./build/deploy` right after `tests-required.sh`, before any stage,
@@ -360,7 +470,8 @@ Other useful gates a project might add: `db-backed-up.sh`, `tests-passing.sh`, `
 ## `pipeline-config.toml`
 
 Project-level configuration. **Mostly advisory:** only
-`[environments].list` is read by a script (`environment.sh`). Approval
+`[environments].list` (by `environment.sh`) and `[git] trunk` (by
+`gates/trunk-sync.sh`) are read by a script. Approval
 follows the environment's **class**, not `requires_approval`; the test
 phase picks suites by filename (`test-rules.md`), not `[tests]`; and
 nothing runs `[hooks]` yet (TASK-030). Keep them as documentation, or
@@ -381,6 +492,9 @@ prod_suite = "prod-gate"
 
 [hooks]
 post_deploy = "scripts/notify-slack.sh"   # optional
+
+[git]
+trunk = "main"                     # read by gates/trunk-sync.sh (DEPLOY_TRUNK wins)
 ```
 
 Not all fields are required. The setup skill walks through filling it in.

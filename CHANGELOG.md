@@ -24,6 +24,87 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.62.0 — 2026-10-03
+
+**Deploys never go backwards.** Two rules, now enforced by the pipeline
+and written into every skill that ships (TASK-078):
+
+1. **Sync with the trunk first.** The trunk is fetched right before the
+   deploy. Production ships exactly the trunk tip; dev and staging ship a
+   commit that contains it.
+2. **Never drop what another session shipped.** The commit live in the
+   environment now must be an ancestor of the commit being deployed. If
+   nobody can say what is live, or it is a commit you do not have, the
+   deploy stops until someone finds out.
+
+**Why.** Two sessions, one site. Session A deployed its own merge commit a
+few minutes after session B had merged a newer PR and deployed it. A's tree
+did not contain B's merge. A deploy replaces the whole target, so B's live
+feature disappeared, and nothing failed. Neither rule existed anywhere.
+
+**What ships.**
+
+- `build/gates/trunk-sync.sh` runs in `build/deploy` right after
+  class-guard, for every intent. It reaches `--dry-run`, `--skip-*` and
+  `env.sh`. The trunk is `DEPLOY_TRUNK`, else `[git] trunk` in
+  `build/pipeline-config.toml`, else the remote's HEAD, else `main`. A
+  failed fetch refuses at prod and warns below prod. A refusal lists the
+  missing trunk commits and gives the fix.
+- `build/gates/live-contained.sh` runs under the deploy lock, just before
+  the ship log opens. It looks for the live commit in this order: the
+  `LIVE_SHA` variable, then a `live_sha` function or `LIVE_SHA_CMD` in
+  `build/environments/<env>/env.sh`, then the newest successful ship-log
+  record (this checkout's, plus any committed on the trunk). It refuses
+  in three cases, and each refusal lists the live commits the deploy
+  would drop:
+  - HEAD does not contain the live commit.
+  - The live commit is unknown even after a fetch.
+  - At prod, nothing can say what is live at all.
+- `.claude/skills/deploy/deploy-check.sh` is the same pair of checks for
+  a raw deploy command (`firebase deploy`, a project's own script). It
+  prints `PASS` and exits 0, or prints `REFUSED` and exits 1; usage
+  errors exit 2. It works from any directory and from a monorepo
+  sub-directory install. All three share
+  `build/gates/deploy-sync-lib.sh`.
+- Overrides are loud, and the ship log records each one in a new
+  `overrides:` field:
+  - `ALLOW_BEHIND_TRUNK=1`
+  - `ALLOW_DROP_LIVE=1` (a deliberate rollback)
+  - `LIVE_SHA_UNKNOWN_OK=1` (the first prod deploy)
+  - `RELEASE_PR=<n>`: `/release`'s integration path. The release
+    commit contains the trunk tip, and PR #n merges exactly that commit.
+
+  The record's new `replaces:` field names the commit that was live
+  before the deploy.
+- Rule text: `pipeline-rules.md` "Deploys never go backwards" is the
+  canonical section. `release-rules.md` and `git-flow-rules.md` Rule 5
+  point to it. `/deploy`, `/release` and `/ios-release` now open with a
+  mandatory sync-and-containment check and end by confirming the live
+  commit. `/setup-deploy` asks how to read what is live. `/mission` and
+  `/auto-merge` report a refusal and never override it.
+
+To migrate:
+
+1. `/sync` (or re-run `bin/init`).
+2. **Add a `live_sha` hook to every environment that more than one
+   session deploys to**, and to every prod-class environment. Have the
+   deploy write `git rev-parse HEAD` somewhere it ships, then read it
+   back (see `build/environments/example/env.sh`). Without a hook, the
+   gate can only see deploys from this checkout, plus records committed
+   to the trunk.
+3. The first production release after upgrading, with no hook and no prod
+   ship-log record, is refused. Set `LIVE_SHA_UNKNOWN_OK=1` once, after
+   checking what production runs.
+4. If you call `build/deploy --intent=release` from a branch that is not
+   the trunk tip, that call is refused. `/release` passes `RELEASE_PR`
+   for you. Anything else should deploy from `origin/main`.
+
+Tests: `bin/test-deploy-sync` (new, 57 cases), and 92 cases in
+`bin/test-pipeline` (+10). Both are wired into CI on Linux and stock
+macOS bash 3.2.
+
+---
+
 ## v0.61.0 — 2026-09-29
 
 **Nothing lost, nothing straight in: `/land`.** A skill's doc outputs

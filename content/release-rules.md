@@ -254,12 +254,25 @@ or overrides. Do not deploy without an agreed version.
 
 The deploy command is project-specific. See `CLAUDE.md` for the
 exact command, or use `/release` which orchestrates the full
-sequence. The shape:
+sequence.
+
+**Deploys never go backwards** (canonical: `pipeline-rules.md`,
+"Deploys never go backwards"). Production ships exactly the fetched
+trunk tip — or, on `/release`'s path, the release commit that contains
+it and that its PR merges — and only a tree that contains the commit
+live in production now. The pipeline enforces both
+(`gates/trunk-sync.sh`, `gates/live-contained.sh`); a raw deploy command
+runs `.claude/skills/deploy/deploy-check.sh --env <prod-env> --prod`
+first and does not run unless it prints `PASS`. After the deploy,
+confirm the live commit is the one you shipped.
+
+The shape:
 
 ```sh
 RELEASE_SHA=$(git rev-parse HEAD)            # the synced integration head
 TAG="$(bash .claude/skills/environment/environment.sh version prod --semver vX.Y.Z)"
 git tag -a "$TAG" -m "<release notes>"       # on RELEASE_SHA, local until deploy succeeds
+RELEASE_PR=<N> bash .claude/skills/deploy/deploy-check.sh --env <prod-env> --prod   # must print PASS (no RELEASE_PR when releasing main itself)
 <project's deploy command per CLAUDE.md>     # e.g. npm run deploy, fastlane release, etc.
 # After deploy succeeds — trunk unchanged, merge pinned to what shipped, then the tag:
 bash .claude/skills/land/land.sh fresh --sha "$RELEASE_SHA"

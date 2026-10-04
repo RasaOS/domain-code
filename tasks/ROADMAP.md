@@ -74,6 +74,7 @@ is this soft.
 - TASK-061 — Tag v0.51.0 and v0.52.0, backfill the CHANGELOG, and validate `rasa.json` against the schema in CI
 - TASK-070 — import-env refuses secret defaults
 - TASK-077 — git-guard autosave switches off trunk even when there is nothing to save
+- TASK-078 — Deploys never go backwards: sync with the trunk, never drop what is live
 
 ## Phase P2 — The run record
 

@@ -30,6 +30,37 @@ then run `/release` if they confirm — do not silently translate.
 
 ## Steps
 
+### 0 — Sync and containment check (mandatory, first)
+
+**A deploy replaces the whole target.** It does not add your change to
+what is live; it swaps what is live for your tree. Several sessions
+deploy the same project, so a tree that is behind `main`, or that lacks
+the commit live in the environment right now, silently removes another
+session's shipped work. Two rules (canonical: `.claude/pipeline-rules.md`,
+"Deploys never go backwards"):
+
+1. **Sync with the trunk.** `git fetch origin`, then merge the trunk into
+   the branch you deploy (`git merge origin/main`, or
+   `bash .claude/skills/land/land.sh sync`). Never deploy a tree behind
+   `main`.
+2. **Never drop what is live.** The commit live in the environment must be
+   an ancestor of HEAD. Unknown, or a commit you do not have even after
+   fetching → stop and find out who shipped it.
+
+The pipeline enforces both (`gates/trunk-sync.sh` right after
+class-guard, `gates/live-contained.sh` under the deploy lock). To check
+before spending a build and test on a stale tree — and **always**, if this
+project deploys with a raw command instead of `./build/deploy`:
+
+```bash
+bash .claude/skills/deploy/deploy-check.sh --env <env>
+```
+
+`PASS` → go on. `REFUSED` → do what it says (merge the trunk; find the
+live commit), rebuild and retest, run it again. Never set
+`ALLOW_BEHIND_TRUNK`, `ALLOW_DROP_LIVE` or `LIVE_SHA_UNKNOWN_OK` on your
+own judgment: report the refusal and ask.
+
 ### 1 — Resolve the target environment
 
 Read the registry, which is the source of truth for what exists and what
@@ -90,6 +121,9 @@ What it refuses, and the fix — say it plainly, never reach around it:
 | bad environment name / not in the registry / registry cannot be read | use the registry's name exactly; fix `.claude/environments.json` |
 | `verified-build` — no passing test, the newest run failed, artifacts changed, declared no artifacts | `/build` then `/test` (declare outputs in `20-build.sh`) |
 | another run holds the lock | wait for it; a lock from a dead run on this host is taken over automatically |
+| `trunk-sync` — HEAD is behind the trunk | `git merge origin/main` (then `/build`, `/test`) and deploy that |
+| `live-contained` — HEAD does not contain what is live | another session shipped it: fetch, merge that commit or its branch, rebuild, retest. Never override to "win" |
+| `live-contained` — live commit unknown / not in any branch you have | find out who deployed what (the ship log, the other session) before deploying; add a `live_sha` hook to `build/environments/<env>/env.sh` |
 | `artifacts changed during stage …` | a stage rewrote the tested outputs — fix that stage; nothing was shipped past it |
 
 ```bash
@@ -118,7 +152,13 @@ environment's rollback.
 
 Show the output as it runs. Do not summarize away a stage failure.
 
-On success, report: environment, class, tag, duration. On failure,
+**Verify the live commit.** After a successful deploy, read what is live
+again — the environment's `live_sha` hook, or its version endpoint — and
+confirm it is the commit you deployed (`git rev-parse HEAD`). A different
+sha means another deploy landed on top, or yours did not take: say so.
+
+On success, report: environment, class, tag, duration, and the live
+commit you confirmed. On failure,
 report the stage that failed and the actual error — the pipeline prints
 `✗ Stage failed: <name>` and exits 1.
 
