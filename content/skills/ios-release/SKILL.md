@@ -52,6 +52,20 @@ once the PR has merged and the shipped commit is tagged.
 - `scripts/.release.env` exists with non-placeholder Key ID + Issuer ID
 - `AuthKey_<KEY_ID>.p8` at the canonical path
 - API key auth verified (read-only `xcrun altool --list-providers`)
+- **Sync and containment check** (canonical: `.claude/pipeline-rules.md`,
+  "Deploys never go backwards"). `git fetch origin` first; the tagged
+  commit must be the trunk tip, and must contain the commit of the
+  build that is live now (the newest shipped release tag — another
+  session may have shipped one since you last looked):
+
+  ```sh
+  bash .claude/skills/deploy/deploy-check.sh --env app-store --prod \
+       --live-sha "$(git rev-list -n1 <newest shipped release tag>)"
+  ```
+
+  A build that lacks a shipped fix ships the regression to every user
+  who installs it. `REFUSED` → stop; never override on your own
+  judgment.
 
 If any fail, surface the specific gap and stop. Don't half-run.
 
@@ -109,7 +123,9 @@ chain — never partial-applies.
 
 ### Confirm completion + log
 
-When upload succeeds, post a closing report:
+When upload succeeds, confirm App Store Connect lists the build number
+you uploaded (not an older or another session's newer one), then post a
+closing report:
 
 ```markdown
 ## /ios-release — Shipped <tag>

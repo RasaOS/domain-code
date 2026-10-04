@@ -155,6 +155,13 @@ jobs:
       - name: Build, test, deploy chain
         run: bash bin/test-pipeline
 
+      # Deploys never go backwards: trunk-sync (prod is the fetched trunk
+      # tip, lower envs contain it), live-contained (the live commit is in
+      # HEAD — hook, LIVE_SHA, ship-log fallback) and the standalone
+      # deploy-check, in real installs with a bare remote and two clones.
+      - name: Deploys never go backwards
+        run: bash bin/test-deploy-sync
+
       # /reconcile and the task-discipline hooks in a real install: hook
       # install and repair, the edit and task-start guards, every scan
       # classification, the release/CI/session checks, and history.tsv's
@@ -221,6 +228,9 @@ jobs:
 
       - name: Build, test, deploy chain (bash 3.2)
         run: /bin/bash bin/test-pipeline
+
+      - name: Deploys never go backwards (bash 3.2)
+        run: /bin/bash bin/test-deploy-sync
 
       - name: Task ledger reconcile and guards (bash 3.2)
         run: /bin/bash bin/test-reconcile

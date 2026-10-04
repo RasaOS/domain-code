@@ -34,9 +34,14 @@
 #
 # Usage:
 #   deploys.sh open <env> <class> <intent> <tag> [approval] [build] [test] [digest]
+#                   [overrides] [replaces]
 #                                         -> prints id. build/test/digest name
 #                                         the BLD/TST records and artifact
 #                                         fingerprint shipped (the chain);
+#                                         overrides lists the deploy-sync
+#                                         overrides this run used (comma-
+#                                         separated); replaces is the commit
+#                                         that was live before it. Each is
 #                                         written only when given.
 #   deploys.sh close <id> <status> <duration_s> [error_stage]
 #   deploys.sh index                      regenerate DEPLOYS.md
@@ -97,7 +102,7 @@ valid_id() {
 }
 
 usage() {
-  sed -n '3,42p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '3,52p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 # ---------------------------------------------------------------- open
@@ -105,6 +110,7 @@ usage() {
 cmd_open() {
   local env_name="$1" klass="$2" intent="$3" tag="$4" approval="${5:-}"
   local build="${6:-}" test_run="${7:-}" digest="${8:-}"
+  local overrides="${9:-}" replaces="${10:-}"
   case " $VALID_INTENT " in
     *" $intent "*) ;;
     *) echo "error: intent must be one of: $VALID_INTENT" >&2; return 2 ;;
@@ -124,6 +130,8 @@ cmd_open() {
   rfm_check build "$build"          || return 2
   rfm_check test "$test_run"        || return 2
   rfm_check artifacts_digest "$digest" || return 2
+  rfm_check overrides "$overrides"     || return 2
+  rfm_check replaces "$replaces"       || return 2
   local who host
   who="$(rasa_actor)" || return 2
   host="$(hostname -s 2>/dev/null || true)"; [ -n "$host" ] || host=unknown
@@ -191,6 +199,11 @@ cmd_open() {
     [ -z "$build" ]    || rfm_line build "$build"
     [ -z "$test_run" ] || rfm_line test "$test_run"
     [ -z "$digest" ]   || rfm_line artifacts_digest "$digest"
+    # Deploys never go backwards (pipeline-rules.md): the commit that was live
+    # before this run (gates/live-contained.sh), and any override of that gate
+    # or of gates/trunk-sync.sh. Written only when given, like the chain.
+    [ -z "$replaces" ]  || rfm_line replaces "$replaces"
+    [ -z "$overrides" ] || rfm_line overrides "$overrides"
     echo "---"
     echo ""
     echo "# $id"

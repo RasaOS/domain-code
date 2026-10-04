@@ -13,6 +13,12 @@
 #   release  -> production, tagged.
 # --intent is REQUIRED as of v0.45.0.
 #
+# Every run, both intents, also checks that the deploy does not go backwards
+# (pipeline-rules.md): gates/trunk-sync.sh (HEAD contains the freshly fetched
+# trunk tip; prod is exactly it) and gates/live-contained.sh (HEAD contains
+# the commit live in the environment now). Overrides: ALLOW_BEHIND_TRUNK=1,
+# ALLOW_DROP_LIVE=1, LIVE_SHA_UNKNOWN_OK=1 — loud, and recorded in the ship log.
+#
 # --skip-gates skips the OPTIONAL gates (clean tree, tag match). It has
 # never been able to skip class-guard or the production approval, and
 # before v0.44.0 it did not skip anything at all — it was parsed, printed
@@ -63,7 +69,7 @@ while [[ $# -gt 0 ]]; do
     --skip-gates)   SKIP_GATES=true ;;
     --dry-run)      DRY_RUN=true ;;
     -h|--help)
-      grep '^#' "$0" | head -20
+      grep '^#' "$0" | head -26
       exit 0
       ;;
     *)
@@ -238,6 +244,14 @@ esac
 # variable: it is the one check the deploy/release split exists to make.
 "$BUILD_DIR/gates/class-guard.sh" "$ENV" "$INTENT"
 
+# Deploys never go backwards, rule 1 (pipeline-rules.md): fetch the trunk now
+# and refuse a tree that lacks its tip — production ships exactly the tip.
+# Right after class-guard so a stale checkout is told to merge before it
+# builds or tests anything. Same placement as the gates below: --skip-gates,
+# --dry-run and env.sh all reach it; the one override, ALLOW_BEHIND_TRUNK=1,
+# is loud and lands in the ship log. Stdout is machine lines only.
+SYNC_OUT="$("$BUILD_DIR/gates/trunk-sync.sh" "$ENV")" || exit 1
+
 # Same contract, same placement, for the same reason: a gate suite that runs no
 # tests is not a gate. Measured before this existed — a fresh install shipped a
 # full production release having executed zero tests and exited 0.
@@ -294,6 +308,19 @@ if [[ -n "$VERIFIED_BUILD" ]]; then
   vl_lock builds/.lock "deploy $ENV (holding the build)" || { vl_unlock; exit 1; }
 fi
 trap 'rm -f "${TMP_ARTIFACTS:-}"; vl_unlock' EXIT
+
+# Deploys never go backwards, rule 2: what is live in $ENV right now must be
+# an ancestor of HEAD — a deploy replaces the whole target, so shipping a tree
+# without the live commit drops what another session shipped. Read as late as
+# possible (under the lock, just before the ship log opens and the stages run)
+# so the live commit is the freshest answer there is. ALLOW_DROP_LIVE=1 and,
+# at prod with no way to know what is live, LIVE_SHA_UNKNOWN_OK=1 are the
+# overrides; both are recorded below.
+LIVE_OUT="$("$BUILD_DIR/gates/live-contained.sh" "$ENV")" || exit 1
+SYNC_OUT="$SYNC_OUT
+$LIVE_OUT"
+SYNC_OVERRIDES="$(printf '%s\n' "$SYNC_OUT" | sed -n 's/^override=//p' | tr '\n' ',' | sed 's/,$//')"
+LIVE_BEFORE="$(printf '%s\n' "$SYNC_OUT" | sed -n 's/^live_sha=//p' | head -1 | cut -c1-12)"
 # --skip-tests is REFUSED at prod class rather than honored. Measured before
 # this: with a deliberately failing test wired into the suite, --skip-tests at
 # prod gave exit 0, ran no tests, SHIPPED, and filed a plain ✓ in the deploys
@@ -341,7 +368,7 @@ SHIP_ID=""
 if [[ -f "$DEPLOYS_SH" ]]; then
   SHIP_ID="$(bash "$DEPLOYS_SH" open "$ENV" "$ENV_CLASS" "$INTENT" "$DEPLOY_TAG" \
               "$APPROVAL" "${VERIFIED_BUILD:-}" "${VERIFIED_TEST:-}" \
-              "${VERIFIED_DIGEST:-}" 2>/dev/null || true)"
+              "${VERIFIED_DIGEST:-}" "${SYNC_OVERRIDES:-}" "${LIVE_BEFORE:-}" 2>/dev/null || true)"
 fi
 # A production deploy that could not be recorded is refused, not shipped
 # unrecorded: the ship log is how the NEXT prod release proves its build was
@@ -365,6 +392,8 @@ echo "  Tag:  $DEPLOY_TAG"
 [[ -n "$DEPLOY_TO" ]]  && echo "  Target  → $DEPLOY_TO"
 echo "  User: $DEPLOY_USER"
 [[ -n "$VERIFIED_BUILD" ]] && echo "  Build: $VERIFIED_BUILD (tested by $VERIFIED_TEST)"
+[[ -n "$LIVE_BEFORE" ]] && echo "  Replaces: $LIVE_BEFORE (live before this deploy)"
+[[ -n "$SYNC_OVERRIDES" ]] && echo "  ⚠ Overrides: $SYNC_OVERRIDES (recorded)"
 echo "  Time: $DEPLOY_TIMESTAMP"
 $DRY_RUN  && echo "  Mode: DRY RUN (no execution)"
 $SKIP_TESTS && echo "  Tests: SKIPPED (refused at prod class)"

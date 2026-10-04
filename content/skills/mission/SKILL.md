@@ -251,6 +251,12 @@ turns ran out. Step 6 is where that honesty is enforced.
      ./build/test` (the tree is clean: every task is committed). A
      staging environment refuses an untested build; a failure here is
      reported like a failed deploy.
+   - The branch must contain the latest trunk and whatever is live in
+     `<env>` (`pipeline-rules.md`, "Deploys never go backwards": a deploy
+     replaces the whole target, and other sessions deploy there too). The
+     pipeline's `trunk-sync` and `live-contained` gates enforce it; a
+     refusal is reported as the preview's result, never overridden — the
+     mission does not set `ALLOW_*` / `LIVE_SHA_UNKNOWN_OK`.
    - Run `./build/deploy --env=<env> --intent=deploy`. If it succeeds, capture
      the resulting URL/host and add it to the PR body and the
      autonomy report. If it fails, capture the error and report

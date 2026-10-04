@@ -32,6 +32,25 @@ export REGISTRY=""                    # e.g. myacr.azurecr.io
 # export SCHEME="MyApp"
 # export ASC_KEY_ID="$ASC_KEY_ID"    # from CI / 1Password, not committed
 
+# ─── What is live here (deploys never go backwards) ────────────────────────
+# gates/live-contained.sh refuses a deploy whose HEAD does not contain the
+# commit live in this environment now: a deploy replaces the whole target, so
+# an older tree would remove what another session shipped. Tell it how to read
+# that commit. Print the sha (surrounding text is fine), or `none` when this
+# environment has never been deployed. Called with the environment name as $1.
+# Without a hook the gate falls back to the ship log (deploys/records/), which
+# cannot see deploys made from other checkouts — and a prod-class environment
+# with neither is refused unless LIVE_SHA_UNKNOWN_OK=1.
+# See .claude/pipeline-rules.md, "Deploys never go backwards".
+#
+# live_sha() {
+#   # e.g. the build wrote `git rev-parse HEAD > dist/version.txt` and shipped it
+#   curl -fsS "$DEPLOY_TARGET/version.txt" 2>/dev/null || echo none
+# }
+#
+# …or the same as a string (live_sha wins when both are set):
+# export LIVE_SHA_CMD='curl -fsS https://staging.mysite.com/version.txt'
+
 # ─── Behavior flags ────────────────────────────────────────────────────────
 # Production approval is NOT decided here. It is decided by the environment's
 # `class` in .claude/environments.json — 10-preflight.sh runs the approval

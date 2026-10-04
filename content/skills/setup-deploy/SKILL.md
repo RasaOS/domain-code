@@ -89,6 +89,25 @@ The setup is a conversation, not a form. Walk the user through:
      - S3 / CloudFront: prompt for bucket, distribution ID
      - Custom: free-form command
    - For each env: generate `build/environments/<env>/env.sh` and `deploy.sh`.
+   - **"How can we read which commit is live in `<env>`?"** — required for
+     `prod`-class environments, strongly recommended for any environment
+     more than one session deploys to. A deploy replaces the whole target,
+     so the pipeline refuses a tree that does not contain the live commit
+     (`gates/live-contained.sh`; `pipeline-rules.md`, "Deploys never go
+     backwards"), and only a hook sees deploys made from other checkouts.
+     Wire both halves:
+     - the deploy records the commit: `git rev-parse HEAD > dist/version.txt`
+       in `20-build.sh` (shipped with the site), or a label/annotation the
+       platform keeps (an image label, a release note, a service's reported
+       version);
+     - `env.sh` reads it back — a `live_sha` function, or `LIVE_SHA_CMD`,
+       printing the commit or `none` when nothing was ever deployed:
+       `live_sha() { curl -fsS https://<host>/version.txt 2>/dev/null || echo none; }`.
+     With no answer, write the hook as a commented TODO and tell the user
+     the first production release will need `LIVE_SHA_UNKNOWN_OK=1` and
+     every later one falls back to this checkout's ship log only.
+   - "Which branch is the trunk production ships from?" (default `main`) →
+     `[git] trunk` in `pipeline-config.toml`, read by `gates/trunk-sync.sh`.
 
 7. **Container-specific** (only if project type is `container` or `mixed-with-container`)
    - "What port does the container expose? (default 8080)"

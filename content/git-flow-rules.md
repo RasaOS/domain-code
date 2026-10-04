@@ -235,11 +235,22 @@ release tags, etc.) bypassing `/release`. Even if you know the
 command works. The skill is the gate; bypassing it skips the
 tag, the AUDIT entry, and the release-plan match check.
 
+**Deploys never go backwards** — every deploy, every environment,
+pipeline or not. Sync with the trunk first (production ships exactly
+the fetched trunk tip; a lower environment ships a commit containing
+it), and never drop what another session shipped (the commit live in
+the environment now must be an ancestor of what you deploy; unknown →
+stop and find out). A deploy replaces the whole target, so an older
+tree removes other sessions' live work. The rule, its gates, the
+checker for raw deploy commands and the overrides:
+`pipeline-rules.md`, "Deploys never go backwards" (canonical).
+
 If a project doesn't use `/release` (because it has a more
 specialized release flow), the **outcome guarantees** still
 apply manually:
 
-1. Pre-flight green.
+1. Pre-flight green, including `.claude/skills/deploy/deploy-check.sh
+   --env <prod-env> --prod` printing `PASS` right before the deploy.
 2. Version chosen (heuristic or explicit).
 3. Annotated tag created on the release commit.
 4. Deploy run.
