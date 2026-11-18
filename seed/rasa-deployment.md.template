@@ -10,6 +10,11 @@ picture the moment it loads.
 - **Platform:** [e.g. iOS, web, backend, none]
 - **Goal:** [what this project is trying to achieve]
 
+<!-- Tenant sources of truth (optional): uncomment and set the path to the
+     tenant repo, or set RASA_TENANT. No line and no variable means no tenant.
+tenant: <path to the tenant repo>
+-->
+
 > This file is **project-owned** and never overwritten on Element upgrade. If
 > your tenant declares this (purpose / owner / platform), copy it here.
 

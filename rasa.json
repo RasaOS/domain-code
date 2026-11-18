@@ -145,6 +145,18 @@
         "note": "The Python twin of frontmatter.sh: the same read contract, for the Element's Python readers. bin/check-frontmatter fails if the two ever disagree. Import with python3 -B."
       },
       {
+        "from": "content/ui-rules.md",
+        "to": ".claude/ui-rules.md",
+        "policy": "file-replace",
+        "note": "Universal UI rules: three size classes (compact, medium, expanded) each checked, the five states, interaction feedback, accessibility, the navigation back stack, uniformity with the project's Design source, and when to draw data as charts. The numbers live in the platform conventions files."
+      },
+      {
+        "from": "content/flow-rules.md",
+        "to": ".claude/flow-rules.md",
+        "policy": "file-replace",
+        "note": "The audit, plan, task, develop flow: the artifact each stage leaves, the gates between them, the exemptions, the Data and Design source slots, and the tenant sources of truth (one explicit pointer, a tenant contract wins over the repo)."
+      },
+      {
         "from": "content/craft-rules.md",
         "to": ".claude/craft-rules.md",
         "policy": "file-replace",

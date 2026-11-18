@@ -133,6 +133,25 @@ Conventions:
   enum case. Persist `path` in `@SceneStorage` for state restoration
   so cold-start lands where the user left off.
 
+## Screen sizes
+
+`ui-rules.md` names three size classes; on iOS they map to SwiftUI
+size classes and device families.
+
+| Class | Device | How to detect |
+|---|---|---|
+| compact | iPhone | `horizontalSizeClass == .compact` |
+| medium | iPad, narrow or Split View | `.regular` width in a narrow scene |
+| expanded | iPad full screen | `.regular` width, full scene |
+
+- On iPad, prefer `NavigationSplitView` (sidebar, content, detail)
+  over a stretched phone layout; it collapses to a stack on compact.
+- Layouts read `@Environment(\.horizontalSizeClass)`, not the device
+  model, so Split View and Slide Over behave.
+- Tap targets are at least 44pt.
+- Preview each screen at compact and regular with `#Preview`
+  traits or two simulators, for the per-size evidence.
+
 ## Architecture — ViewModels (separation of concerns)
 
 The kit default separates business logic from SwiftUI views. Views

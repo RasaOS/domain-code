@@ -337,6 +337,25 @@ updates for free.
   fail / warn / pending) belong in `theme.js` as a single source of
   truth, not scattered across components.
 
+## Screen sizes
+
+`ui-rules.md` names three size classes; these are the reference
+widths for the web. Check every screen at each.
+
+| Class | Device | Width |
+|---|---|---|
+| compact | mobile | 375px |
+| medium | tablet | 768px |
+| expanded | desktop | 1280px |
+
+- Build mobile-first: base styles are compact; add Tailwind
+  breakpoints (`md:`, `xl:`) to widen the layout.
+- No horizontal scroll at any of the three widths; text wraps, grids
+  reflow.
+- Touch targets are at least 44px square on compact.
+- Playwright can capture each width with
+  `page.setViewportSize({ width, height })` for the per-size evidence.
+
 ## Hosting and cache discipline
 
 `firebase.json` should set cache-control headers explicitly:
