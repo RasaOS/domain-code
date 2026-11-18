@@ -24,7 +24,7 @@ no narratives.
   1. **`audit.sh scaffold`** renders the deterministic header (title,
      scope counts, library table, section H2s, severity tier
      scaffolding).
-  2. The **`auditor` agent** (at `kit/agents/auditor.md`,
+  2. The **`auditor` agent** (at `.claude/agents/auditor.md`,
      context-isolated, read-only) reads the target and fills in
      the scaffold's `<to-fill>` placeholders.
   3. **`audit.sh validate`** post-checks the agent's output for
@@ -75,7 +75,7 @@ is the user-facing output. **Show it to the user as it is.**
 
 ## The script
 
-Lives at `kit/skills/audit/audit.sh` (or `.claude/skills/audit/audit.sh`
+Lives at `content/skills/audit/audit.sh` (or `.claude/skills/audit/audit.sh`
 in synced projects). Always invoke with `bash` per `script-craft.md`.
 
 ### Interface
@@ -110,9 +110,28 @@ git repo), `2` usage error, `3` refused / validation failed.
 Run `bash <skill-dir>/audit.sh lenses` for the live list. Current set:
 `code` / `docs` / `config` / `architecture` / `security` / `mixed`.
 
+### Request audits
+
+A **request audit** answers one person's ask before a plan is made,
+rather than reading a slice of code. Scaffold it with
+`bash <skill-dir>/audit.sh scaffold-request <slug>`; save it with
+`audit.sh save <slug> <file>` like any audit. The scaffold carries a
+fixed `**Kind.** request` line, which the agent does not edit.
+`validate` reads that line: with it, the sections required are TL;DR,
+Prior art, What exists, Sources of truth, Data, UI/UX and screens,
+Conventions, Traps, Risks, Approaches, Open questions, Bottom line;
+without it the audit validates as a code-slice audit, as before.
+
+Data and UI/UX and screens each scaffold one `<to-fill>` line per
+sub-part, so a half-filled section fails validate. One line,
+`Not touched: <why>`, replaces all of a section's lines. The rules
+behind them are in `flow-rules.md` (Data, sources of truth) and
+`ui-rules.md` (UI). Read the tenant's sources of truth first when
+there is a tenant.
+
 ## The agent
 
-`kit/agents/auditor.md` is a context-isolated subagent with
+`.claude/agents/auditor.md` is a context-isolated subagent with
 Read/Glob/Grep/Bash tools and an opus model default. It receives
 the target + scope info + scaffold and returns the completed
 markdown.

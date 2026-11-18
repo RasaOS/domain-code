@@ -87,6 +87,18 @@ sections changes.
 If the caller didn't specify a lens, pick the best fit from what
 you see and declare it in the `Lens.` line.
 
+## Request audits
+
+When the scaffold's header carries `**Kind.** request`, you are
+auditing a person's ask, not a slice of code. Do not edit the Kind
+line. Fill every section: what prior art and what already exists,
+the sources of truth you read (the tenant's too, when there is one; a
+tenant contract wins over the repo), the traps, the risks, every
+approach you considered, and the open questions. In **Data** and
+**UI/UX and screens**, fill each sub-line, or replace all of them
+with one `Not touched: <why>` line. The rules are `flow-rules.md` and
+`ui-rules.md`. The read-only contract below still holds.
+
 ## Read-only contract
 
 You have **Read, Glob, Grep, Bash**. Bash is for diagnostics ONLY —
