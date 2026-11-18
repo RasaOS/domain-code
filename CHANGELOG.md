@@ -20,7 +20,21 @@ a consumer, and an entry without it is invisible in that report.
 
 ## Unreleased
 
-(no entries yet)
+**A screen is audited, planned and built for every size.** Three skills sit beside the request flow and add no second
+audit or plan: each fills the UI/UX section the request audit and plan already carry.
+
+New:
+- `/design-audit` (`design-audit.sh discover|scaffold|validate`): lists the project's style sources and chart libraries
+  by name and path, then audits each screen per size class, states, back stack, accessibility and visuals. Shares the
+  UI fragment `audit/ui-audit-section.md` with the request audit.
+- `/design-plan` (`design-plan.sh scaffold|validate`): per screen and size class, layout, back target, states, feedback,
+  visuals and tokens reused; `validate` fails on a missing size class or back target. Shares `plan/ui-section.md`.
+- `/design-build` (`design-build.sh check|shoot`): `check` needs evidence per screen and size class; `shoot` writes
+  screenshots to a git-ignored folder, refuses production and non-local URLs, and is skipped when there is no browser.
+- `bin/test-design`; `flow-rules.md` links the design stages.
+
+Known limit: where the design slots meet the task template they are enforced at `/develop` only, until
+RasaOS/module-tasks#2 ships them in the task templates.
 
 ---
 

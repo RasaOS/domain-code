@@ -243,6 +243,9 @@ surface?" without touching the working tree.
 | `/prototype` | Rapid R&D mode in a `proto/<slug>` branch |
 | `/spec-phase` | Expand every stub in a phase to a spec; propose order |
 | `/develop` | Build a task held to the flow: read the sources of truth, gate it (audit and plan links, no unfilled template, UI and Data blocks, no locked contract), start it, then `/open-pr` and `/reconcile` |
+| `/design-audit` | Find the project's style sources (Design source) and audit the screens per size class, states, back stack, accessibility and visuals; fills the request audit's UI section |
+| `/design-plan` | Plan each screen per size class: layout, back target, states, feedback, visuals, tokens reused; validates screen by size class |
+| `/design-build` | Build the planned screens in the product's own code; `check` evidence per size class, `shoot` screenshots (never production, never committed) |
 | `/task` | Per-task action skill (file, move, expand) |
 | `/instruct` | Convert human instructions into an atomic AI instruction recipe |
 | `/brainstorm` | Resume or start a tradeoff session at `.claude/tradeoffs/<topic>.md` |
