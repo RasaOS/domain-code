@@ -15,7 +15,7 @@ _rfm="$(cd "$_here/../../lib/domain-code" 2>/dev/null && pwd)/frontmatter.sh"
 . "$_rfm"
 rfm_require 1 || exit 70
 
-TEMPLATE="$_here/plan-template.md"
+TEMPLATE="$_here/plan-template.md"  # with data-section.md and ui-section.md
 AUDIT_SH="$_here/../audit/audit.sh"
 
 # Sections of a request plan, in order. Keep in step with plan-template.md.
@@ -92,11 +92,19 @@ cmd_scaffold() {
   [ -n "$audit" ] || { echo "error: scaffold needs --audit <path>" >&2; return 2; }
   check_audit "$audit" || return 3
   [ -f "$TEMPLATE" ] || { echo "error: plan-template.md is missing" >&2; return 70; }
-  # Bash-only substitution: a path may hold characters sed would read.
-  s="$(cat "$TEMPLATE")"
-  s="${s//\{\{SLUG\}\}/$slug}"
-  s="${s//\{\{AUDIT\}\}/$audit}"
-  printf '%s\n' "$s"
+  # Line by line: a path may hold characters sed or ${//} would read. The Data
+  # and UI sections are shared fragments (develop pastes the same files into a
+  # task body), so they have one source.
+  local line
+  while IFS= read -r line; do
+    case "$line" in
+      "{{DATA_SECTION}}") cat "$_here/data-section.md" ;;
+      "{{UI_SECTION}}") cat "$_here/ui-section.md" ;;
+      *)
+        line="${line//\{\{SLUG\}\}/$slug}"
+        printf '%s\n' "${line//\{\{AUDIT\}\}/$audit}" ;;
+    esac
+  done < "$TEMPLATE"
 }
 
 cmd_validate() {

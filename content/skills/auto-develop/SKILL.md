@@ -5,11 +5,14 @@ description: Autonomously implement a task spec — read the spec, write the cod
 
 # /auto-develop — autonomous implementation
 
-Takes a task spec and builds it. The Element has no non-autonomous
-`/develop` skill — implementation normally happens in open
-conversation with the user. `/auto-develop` is the hands-off path:
-given a spec, it implements the code to completion and hands back a
-draft PR on the task's branch plus a report of every call it made.
+Takes a task spec and builds it. Implementation with the person in
+the conversation is `/develop`, which holds the task to its audit,
+plan and templates. `/auto-develop` is the hands-off path: given a
+spec, it implements the code to completion and hands back a draft PR
+on the task's branch plus a report of every call it made. It reuses
+only `develop.sh sources` and `develop.sh check-unfilled`; the
+audit/plan link gate is `/develop`'s, so hotfix, bug and mission
+flows that carry no plan are unchanged.
 
 This is a real expansion of what the kit's skills do. It earns its
 keep only when the spec is genuinely complete — `/auto-develop` is
@@ -23,6 +26,12 @@ excuse for sloppy work — `craft-rules.md` applies in full.
 - **Autonomous per `autonomy-rules.md`.** Read that file — the
   contract, the hard-gate list, the report template. This
   SKILL.md states only what's specific to `auto-develop`.
+- **Read the sources, check the spec is filled.** Run
+  `bash .claude/skills/develop/develop.sh sources` (tenant sources
+  of truth win over the repo) and
+  `bash .claude/skills/develop/develop.sh check-unfilled <task file>`;
+  an unfilled `<...>` is a flagged assumption, and a hard blocker when
+  the build depends on it.
 - **The spec is the contract.** `/auto-develop` implements a task
   spec — a file in `tasks/active/` or `tasks/backlog/`, or the
   task named by the user. If no spec exists, stop: this skill

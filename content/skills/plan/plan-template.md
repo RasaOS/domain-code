@@ -19,27 +19,9 @@ One bullet per approach, trap, open question and UI finding in the audit. Each e
 
 <to-fill — what changes, where, and why this way.>
 
-## Data
+{{DATA_SECTION}}
 
-Fill each line, or replace all of them with one line: `Not touched: <why>`.
-
-- **Entities and fields:** <to-fill — read or changed>
-- **Schema owner:** <to-fill — per CLAUDE.md and code-task-rules.md §8>
-- **Contract stamp:** <to-fill — the stamp, and whether it is locked>
-- **Migration file:** <to-fill — name per migration-rules.md>
-- **/schema-check:** <to-fill — runs or not, and why>
-
-## UI/UX and screens
-
-Fill each line, or replace all of them with one line: `Not touched: <why>`. Rules: ui-rules.md.
-
-- **Size classes:** <to-fill — compact, medium, expanded: the layout and its evidence at each>
-- **States:** <to-fill — loading, empty, error, populated, no permission>
-- **Back stack:** <to-fill — addresses, back with state, deep link, replace after create/delete>
-- **Accessibility:** <to-fill — contrast, focus order, labels, colour never the only signal>
-- **Interaction feedback:** <to-fill — pending, success, failure; destructive confirms>
-- **Visuals:** <to-fill — charts, tiles or tables where they read better>
-- **Design source:** <to-fill — the files the project uses as its style source, or `none declared`>
+{{UI_SECTION}}
 
 ## Sources of truth read
 
