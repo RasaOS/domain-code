@@ -242,6 +242,7 @@ surface?" without touching the working tree.
 | `/mvp` | Define minimum shippable+marketable for a new app/feature |
 | `/prototype` | Rapid R&D mode in a `proto/<slug>` branch |
 | `/spec-phase` | Expand every stub in a phase to a spec; propose order |
+| `/develop` | Build a task held to the flow: read the sources of truth, gate it (audit and plan links, no unfilled template, UI and Data blocks, no locked contract), start it, then `/open-pr` and `/reconcile` |
 | `/task` | Per-task action skill (file, move, expand) |
 | `/instruct` | Convert human instructions into an atomic AI instruction recipe |
 | `/brainstorm` | Resume or start a tradeoff session at `.claude/tradeoffs/<topic>.md` |

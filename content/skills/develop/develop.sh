@@ -92,12 +92,15 @@ cmd_sources() {
 
 # --- check-unfilled ---------------------------------------------------------
 
-# file:line for each placeholder. Skips frontmatter, fences, ## Blocker and
-# ## Notes; strips inline code first so a task can quote a path or a type.
+# "line N: text" for each placeholder, N counted in the whole file. The
+# frontmatter is the library's to read (rfm_body); fences, ## Blocker and
+# ## Notes are skipped, and inline code is stripped first so a task can quote
+# a path or a type.
 unfilled_lines() {
-  awk '
-    NR == 1 && $0 == "---" { fm = 1; next }
-    fm { if ($0 == "---") fm = 0; next }
+  local total body_lines
+  total="$(awk 'END { print NR }' "$1")"
+  body_lines="$(rfm_body "$1" | awk 'END { print NR }')"
+  rfm_body "$1" | OFF="$((total - body_lines))" awk '
     /^```/ || /^~~~/ { fence = !fence; next }
     fence { next }
     /^## / { skip = ($0 == "## Blocker" || $0 == "## Notes"); next }
@@ -105,9 +108,9 @@ unfilled_lines() {
     {
       l = $0
       gsub(/`[^`]*`/, "", l)
-      if (l ~ /<[^<>[:space:]][^<>]*>/) print "line " NR ": " $0
+      if (l ~ /<[^<>[:space:]][^<>]*>/) print "line " (NR + ENVIRON["OFF"]) ": " $0
     }
-  ' "$1"
+  '
 }
 
 cmd_check_unfilled() {
@@ -136,7 +139,7 @@ find_task() {
 gate_reasons() {
   local root="$1" f="$2" prio plan audit ui body stamp name line lab p
 
-  if grep -q '^STATUS: STUB' "$f"; then
+  if rfm_body "$f" | grep -q 'STATUS: STUB'; then
     echo "stub depth: expand it first (expanding-a-task.md)"
   fi
 
