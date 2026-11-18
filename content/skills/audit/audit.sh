@@ -436,15 +436,8 @@ EOF
         echo "- **Migration file:** <to-fill — name per migration-rules.md>"
         echo "- **/schema-check:** <to-fill — runs or not, and why>" ;;
       "UI/UX and screens")
-        echo "Fill each line, or replace all of them with one line: \`Not touched: <why>\`. Rules: ui-rules.md."
-        echo ""
-        echo "- **Size classes:** <to-fill — compact, medium, expanded: the layout at each>"
-        echo "- **States:** <to-fill — loading, empty, error, populated, no permission>"
-        echo "- **Back stack:** <to-fill — addresses, back with state, deep link, replace after create/delete>"
-        echo "- **Accessibility:** <to-fill — contrast, focus order, labels, colour never the only signal>"
-        echo "- **Interaction feedback:** <to-fill — pending, success, failure; destructive confirms>"
-        echo "- **Visuals:** <to-fill — charts, tiles or tables where they read better>"
-        echo "- **Design source:** <to-fill — the files the project uses as its style source, or \`none declared\`>" ;;
+        # One source for the UI block: design-audit shares this fragment.
+        cat "$(dirname "${BASH_SOURCE[0]}")/ui-audit-section.md" ;;
       *)
         echo "<to-fill>" ;;
     esac
