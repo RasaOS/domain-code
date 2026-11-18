@@ -153,6 +153,11 @@ refuse_production() {
 # Print the browser command's name or path, or nothing.
 find_browser() {
   local c
+  # DESIGN_BROWSER overrides the search: a command to use, or "none".
+  if [ -n "${DESIGN_BROWSER:-}" ]; then
+    [ "$DESIGN_BROWSER" = "none" ] || printf '%s\n' "$DESIGN_BROWSER"
+    return 0
+  fi
   for c in google-chrome chromium chromium-browser chrome; do
     command -v "$c" 2>/dev/null && return 0
   done

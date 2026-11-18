@@ -31,6 +31,8 @@ design-build.sh shoot <url-or-file> --screen <name> [--slug <slug>] [--env <env>
   git-ignored, and tells you the line to add. With no browser it prints
   `screenshots: skipped (no browser)` and exits 0. A screenshot that
   times out is reported, never fatal.
+  `DESIGN_BROWSER=<command>` picks the browser; `DESIGN_BROWSER=none`
+  forces the skipped path.
 
 ## Process
 
