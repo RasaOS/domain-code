@@ -159,6 +159,14 @@ out="$(DESIGN_BROWSER=none $DB shoot https://qa.example.com/ --screen home --slu
 expect "shoot: an environment with no url is refused" 3 "$rc" "has no url" "$out"
 out="$(DESIGN_BROWSER=none $DB shoot https://www.example.com/ --screen home --slug t --env prod 2>&1)"; rc=$?
 expect "shoot: the production environment is refused even on its own host" 3 "$rc" "production environment" "$out"
+out="$(DESIGN_BROWSER=none $DB shoot 'http://evil.com#@localhost/' --screen home --slug t 2>&1)"; rc=$?
+expect "shoot: evil.com#@localhost is evil.com, refused" 3 "$rc" "not local" "$out"
+out="$(DESIGN_BROWSER=none $DB shoot 'http://evil.com\@localhost/' --screen home --slug t 2>&1)"; rc=$?
+expect "shoot: evil.com backslash @localhost is evil.com, refused" 3 "$rc" "not local" "$out"
+out="$(DESIGN_BROWSER=none $DB shoot 'http://evil.com?@localhost/' --screen home --slug t 2>&1)"; rc=$?
+expect "shoot: evil.com?@localhost is evil.com, refused" 3 "$rc" "not local" "$out"
+out="$(DESIGN_BROWSER=none $DB shoot 'http://user@localhost:5173/' --screen home --slug t 2>&1)"; rc=$?
+expect "shoot: user@localhost:5173 is local" 0 "$rc" "skipped (no browser)" "$out"
 out="$(DESIGN_BROWSER=none $DB shoot 'http://[::1]:8080/' --screen home --slug t 2>&1)"; rc=$?
 expect "shoot: [::1] with a port is local" 0 "$rc" "skipped (no browser)" "$out"
 
@@ -189,6 +197,8 @@ tid="$(.claude/bin/task new --type change --phase P1 "Design task" 2>&1 | grep -
 DV="bash $S/develop/develop.sh"
 out="$($DV link "$tid" --design dp.md 2>&1)"; rc=$?
 expect "link --design: refuses a design plan that does not validate" 3 "$rc" "does not validate" "$out"
+out="$($DV link "$tid" --design dp-ok.md --ui true 2>&1)"; rc=$?
+expect "link --design: --ui alone with it is a usage error" 2 "$rc" "goes with" "$out"
 out="$($DV link "$tid" --design dp-ok.md 2>&1)"; rc=$?
 expect "link --design: writes x-design" 0 "$rc" "x-design dp-ok.md" "$out"
 tf="$(ls tasks/backlog/"$tid"-*.md | head -1)"

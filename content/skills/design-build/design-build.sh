@@ -168,7 +168,10 @@ cmd_check() {
 # The host of a URL: no scheme, userinfo, port, path or brackets, lower case.
 url_host() {
   local h="${1#*://}"
-  h="${h%%/*}"; h="${h%%\?*}"; h="${h##*@}"
+  # The authority ends at the first / ? # or backslash (a browser reads
+  # "evil.com#@localhost" as evil.com); only then is userinfo dropped.
+  h="$(printf '%s' "$h" | sed 's/[/?#\\].*$//')"
+  h="${h##*@}"
   case "$h" in
     "["*) h="${h#\[}"; h="${h%%\]*}" ;;
     *) h="${h%%:*}" ;;

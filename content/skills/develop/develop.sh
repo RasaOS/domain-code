@@ -253,6 +253,9 @@ cmd_link() {
       *) echo "error: unknown flag: $1" >&2; return 2 ;;
     esac
   done
+  if [ -z "$audit$plan" ] && [ -n "$ui" ]; then
+    echo "error: --ui goes with --audit and --plan" >&2; return 2
+  fi
   if [ -n "$audit" ] || [ -n "$plan" ] || [ -z "$design" ]; then
     [ -n "$audit" ] && [ -n "$plan" ] || { echo "error: link needs --audit <path> and --plan <path> (or only --design <path>)" >&2; return 2; }
   fi
