@@ -40,11 +40,13 @@ New:
   `Not touched: <why>` line.
 - `ui-rules.md` and `flow-rules.md`; size-class sections in `web-conventions.md` and `ios-conventions.md`.
 - A commented `tenant:` line in the `rasa-deployment.md` seed; `RASA_TENANT` also works. No pointer means `tenant: none`.
-- `/land`: `docs/plans/` and `docs/design/` are docs class (they land by themselves).
+- `/land`: `docs/plans/` is docs class (plans land by themselves). `docs/design/` is not: it is a project's style
+  source and goes by PR.
 - `bin/test-develop`; ADR 0001.
 
 Known limit: the UI and Data blocks are enforced at `/develop` only. The task templates are vendored from
-RasaOS/module-tasks and are not edited here; the blocks move into them when that module ships them. A task without
+RasaOS/module-tasks and are not edited here; the blocks move into them when that module ships them
+(RasaOS/module-tasks#2, filed 2026-11-18). A task without
 `x-plan` (hotfix, bug, mission) has no audit/plan link to check, and `/auto-develop` reuses only `sources` and
 `check-unfilled`.
 

@@ -62,7 +62,7 @@ DOCS_DIRS = (
     "docs/audits/", "docs/decisions/", "docs/postmortems/", "docs/retros/",
     "docs/notes/", "docs/handoff/", "docs/blast-radius/", "docs/scope/",
     "docs/exports/", "docs/regrets/", "docs/mvp/", "docs/wrangle/",
-    "docs/refinement/", "docs/plans/", "docs/design/",
+    "docs/refinement/", "docs/plans/",
 )
 DOCS_FILES = ("docs/glossary.md", "tasks/history.tsv")
 # Loaded into every session as instructions, wherever they sit.

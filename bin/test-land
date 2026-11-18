@@ -224,10 +224,10 @@ for pth in tasks/.claude/skills/x/SKILL.md docs/audits/.github/workflows/x.md do
 done
 out="$(bash "$L" classify docs/refinement/2026-09-28.md 2>&1)"; rc=$?
 expect "docs: docs/refinement (the project-manager mode's log)" 0 "$rc" "^docs" "$out"
-for pth in docs/plans/x.md docs/design/x/y.md; do
-  out="$(bash "$L" classify "$pth" 2>&1)"; rc=$?
-  expect "docs: $pth (plans and design records)" 0 "$rc" "^docs" "$out"
-done
+out="$(bash "$L" classify docs/plans/x.md 2>&1)"; rc=$?
+expect "docs: docs/plans (request plans)" 0 "$rc" "^docs" "$out"
+out="$(bash "$L" classify docs/design/x/y.md 2>&1)"; rc=$?
+expect "code: docs/design is the project's style source, reviewed" 3 "$rc" "^code" "$out"
 ln -s ../../README.md docs/audits/link.md
 out="$(bash "$L" classify docs/audits/link.md 2>&1)"; rc=$?
 expect "a symlink is code" 3 "$rc" "symlink" "$out"
