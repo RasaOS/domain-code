@@ -17,8 +17,11 @@ between them: text wraps, containers grow, nothing is cut off or
 scrolls sideways. A control that works with a finger also works with a
 pointer and a keyboard.
 
-**Evidence per size class:** a screenshot, or a described layout when
-no screenshot can be taken. A screen is not done with one class shown.
+**Evidence is per size class:** a screenshot, or a described layout
+when no screenshot can be taken. A screen is not done with one class
+shown. The five states below are **described**, not screenshotted.
+Screenshots are of seed or fixture data only: never of production,
+and never committed; attach them to the PR.
 
 ## Targets
 
@@ -80,17 +83,24 @@ not a licence to invent one.
 
 ## Visualise data
 
-Where a picture reads better than a number, draw it:
+Where a picture reads better than a number, draw it. Which chart is
+**guidance**:
 
 - **Proportion** of a few parts: pie or donut.
 - **Comparison**: bar.
 - **Trend** over time: line.
 - **Status or category**: colour plus a label.
 - **Headline numbers**: stat tiles.
-- **Exact values or many columns**: a table.
 
-Take the palette from the Design source, keep it colour-blind safe,
-and always give a legend and labels.
+The rules, which a reviewer can check:
+
+- **Label and legend, always.**
+- **Colour plus a second signal** (a label, glyph or position); colour
+  is never the only encoding (`output-rules.md`, "Color is a second
+  channel").
+- **Palette from the Design source**, colour-blind safe.
+- **A table when exact values matter**, or when there are many
+  columns.
 
 ## What the plan and the task carry
 
