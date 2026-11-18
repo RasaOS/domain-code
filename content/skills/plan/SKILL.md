@@ -153,6 +153,28 @@ objective):
    surface it.
 5. **Hand off** to a small `CLAUDE.md` edit.
 
+### Pattern F — Plan a request (after its audit)
+
+A person's ask has been audited (`/audit`, request kind) and now needs
+a plan before any task is filed or code written. This pattern writes
+the plan document only; it still writes no code.
+
+1. **Scaffold** from the saved audit (it must exist and validate):
+   `bash .claude/skills/plan/plan.sh scaffold <slug> --audit docs/audits/<file>.md > <draft>`
+2. **Fill every section with the person**, in the person's words:
+   goal; every audit item carried with a disposition (`done here`,
+   `dropped because <why>`, `later as <task>`); approach; Data; UI/UX
+   and screens (`ui-rules.md`); sources of truth read; the tasks to
+   file, each naming its `x-ui` value; the checks that prove it; risks.
+   A slot that does not apply is one line: `Not touched: <why>`.
+3. **Validate**: `bash .claude/skills/plan/plan.sh validate <draft>`.
+   Exit 3 lists what is still open. Settle it before any hand-off.
+4. **Save** once the person approves:
+   `bash .claude/skills/plan/plan.sh save <slug> <draft>` writes
+   `docs/plans/<date>-<slug>.md`, which lands as docs ("After
+   approval" below). The tasks it lists are filed with `/task`, with
+   `x-audit` and `x-plan` pointing at the audit and this plan.
+
 ## Before any hand-off — validate the plan
 
 Every pattern above ends in a hand-off. Before it, once the user
