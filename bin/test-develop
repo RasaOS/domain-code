@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+# bin/test-develop — regression tests for /develop (develop.sh) and the
+# request-kind audit and plan it gates on (audit.sh, plan.sh).
+# Repo tooling: lives in bin/, is not registered in rasa.json, and is never
+# installed into a consumer.
+#
+# Installs the Element into a fresh project with bin/init, files real tasks
+# with the installed bin/task, and asserts what the gate does:
+#
+#   gate      refuses a fresh task (placeholders), passes once filled; start
+#             moves backlog -> active with a history.tsv row; check-tasks stays
+#             clean; priority: now is exempt from the audit/plan link, a
+#             missing plan is refused otherwise; x-ui: true needs its block;
+#             a locked contract stops the task
+#   plan      plan.sh validate fails on a fresh scaffold and passes when
+#             filled; refuses a missing audit and an item with no disposition
+#   audit     a request audit fails validate until filled; a code-slice audit
+#             still validates unchanged
+#   sources   tenant: none, then a tenant named by RASA_TENANT
+#
+# Usage: bin/test-develop
+#        TEST_DEVELOP_SH=<file> bin/test-develop   gate with another develop.sh
+#
+# Portable on purpose: bash 3.2, POSIX tools. Exit 0 only if every case passes.
+
+set -u
+here="$(cd "$(dirname "$0")" && pwd -P)"
+ELEMENT="$(cd "$here/.." && pwd -P)"
+
+T="$(mktemp -d "${TMPDIR:-/tmp}/test-develop.XXXXXX")" || exit 2
+T="$(cd "$T" && pwd -P)"
+trap 'rm -rf "$T"' EXIT
+export GIT_CONFIG_GLOBAL=/dev/null HOME="$T/home"
+mkdir -p "$HOME"
+unset RASA_ROOT RASA_TENANT CLAUDECODE
+export RASA_ACTOR=tester
+
+pass=0; fail=0
+ok()  { pass=$((pass + 1)); printf '  ok    %s\n' "$1"; }
+bad() { fail=$((fail + 1)); printf '  FAIL  %s\n        %s\n' "$1" "$2"; }
+# expect <name> <want-rc> <got-rc> [<pattern> <output>]
+expect() {
+  if [ "$3" != "$2" ]; then bad "$1" "want rc=$2, got rc=$3${5:+ — $(printf '%s' "$5" | tr '\n' '|' | cut -c1-400)}"; return; fi
+  if [ -n "${4:-}" ] && ! printf '%s\n' "${5:-}" | grep -q -- "$4"; then
+    bad "$1" "output lacks /$4/: $(printf '%s' "${5:-}" | tr '\n' '|' | cut -c1-400)"; return
+  fi
+  ok "$1"
+}
+
+P="$T/proj"
+mkdir -p "$P"; cd "$P" || exit 2
+git init -q .
+bash "$ELEMENT/bin/init" . >"$T/init.log" 2>&1 || { echo "test-develop: bin/init failed"; tail -5 "$T/init.log"; exit 2; }
+[ -n "${TEST_DEVELOP_SH:-}" ] && cp "$TEST_DEVELOP_SH" .claude/skills/develop/develop.sh
+S=.claude/skills
+D="bash $S/develop/develop.sh"
+printf '\n## Phase P1 — P1\n\nScope.\n' >> tasks/ROADMAP.md
+
+# newtask <title> [extra task args]: file a backlog task, print its id.
+newtask() {
+  local t="$1"; shift
+  .claude/bin/task new --type change --phase P1 "$@" "$t" 2>&1 | grep -o 'TASK-[0-9]*' | head -1
+}
+tfile() { ls tasks/backlog/"$1"-*.md tasks/active/"$1"-*.md 2>/dev/null | head -1; }
+# fill every <...> placeholder with text
+fillall() { perl -pi -e 's/<[^<>\s][^<>]*>/filled/g' "$1"; }
+# addkey <file> <key: value>: a frontmatter key just before "updated:"
+addkey() { perl -0pi -e "s#\nupdated:#\n$2\nupdated:#" "$1"; }
+# paste <file> <fragment>: the fragment before the last "## Blocker"
+paste() {
+  python3 - "$1" "$2" <<'PY'
+import sys
+p, frag = sys.argv[1], open(sys.argv[2]).read()
+s = open(p).read(); k = s.rindex('## Blocker')
+open(p, 'w').write(s[:k] + frag.rstrip('\n') + '\n\n' + s[k:])
+PY
+}
+
+echo "gate — a fresh task is refused, a filled one starts"
+A="$(newtask 'Plain change')"
+out="$($D gate "$A" 2>&1)"; rc=$?
+expect "gate refuses a fresh task (placeholders)" 3 "$rc" "unfilled" "$out"
+fillall "$(tfile "$A")"
+out="$($D gate "$A" 2>&1)"; rc=$?
+expect "gate passes once filled" 0 "$rc" "^ok" "$out"
+out="$($D check-unfilled "$(tfile "$A")" 2>&1)"; rc=$?
+expect "check-unfilled passes a filled task" 0 "$rc" "^ok" "$out"
+out="$($D start "$A" 2>&1)"; rc=$?
+expect "start moves the task" 0 "$rc" "backlog → active" "$out"
+ls tasks/active/"$A"-*.md >/dev/null 2>&1 \
+  && ok "the task file is in active/" || bad "the task file is in active/" "not found"
+tail -1 tasks/history.tsv | grep -q "$A.*backlog.*active" \
+  && ok "history.tsv has the start row" || bad "history.tsv has the start row" "$(tail -1 tasks/history.tsv)"
+out="$(.claude/bin/check-tasks 2>&1)"; rc=$?
+expect "check-tasks reports no errors" 0 "$rc" "" "$out"
+
+echo "gate — fences, inline code and Notes are not placeholders"
+B="$(newtask 'Quotes code')"
+fillall "$(tfile "$B")"
+python3 - "$(tfile "$B")" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read(); k = s.rindex('## Blocker')
+s = s[:k] + 'Uses `Array<string>` and\n\n```\nlet x: Map<K, V>\n```\n\n' + s[k:] + '\nA note about <anything>.\n'
+open(p, 'w').write(s)
+PY
+out="$($D gate "$B" 2>&1)"; rc=$?
+expect "inline code, fences and Notes are ignored" 0 "$rc" "^ok" "$out"
+
+echo "gate — the audit and plan link"
+mkdir -p docs/audits docs/plans
+bash $S/audit/audit.sh scaffold-request demo > "$T/audit.md"
+out="$(bash $S/audit/audit.sh validate "$T/audit.md" 2>&1)"; rc=$?
+expect "a fresh request audit fails validate" 3 "$rc" "to-fill" "$out"
+perl -pe 's/<to-fill[^>]*>/filled/g' "$T/audit.md" > docs/audits/a.md
+out="$(bash $S/audit/audit.sh validate docs/audits/a.md 2>&1)"; rc=$?
+expect "a filled request audit passes validate" 0 "$rc" "^ok" "$out"
+bash $S/audit/audit.sh scaffold some-module > "$T/slice.md" 2>/dev/null
+perl -0pe 's/<to-fill.*?>/filled/gs' "$T/slice.md" > "$T/slice-filled.md"
+out="$(bash $S/audit/audit.sh validate "$T/slice-filled.md" 2>&1)"; rc=$?
+expect "a code-slice audit still validates unchanged" 0 "$rc" "^ok" "$out"
+
+out="$(bash $S/plan/plan.sh scaffold demo --audit nope.md 2>&1)"; rc=$?
+expect "plan scaffold refuses a missing audit" 3 "$rc" "not found" "$out"
+bash $S/plan/plan.sh scaffold demo --audit docs/audits/a.md > "$T/plan.md"
+out="$(bash $S/plan/plan.sh validate "$T/plan.md" 2>&1)"; rc=$?
+expect "a fresh plan fails validate" 3 "$rc" "to-fill" "$out"
+perl -pe 's/<to-fill[^>]*>/filled/g' "$T/plan.md" > "$T/plan-nodisp.md"
+out="$(bash $S/plan/plan.sh validate "$T/plan-nodisp.md" 2>&1)"; rc=$?
+expect "a carried item with no disposition fails" 3 "$rc" "disposition" "$out"
+perl -0pe 's/<to-fill[^>]*>/filled/g; s/(## Carried from the audit.*?\n- )filled/$1an item — done here/s; s/(## Tasks to file.*?\n- )filled/$1a task — x-ui: false/s' "$T/plan.md" > docs/plans/p.md
+out="$(bash $S/plan/plan.sh validate docs/plans/p.md 2>&1)"; rc=$?
+expect "a filled plan passes validate" 0 "$rc" "^ok" "$out"
+
+C="$(newtask 'Planned change')"
+fillall "$(tfile "$C")"
+addkey "$(tfile "$C")" "x-audit: docs/audits/a.md"
+addkey "$(tfile "$C")" "x-plan: docs/plans/missing.md"
+out="$($D gate "$C" 2>&1)"; rc=$?
+expect "a missing x-plan file is refused" 3 "$rc" "x-plan" "$out"
+perl -pi -e 's/missing\.md/p.md/' "$(tfile "$C")"
+out="$($D gate "$C" 2>&1)"; rc=$?
+expect "a plan with no Data section is refused" 3 "$rc" "Data" "$out"
+paste "$(tfile "$C")" "$S/plan/data-section.md"
+out="$($D gate "$C" 2>&1)"; rc=$?
+expect "an unfilled Data block is refused" 3 "$rc" "unfilled" "$out"
+printf '## Data\n\nNot touched: no data here.\n' > "$T/data-nt.md"
+python3 - "$(tfile "$C")" "$T/data-nt.md" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+a = s.index('## Data'); b = s.index('## Blocker', a)
+open(p, 'w').write(s[:a] + open(sys.argv[2]).read() + '\n' + s[b:])
+PY
+out="$($D gate "$C" 2>&1)"; rc=$?
+expect "a linked, filled task passes" 0 "$rc" "^ok" "$out"
+
+E="$(newtask 'Hotfix' --priority now)"
+fillall "$(tfile "$E")"
+addkey "$(tfile "$E")" "x-plan: docs/plans/missing.md"
+out="$($D gate "$E" 2>&1)"; rc=$?
+expect "priority: now is exempt from the plan link" 0 "$rc" "^ok" "$out"
+H="$(newtask 'No plan at all')"
+fillall "$(tfile "$H")"
+out="$($D gate "$H" 2>&1)"; rc=$?
+expect "a task with no x-plan has no link to check" 0 "$rc" "^ok" "$out"
+
+echo "gate — UI block"
+U="$(newtask 'A screen')"
+fillall "$(tfile "$U")"
+addkey "$(tfile "$U")" "x-ui: true"
+out="$($D gate "$U" 2>&1)"; rc=$?
+expect "x-ui: true without its block is refused" 3 "$rc" "UI/UX" "$out"
+paste "$(tfile "$U")" "$S/plan/ui-section.md"
+out="$($D gate "$U" 2>&1)"; rc=$?
+expect "an unfilled UI block is refused" 3 "$rc" "unfilled" "$out"
+fillall "$(tfile "$U")"
+out="$($D gate "$U" 2>&1)"; rc=$?
+expect "a filled UI block passes" 0 "$rc" "^ok" "$out"
+
+echo "gate — a locked contract stops the task"
+bash $S/contract/contract.sh init >/dev/null 2>&1
+bash $S/contract/contract.sh new orders --kind schema --why test >/dev/null 2>&1
+bash $S/contract/contract.sh lock orders --why test >/dev/null 2>&1
+L="$(newtask 'Touches orders')"
+fillall "$(tfile "$L")"
+printf '## Data\n\n- **Contract stamp:** orders v1\n' > "$T/data-lock.md"
+paste "$(tfile "$L")" "$T/data-lock.md"
+out="$($D gate "$L" 2>&1)"; rc=$?
+expect "a locked contract named in Data is refused" 3 "$rc" "locked contract" "$out"
+bash $S/contract/contract.sh unlock orders --why test >/dev/null 2>&1
+out="$($D gate "$L" 2>&1)"; rc=$?
+expect "the same task passes once unlocked" 0 "$rc" "^ok" "$out"
+
+echo "sources — tenant: none, then a named tenant"
+out="$($D sources 2>&1)"; rc=$?
+expect "no pointer: tenant: none" 0 "$rc" "^tenant: none" "$out"
+mkdir -p "$T/tenant/contracts" "$T/tenant/design"
+: > "$T/tenant/CLAUDE.md"
+out="$(RASA_TENANT="$T/tenant" $D sources 2>&1)"; rc=$?
+expect "RASA_TENANT is named on the first line" 0 "$rc" "^tenant: $T/tenant" "$out"
+printf '%s\n' "$out" | grep -q "tenant/contracts/" && printf '%s\n' "$out" | grep -q "tenant/design/" \
+  && ok "the tenant's contracts/ and design/ are listed" || bad "the tenant's contracts/ and design/ are listed" "$out"
+printf '%s\n' "$out" | grep -q "tenant/decisions/" \
+  && bad "a missing dir is not listed" "$out" || ok "a missing dir is not listed"
+out="$(RASA_TENANT="$T/nowhere" $D sources 2>&1)"; rc=$?
+expect "a pointer to nothing is tenant: none" 0 "$rc" "^tenant: none" "$out"
+
+echo
+echo "$pass passed, $fail failed"
+[ "$fail" -eq 0 ]

@@ -162,6 +162,12 @@ jobs:
       - name: Task ledger reconcile and guards
         run: bash bin/test-reconcile
 
+      # /develop's gate in a real install (placeholders, audit/plan links,
+      # UI and Data blocks, locked contracts, start), the request-kind
+      # audit and plan it checks, and the tenant sources listing.
+      - name: Develop gate, request audit and plan
+        run: bash bin/test-develop
+
       # The merge manifest every PR body carries, and /auto-merge's
       # eligibility rules, lock and post-merge actions (prod is never run).
       - name: Merge manifest and auto-merge
@@ -224,6 +230,9 @@ jobs:
 
       - name: Task ledger reconcile and guards (bash 3.2)
         run: /bin/bash bin/test-reconcile
+
+      - name: Develop gate, request audit and plan (bash 3.2)
+        run: /bin/bash bin/test-develop
 
       - name: Merge manifest and auto-merge (bash 3.2)
         run: /bin/bash bin/test-auto-merge
