@@ -143,6 +143,63 @@ echo '.claude/scratch/' > .gitignore
 out="$(DESIGN_BROWSER=none $DB shoot page.html --screen home --slug t 2>&1)"; rc=$?
 expect "shoot: no browser is skipped, exit 0" 0 "$rc" "skipped (no browser)" "$out"
 
+# --- shoot: --env is bound to the address ------------------------------
+cat > .claude/environments.json <<'JSON'
+{"default": "local", "environments": {
+  "local": {"class": "dev"},
+  "qa": {"class": "staging", "url": "https://qa.example.com/app"},
+  "nourl": {"class": "staging"},
+  "prod": {"class": "prod", "url": "https://www.example.com"}}}
+JSON
+out="$(DESIGN_BROWSER=none $DB shoot https://qa.example.com:8443/x --screen home --slug t --env qa 2>&1)"; rc=$?
+expect "shoot: a target on the environment's own host is allowed" 0 "$rc" "skipped (no browser)" "$out"
+out="$(DESIGN_BROWSER=none $DB shoot https://www.example.com/ --screen home --slug t --env qa 2>&1)"; rc=$?
+expect "shoot: a different host than the environment's url is refused" 3 "$rc" "not the address of qa" "$out"
+out="$(DESIGN_BROWSER=none $DB shoot https://qa.example.com/ --screen home --slug t --env nourl 2>&1)"; rc=$?
+expect "shoot: an environment with no url is refused" 3 "$rc" "has no url" "$out"
+out="$(DESIGN_BROWSER=none $DB shoot https://www.example.com/ --screen home --slug t --env prod 2>&1)"; rc=$?
+expect "shoot: the production environment is refused even on its own host" 3 "$rc" "production environment" "$out"
+out="$(DESIGN_BROWSER=none $DB shoot 'http://[::1]:8080/' --screen home --slug t 2>&1)"; rc=$?
+expect "shoot: [::1] with a port is local" 0 "$rc" "skipped (no browser)" "$out"
+
+# --- check: a request plan, and blank-ish layouts ----------------------
+{ printf '# Plan\n\n**Kind.** request\n\n## Goal\n\nx\n\n'; cat "$S/plan/ui-section.md"; } > rq.md
+out="$($DB check rq.md --slug rq 2>&1)"; rc=$?
+expect "check: a request plan with an unfilled UI section fails" 3 "$rc" "no evidence at compact" "$out"
+fill rq.md rq-ok.md
+perl -pi -e 's/^- \*\*Size classes:\*\*.*/- **Size classes:** compact stacks, medium two columns, expanded three/' rq-ok.md
+out="$($DB check rq-ok.md --slug rq 2>&1)"; rc=$?
+expect "check: a request plan describing each class passes" 0 "$rc" "^ok" "$out"
+perl -pi -e 's/, expanded three//' rq-ok.md
+out="$($DB check rq-ok.md --slug rq 2>&1)"; rc=$?
+expect "check: a class not described and without a PNG fails" 3 "$rc" "no evidence at expanded" "$out"
+mkdir -p .claude/scratch/design/rq; : > .claude/scratch/design/rq/home-expanded.png
+out="$($DB check rq-ok.md --slug rq 2>&1)"; rc=$?
+expect "check: a PNG for that class is request-plan evidence" 0 "$rc" "^ok" "$out"
+printf '# Plan\n\n**Kind.** request\n\n## UI/UX and screens\n\nNot touched: no screen.\n' > rq-none.md
+out="$($DB check rq-none.md --slug rq 2>&1)"; rc=$?
+expect "check: a request plan with UI not touched passes" 0 "$rc" "UI not touched" "$out"
+perl -pe 's/^- \*\*compact:\*\*.*/- **compact:** -/' bp.md > bp-blank.md
+out="$($DB check bp-blank.md --slug shop 2>&1)"; rc=$?
+expect "check: a layout of no words is not evidence" 3 "$rc" "at compact" "$out"
+
+# --- x-design: link writes it, the gate re-validates it ----------------
+printf '\n## Phase P1 — P1\n\nScope.\n' >> tasks/ROADMAP.md
+tid="$(.claude/bin/task new --type change --phase P1 "Design task" 2>&1 | grep -o 'TASK-[0-9]*' | head -1)"
+DV="bash $S/develop/develop.sh"
+out="$($DV link "$tid" --design dp.md 2>&1)"; rc=$?
+expect "link --design: refuses a design plan that does not validate" 3 "$rc" "does not validate" "$out"
+out="$($DV link "$tid" --design dp-ok.md 2>&1)"; rc=$?
+expect "link --design: writes x-design" 0 "$rc" "x-design dp-ok.md" "$out"
+tf="$(ls tasks/backlog/"$tid"-*.md | head -1)"
+grep -q '^x-design: dp-ok.md' "$tf" && ok "link --design: the frontmatter carries x-design" || bad "link --design: the frontmatter carries x-design" "$(head -20 "$tf")"
+out="$($DV gate "$tid" 2>&1)"
+printf '%s\n' "$out" | grep -q 'x-design does not' && bad "gate: a valid x-design raises no reason" "$out" || ok "gate: a valid x-design raises no reason"
+mv dp-ok.md dp-ok.gone
+out="$($DV gate "$tid" 2>&1)"
+has "gate: a missing x-design file is a reason" "x-design does not exist or does not validate" "$out"
+mv dp-ok.gone dp-ok.md
+
 # --- one source per subject --------------------------------------------
 frag_a="$S/audit/ui-audit-section.md"; frag_p="$S/plan/ui-section.md"
 $DA scaffold --in ra.md | diff -q - "$frag_a" >/dev/null \

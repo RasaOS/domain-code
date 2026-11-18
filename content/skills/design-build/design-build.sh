@@ -61,7 +61,43 @@ plan_slug() {
   printf '%s' "$b" | sed 's/^[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}-//'
 }
 
+# True when the text holds at least one word once <...> placeholders are gone.
+has_words() {
+  local t
+  t="$(printf '%s' "$1" | sed 's/<[^>]*>//g' | tr -cd 'A-Za-z0-9')"
+  [ -n "$t" ]
+}
+
 safe_name() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-' | sed 's/^-*//; s/-*$//'; }
+
+check_request_plan() {
+  local plan="$1" dir="$2" body sizes source gaps=0 spec cls
+  body="$(awk '$0=="## UI/UX and screens"{on=1;next} /^## /{on=0} on' "$plan")"
+  if [ -z "$body" ]; then
+    echo "no '## UI/UX and screens' section in $plan" >&2
+    return 3
+  fi
+  if printf '%s\n' "$body" | grep -q '^Not touched:'; then
+    echo "ok (UI not touched)"
+    return 0
+  fi
+  sizes="$(printf '%s\n' "$body" | grep -F '**Size classes:**' | head -1 || true)"
+  source="$(printf '%s\n' "$body" | grep -F '**Design source:**' | head -1 || true)"
+  sizes="$(printf '%s' "$sizes" | tr 'A-Z' 'a-z')"
+  for spec in "${SIZES[@]}"; do
+    cls="${spec%%|*}"
+    if ls "$dir"/*-"$cls".png >/dev/null 2>&1; then continue; fi
+    case "$sizes" in *"<to-fill"*) sizes="" ;; esac
+    case "$sizes" in
+      *"$cls"*) ;;
+      *) echo "no evidence at $cls (no *-${cls}.png, not described under Size classes)" >&2; gaps=$((gaps + 1)) ;;
+    esac
+  done
+  case "$source" in *"<to-fill"*) source="" ;; esac
+  has_words "${source#*:\*\*}" || { echo "Design source is not filled" >&2; gaps=$((gaps + 1)); }
+  [ "$gaps" -eq 0 ] || { echo "$gaps gap(s)" >&2; return 3; }
+  echo "ok"
+}
 
 cmd_check() {
   local plan="${1:-}" slug="" line name="" gaps=0 dir c have
@@ -77,6 +113,14 @@ cmd_check() {
   [ -n "$slug" ] || slug="$(plan_slug "$plan")"
   dir="$(scratch_dir "$slug")"
 
+  # A request plan has no screen blocks: its UI/UX section describes the size
+  # classes in one line (plan/ui-section.md). Evidence per class is any
+  # <screen>-<class>.png, or the class named on that line with a word of detail.
+  if grep -qx '\*\*Kind\.\*\* request' "$plan"; then
+    check_request_plan "$plan" "$dir"
+    return $?
+  fi
+
   # Per screen: collect the described layout line of each class.
   local n=0 spec cls
   local d_compact="" d_medium="" d_expanded="" tokens=""
@@ -89,13 +133,15 @@ cmd_check() {
       cls="${spec%%|*}"
       eval "have=\$d_$cls"
       if [ -f "$dir/${sn}-${cls}.png" ]; then continue; fi
-      case "$have" in
-        ""|*"<to-fill"*) echo "no evidence: screen '$name' at $cls (no ${sn}-${cls}.png, no described layout)" >&2; gaps=$((gaps + 1)) ;;
-      esac
+      case "$have" in *"<to-fill"*) have="" ;; esac
+      if ! has_words "$have"; then
+        echo "no evidence: screen '$name' at $cls (no ${sn}-${cls}.png, no described layout)" >&2; gaps=$((gaps + 1))
+      fi
     done
-    case "$tokens" in
-      ""|*"<to-fill"*) echo "screen '$name': Tokens and components reused is not filled" >&2; gaps=$((gaps + 1)) ;;
-    esac
+    case "$tokens" in *"<to-fill"*) tokens="" ;; esac
+    if ! has_words "$tokens"; then
+      echo "screen '$name': Tokens and components reused is not filled" >&2; gaps=$((gaps + 1))
+    fi
   }
   while IFS= read -r line; do
     case "$line" in
@@ -119,16 +165,28 @@ cmd_check() {
   echo "ok"
 }
 
-# Production refusal. file:// and loopback are allowed; anything else needs
-# --env <env> naming a registered environment that is not production.
+# The host of a URL: no scheme, userinfo, port, path or brackets, lower case.
+url_host() {
+  local h="${1#*://}"
+  h="${h%%/*}"; h="${h%%\?*}"; h="${h##*@}"
+  case "$h" in
+    "["*) h="${h#\[}"; h="${h%%\]*}" ;;
+    *) h="${h%%:*}" ;;
+  esac
+  printf '%s' "$h" | tr 'A-Z' 'a-z'
+}
+
+# Production refusal, fail closed. file:// and loopback are allowed. Any other
+# host needs --env <env>: a registered environment that is not production and
+# whose `url` in the registry has the same host as the target.
 refuse_production() {
-  local target="$1" envname="$2" host
+  local target="$1" envname="$2" host envurl prods rc=0
   case "$target" in
     file://*) return 0 ;;
     http://*|https://*)
-      host="${target#*://}"; host="${host%%/*}"; host="${host%%:*}"
+      host="$(url_host "$target")"
       case "$host" in
-        localhost|127.0.0.1|"[::1]") return 0 ;;
+        localhost|127.0.0.1|::1) return 0 ;;
       esac ;;
     *) [ -f "$target" ] && return 0 ;;
   esac
@@ -140,13 +198,29 @@ refuse_production() {
     echo "refused: environment.sh is missing, cannot tell whether $envname is production" >&2
     return 3
   fi
-  # prod-env lists the production environments (exit 3 when there are none).
-  if bash "$ENV_SH" prod-env 2>/dev/null | grep -qxF "$envname"; then
-    echo "refused: $envname is a production environment" >&2
+  # prod-env lists the production environments: exit 0 with names, 3 with none.
+  prods="$(bash "$ENV_SH" prod-env 2>/dev/null)" || rc=$?
+  case "$rc" in
+    0|3) ;;
+    *) echo "refused: environment.sh prod-env failed (exit $rc), cannot rule out production" >&2; return 3 ;;
+  esac
+  case "
+$prods
+" in
+    *"
+$envname
+"*) echo "refused: $envname is a production environment" >&2; return 3 ;;
+  esac
+  envurl="$(bash "$ENV_SH" get "$envname" url 2>/dev/null)" \
+    || { echo "refused: $envname is not a registered environment" >&2; return 3; }
+  if [ -z "$envurl" ]; then
+    echo "refused: $envname has no url in .claude/environments.json; add \"url\": \"<its address>\" to that environment so the target can be matched to it" >&2
     return 3
   fi
-  bash "$ENV_SH" show "$envname" >/dev/null 2>&1 \
-    || { echo "refused: $envname is not a registered environment" >&2; return 3; }
+  if [ "$(url_host "$envurl")" != "$host" ]; then
+    echo "refused: $target is not the address of $envname ($envurl)" >&2
+    return 3
+  fi
   return 0
 }
 

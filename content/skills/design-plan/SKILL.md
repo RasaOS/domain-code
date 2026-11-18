@@ -46,7 +46,9 @@ document per request.
 6. `validate`. It fails on any `<to-fill`, on a screen with no Back
    target, and on a screen missing a size class.
 7. Save under `docs/plans/`. Tasks filed from the plan carry
-   `x-ui: true` and `x-design: <plan path>`.
+   `x-ui: true`. A standalone design plan reaches a task with
+   `develop.sh link <id> --design <plan path>`, which validates it and
+   writes `x-design`; `/develop`'s gate re-validates it.
 
 ## What you must NOT do
 

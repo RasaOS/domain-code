@@ -21,6 +21,7 @@ rfm_require 1 || exit 70
 
 AUDIT_SH="$_here/../audit/audit.sh"
 PLAN_SH="$_here/../plan/plan.sh"
+DESIGN_PLAN_SH="$_here/../design-plan/design-plan.sh"
 CONTRACT_SH="$_here/../contract/contract.sh"
 ENFORCE_SH="$_here/../task-enforce/task-enforce.sh"
 
@@ -41,8 +42,10 @@ develop.sh — /develop's mechanical steps
   develop.sh check-unfilled <file>
       Exit 3 and list file:line of every <...> placeholder outside code
       fences, inline code and the Blocker / Notes sections.
-  develop.sh link <id> --audit <path> --plan <path> [--ui true|false]
-      Write x-audit, x-plan (and x-ui) into the task's frontmatter. Refuses a
+  develop.sh link <id> --audit <path> --plan <path> [--ui true|false] [--design <path>]
+  develop.sh link <id> --design <path>
+      Write x-audit, x-plan (and x-ui, x-design) into the task's frontmatter.
+      --design is a standalone design plan (design-plan.sh validate). Refuses a
       path that does not exist or does not validate. Nothing else writes them.
   develop.sh gate <id>
       Exit 0 when the task may start; 3 with every reason when not.
@@ -142,7 +145,7 @@ find_task() {
 
 # Gate reasons, one per line on stdout; empty when the task passes.
 gate_reasons() {
-  local root="$1" f="$2" prio plan audit ui body stamp name line lab p
+  local root="$1" f="$2" prio plan audit ui design body stamp name line lab p
 
   # Stub depth is structural (task-templates/stub.md): no real checkbox under
   # "## Acceptance criteria". A stub is expanded before it is developed.
@@ -176,6 +179,12 @@ EOT
     elif [ -z "$(section_body "$f" "Data" | tr -d '[:space:]')" ]; then
       echo "'## Data' section is empty (fill it, or one 'Not touched: <why>' line)"
     fi
+  fi
+
+  # A linked standalone design plan must still exist and validate.
+  design="$(fm "$f" x-design)"
+  if [ -n "$design" ] && { [ ! -f "$root/$design" ] || ! bash "$DESIGN_PLAN_SH" validate "$root/$design" >/dev/null 2>&1; }; then
+    echo "x-design does not exist or does not validate: $design"
   fi
 
   if [ "$ui" = "true" ]; then
@@ -232,7 +241,7 @@ cmd_gate() {
 }
 
 cmd_link() {
-  local id="${1:-}" audit="" plan="" ui="" root f p sh
+  local id="${1:-}" audit="" plan="" ui="" design="" root f p sh
   [ -n "$id" ] || { echo "error: link needs <id>" >&2; return 2; }
   shift
   while [ $# -gt 0 ]; do
@@ -240,25 +249,35 @@ cmd_link() {
       --audit) audit="${2:-}"; shift 2 ;;
       --plan) plan="${2:-}"; shift 2 ;;
       --ui) ui="${2:-}"; shift 2 ;;
+      --design) design="${2:-}"; shift 2 ;;
       *) echo "error: unknown flag: $1" >&2; return 2 ;;
     esac
   done
-  [ -n "$audit" ] && [ -n "$plan" ] || { echo "error: link needs --audit <path> and --plan <path>" >&2; return 2; }
+  if [ -n "$audit" ] || [ -n "$plan" ] || [ -z "$design" ]; then
+    [ -n "$audit" ] && [ -n "$plan" ] || { echo "error: link needs --audit <path> and --plan <path> (or only --design <path>)" >&2; return 2; }
+  fi
   case "$ui" in ""|true|false) ;; *) echo "error: --ui is true or false" >&2; return 2 ;; esac
   root="$(rasa_root)" || return 1
   f="$(find_task "$root" "$id")" || { echo "error: no $id in tasks/backlog or tasks/active" >&2; return 1; }
   # Paths are kept relative to the repository root.
-  audit="${audit#"$root"/}"; plan="${plan#"$root"/}"
-  [ -f "$root/$audit" ] && bash "$AUDIT_SH" validate "$root/$audit" >/dev/null 2>&1 \
-    || { echo "refused: audit does not exist or does not validate: $audit" >&2; return 3; }
-  [ -f "$root/$plan" ] && bash "$PLAN_SH" validate "$root/$plan" >/dev/null 2>&1 \
-    || { echo "refused: plan does not exist or does not validate: $plan" >&2; return 3; }
-  if [ -n "$ui" ]; then
-    rfm_set "$f" x-audit "$audit" x-plan "$plan" x-ui "$ui" updated "$(date '+%Y-%m-%d')"
-  else
-    rfm_set "$f" x-audit "$audit" x-plan "$plan" updated "$(date '+%Y-%m-%d')"
+  local -a kv=()
+  if [ -n "$audit" ]; then
+    audit="${audit#"$root"/}"; plan="${plan#"$root"/}"
+    [ -f "$root/$audit" ] && bash "$AUDIT_SH" validate "$root/$audit" >/dev/null 2>&1 \
+      || { echo "refused: audit does not exist or does not validate: $audit" >&2; return 3; }
+    [ -f "$root/$plan" ] && bash "$PLAN_SH" validate "$root/$plan" >/dev/null 2>&1 \
+      || { echo "refused: plan does not exist or does not validate: $plan" >&2; return 3; }
+    kv+=(x-audit "$audit" x-plan "$plan")
+    [ -z "$ui" ] || kv+=(x-ui "$ui")
   fi
-  echo "linked $id: x-audit $audit, x-plan $plan${ui:+, x-ui $ui}"
+  if [ -n "$design" ]; then
+    design="${design#"$root"/}"
+    [ -f "$root/$design" ] && bash "$DESIGN_PLAN_SH" validate "$root/$design" >/dev/null 2>&1 \
+      || { echo "refused: design plan does not exist or does not validate: $design" >&2; return 3; }
+    kv+=(x-design "$design")
+  fi
+  rfm_set "$f" "${kv[@]}" updated "$(date '+%Y-%m-%d')"
+  echo "linked $id: ${kv[*]}"
 }
 
 cmd_start() {

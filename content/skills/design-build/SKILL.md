@@ -20,14 +20,23 @@ design-build.sh check <plan> [--slug <slug>]
 design-build.sh shoot <url-or-file> --screen <name> [--slug <slug>] [--env <env>]
 ```
 
-- **`check`**: for every `### Screen:` block and each size class, there
-  is `.claude/scratch/design/<slug>/<screen>-<class>.png`, or a filled
-  described layout line in the plan; and the plan's
-  **Tokens and components reused** line is filled. Exit 3 lists the gaps.
+- **`check`** takes either kind of plan. For a design plan, every
+  `### Screen:` block and each size class has
+  `.claude/scratch/design/<slug>/<screen>-<class>.png`, or a described
+  layout of at least one word in the plan; and the screen's
+  **Tokens and components reused** line is filled. For a request plan,
+  each size class has some `*-<class>.png` there, or is described on the
+  **Size classes** line of the plan's UI/UX section, and the
+  **Design source** line is filled (a `Not touched:` section passes).
+  A PNG is not checked for age: it counts if it exists. Exit 3 lists
+  the gaps.
 - **`shoot`**: writes the three PNGs to that folder. It accepts a file,
-  `file://`, or a local address. Any other address needs `--env <env>`,
-  and that environment must be registered and not production
-  (`environment.sh prod-env`). It refuses to write unless the folder is
+  `file://`, or a local address (`localhost`, `127.0.0.1`, `[::1]`, with
+  or without a port). Any other address needs `--env <env>`: the
+  environment must be registered, must not be production
+  (`environment.sh prod-env`), and must carry a `url` in
+  `.claude/environments.json` whose host is the target's host. No `url`,
+  or a different host, is refused. It refuses to write unless the folder is
   git-ignored, and tells you the line to add. With no browser it prints
   `screenshots: skipped (no browser)` and exits 0. A screenshot that
   times out is reported, never fatal.
