@@ -46,7 +46,7 @@ arbitrary parent folders, and can pick the wrong tenant silently. May be added l
 - Existing installs must add one `tenant:` line by hand (the seed change reaches new installs only).
 
 **Neutral / notable**
-- `x-audit` / `x-plan` (and `x-design`, reserved for R2) are project-namespace keys; `check-tasks` does not validate
+- `x-audit` / `x-plan` (and `x-design`, reserved for the design flow that follows) are project-namespace keys; `check-tasks` does not validate
   them, `/develop gate` does.
 - A follow-up to `RasaOS/module-tasks` may promote them to known keys.
 

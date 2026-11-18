@@ -24,7 +24,7 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
-## v0.63.0 — 2026-11-17
+## v0.63.0 — 2026-11-18
 
 **A request is audited, planned, filed and developed in order, and a screen is built for every size.** `/audit` gains a
 request kind, `/plan` gains a request plan, a new `/develop` skill holds a task to both before it starts, and the Element
