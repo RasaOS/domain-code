@@ -96,8 +96,8 @@ The rules, which a reviewer can check:
 
 - **Label and legend, always.**
 - **Colour plus a second signal** (a label, glyph or position); colour
-  is never the only encoding (`output-rules.md`, "Color is a second
-  channel").
+  is never the only encoding (`output-rules.md`, "Glyph and color
+  discipline").
 - **Palette from the Design source**, colour-blind safe.
 - **A table when exact values matter**, or when there are many
   columns.

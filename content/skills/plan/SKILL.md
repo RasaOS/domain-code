@@ -172,8 +172,10 @@ the plan document only; it still writes no code.
 4. **Save** once the person approves:
    `bash .claude/skills/plan/plan.sh save <slug> <draft>` writes
    `docs/plans/<date>-<slug>.md`, which lands as docs ("After
-   approval" below). The tasks it lists are filed with `/task`, with
-   `x-audit` and `x-plan` pointing at the audit and this plan.
+   approval" below). The tasks it lists are filed with `/task`, and
+   each is linked with the audit and this plan:
+   `bash .claude/skills/develop/develop.sh link <id> --audit <audit> --plan <plan> --ui true|false`
+   (it writes `x-audit`, `x-plan` and `x-ui`; `/task` does not).
 
 ## Before any hand-off — validate the plan
 

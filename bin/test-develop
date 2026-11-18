@@ -190,6 +190,58 @@ bash $S/contract/contract.sh unlock orders --why test >/dev/null 2>&1
 out="$($D gate "$L" 2>&1)"; rc=$?
 expect "the same task passes once unlocked" 0 "$rc" "^ok" "$out"
 
+echo "gate — stub depth, link, note, whole-word stamps, empty Data"
+G="$(newtask 'A stub')"
+fillall "$(tfile "$G")"
+perl -0pi -e 's/(## Acceptance criteria.*?)(\n## )/my ($a,$b)=($1,$2); $a =~ s{^- \[[ xX]\].*\n?}{}mg; $a.$b/se' "$(tfile "$G")"
+out="$($D gate "$G" 2>&1)"; rc=$?
+expect "a task with no checkbox under Acceptance criteria is stub depth" 3 "$rc" "stub depth" "$out"
+
+K="$(newtask 'To link')"
+fillall "$(tfile "$K")"
+out="$($D gate "$K" 2>&1)"; rc=$?
+expect "no x-plan: ok, with a note that the link was not checked" 0 "$rc" "note: no x-plan" "$out"
+out="$($D link "$K" --audit docs/audits/a.md --plan docs/plans/missing.md 2>&1)"; rc=$?
+expect "link refuses a plan that does not exist" 3 "$rc" "refused" "$out"
+out="$($D link "$K" --audit "$T/audit.md" --plan docs/plans/p.md 2>&1)"; rc=$?
+expect "link refuses an audit that does not validate" 3 "$rc" "refused" "$out"
+out="$($D link "$K" --audit docs/audits/a.md --plan docs/plans/p.md --ui false 2>&1)"; rc=$?
+expect "link writes x-audit, x-plan, x-ui" 0 "$rc" "linked $K" "$out"
+grep -q '^x-plan: docs/plans/p.md' "$(tfile "$K")" && grep -q '^x-audit: docs/audits/a.md' "$(tfile "$K")" && grep -q '^x-ui: false' "$(tfile "$K")" \
+  && ok "the three keys are in the frontmatter" || bad "the three keys are in the frontmatter" "$(head -14 "$(tfile "$K")")"
+# Hand edits of a task body drift I-34 on the same day; --fix is the sanctioned repair.
+.claude/bin/check-tasks --fix >/dev/null 2>&1
+out="$(.claude/bin/check-tasks 2>&1)"; rc=$?
+expect "after check-tasks --fix the ledger is clean with the linked task" 0 "$rc" "" "$out"
+out="$($D gate "$K" 2>&1)"; rc=$?
+expect "a linked task with no Data section is now refused" 3 "$rc" "Data" "$out"
+printf '## Data\n' > "$T/data-empty.md"
+python3 - "$(tfile "$K")" "$T/data-empty.md" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read(); k = s.rindex('## Blocker')
+open(p, 'w').write(s[:k] + open(sys.argv[2]).read() + '\n' + s[k:])
+PY
+out="$($D gate "$K" 2>&1)"; rc=$?
+expect "a Data heading with nothing under it is refused" 3 "$rc" "empty" "$out"
+
+bash $S/contract/contract.sh new user --kind schema --why test >/dev/null 2>&1
+bash $S/contract/contract.sh lock user --why test >/dev/null 2>&1
+W="$(newtask 'Mentions username')"
+fillall "$(tfile "$W")"
+printf '## Data\n\n- **Contract stamp:** username v1 (a field, not the stamp)\n' > "$T/data-word.md"
+paste "$(tfile "$W")" "$T/data-word.md"
+out="$($D gate "$W" 2>&1)"; rc=$?
+expect "a locked stamp 'user' is not matched inside 'username'" 0 "$rc" "^ok" "$out"
+printf '## Data\n\n- **Contract stamp:** user v1\n' > "$T/data-word2.md"
+python3 - "$(tfile "$W")" "$T/data-word2.md" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+a = s.index('## Data'); b = s.index('## Blocker', a)
+open(p, 'w').write(s[:a] + open(sys.argv[2]).read() + '\n' + s[b:])
+PY
+out="$($D gate "$W" 2>&1)"; rc=$?
+expect "the whole word 'user' is matched" 3 "$rc" "locked contract: user" "$out"
+
 echo "sources — tenant: none, then a named tenant"
 out="$($D sources 2>&1)"; rc=$?
 expect "no pointer: tenant: none" 0 "$rc" "^tenant: none" "$out"
@@ -201,6 +253,11 @@ printf '%s\n' "$out" | grep -q "tenant/contracts/" && printf '%s\n' "$out" | gre
   && ok "the tenant's contracts/ and design/ are listed" || bad "the tenant's contracts/ and design/ are listed" "$out"
 printf '%s\n' "$out" | grep -q "tenant/decisions/" \
   && bad "a missing dir is not listed" "$out" || ok "a missing dir is not listed"
+mkdir -p "$P/rel-tenant/design"
+printf 'tenant: rel-tenant\n' >> .claude/rasa-deployment.md
+mkdir -p docs/sub
+out="$(cd docs/sub && bash ../../$S/develop/develop.sh sources 2>&1)"; rc=$?
+expect "a relative tenant path is read against the repo root, not the cwd" 0 "$rc" "^tenant: $P/rel-tenant" "$out"
 out="$(RASA_TENANT="$T/nowhere" $D sources 2>&1)"; rc=$?
 expect "a pointer to nothing is tenant: none" 0 "$rc" "^tenant: none" "$out"
 

@@ -26,11 +26,13 @@ the PR has merged. That is the one sanctioned path to `completed`.
 2. **Gate.** `bash .claude/skills/develop/develop.sh gate <id>`.
    Exit 3 lists every reason; fix each, then re-run. It checks:
    - no unfilled `<...>` in the task body (code fences, inline code,
-     `## Blocker` and `## Notes` are ignored), and not stub depth;
+     `## Blocker` and `## Notes` are ignored), and not stub depth (a task with no checkbox under
+     `## Acceptance criteria` is expanded first);
    - a task carrying `x-plan`: `x-audit` and `x-plan` exist and
      validate (`audit.sh validate`, `plan.sh validate`), and it has a
      `## Data` section. `priority: now` is exempt. A task with no
      `x-plan` (hotfix, bug, mission) has no audit/plan link to check;
+     the gate says so on a `note:` line;
    - `x-ui: true`: a filled `## UI/UX and screens` section;
    - a locked contract named on the Data block's *Contract stamp*
      line stops the task.
@@ -40,6 +42,13 @@ the PR has merged. That is the one sanctioned path to `completed`.
    `## Blocker` and fill them (`Not touched: <why>` when they do not
    apply). They are enforced here, in `/develop`, until the task
    templates ship them.
+   A non-exempt task with no `x-plan` is linked before it starts:
+   `bash .claude/skills/develop/develop.sh link <id> --audit docs/audits/<file>.md --plan docs/plans/<file>.md [--ui true|false]`
+   writes `x-audit`, `x-plan` and `x-ui` through the frontmatter
+   library, and refuses a path that does not exist or does not
+   validate. `/task` does not write these keys. An edit to a task body
+   or frontmatter by hand drifts the ledger's `updated` check the same
+   day; `.claude/bin/check-tasks --fix` accepts it.
 3. **Start.** `bash .claude/skills/develop/develop.sh start <id>`
    (gate, then `bin/task start` as the actor from `task-enforce.sh who`).
 4. **Build to the plan.** On the task's branch from the latest trunk
@@ -49,7 +58,7 @@ the PR has merged. That is the one sanctioned path to `completed`.
    conventions file. Tests with the change; the build and the
    verification command from `CLAUDE.md`, results shown.
 5. **Open the PR.** `/open-pr <id>`; it submits the task to review.
-6. **After the merge.** `/reconcile <id>`: it runs the done-gate on
+6. **After the merge.** Run `/reconcile`: it runs the done-gate on
    the trunk and lands the pass, so the task reaches `completed`
    with no hand step.
 

@@ -4,6 +4,7 @@
 #
 #   develop.sh sources                 tenant + repo sources of truth
 #   develop.sh check-unfilled <file>   unfilled <...> placeholders in a task
+#   develop.sh link <id> --audit <path> --plan <path> [--ui true|false]
 #   develop.sh gate <id>               may this task be started?
 #   develop.sh start <id>              gate, then bin/task start
 #
@@ -40,6 +41,9 @@ develop.sh — /develop's mechanical steps
   develop.sh check-unfilled <file>
       Exit 3 and list file:line of every <...> placeholder outside code
       fences, inline code and the Blocker / Notes sections.
+  develop.sh link <id> --audit <path> --plan <path> [--ui true|false]
+      Write x-audit, x-plan (and x-ui) into the task's frontmatter. Refuses a
+      path that does not exist or does not validate. Nothing else writes them.
   develop.sh gate <id>
       Exit 0 when the task may start; 3 with every reason when not.
   develop.sh start <id>
@@ -65,10 +69,11 @@ tenant_path() {
   if [ -n "${RASA_TENANT:-}" ]; then
     p="$RASA_TENANT"
   elif [ -f "$root/.claude/rasa-deployment.md" ]; then
-    p="$(sed -n 's/^tenant:[[:space:]]*//p' "$root/.claude/rasa-deployment.md" | head -1)"
+    p="$(sed -n 's/^tenant:[[:space:]]*//p' "$root/.claude/rasa-deployment.md" | sed -n '/^[^<]/{p;q;}')"
   fi
   case "$p" in "~"|"~/"*) p="$HOME${p#"~"}" ;; esac
   case "$p" in ""|"<"*) return 1 ;; esac
+  case "$p" in /*) ;; *) p="$root/$p" ;; esac
   [ -d "$p" ] || return 1
   (cd "$p" && pwd)
 }
@@ -139,8 +144,14 @@ find_task() {
 gate_reasons() {
   local root="$1" f="$2" prio plan audit ui body stamp name line lab p
 
-  if rfm_body "$f" | grep -q 'STATUS: STUB'; then
-    echo "stub depth: expand it first (expanding-a-task.md)"
+  # Stub depth is structural (task-templates/stub.md): no real checkbox under
+  # "## Acceptance criteria". A stub is expanded before it is developed.
+  body="$(section_body "$f" "Acceptance criteria")"
+  if ! grep -Eq '^[[:space:]]*- \[[ xX]\][[:space:]]+[^[:space:]]' <<EOT
+$body
+EOT
+  then
+    echo "stub depth: no checkbox under '## Acceptance criteria'; expand it first (expanding-a-task.md)"
   fi
 
   unfilled_lines "$f" | while IFS= read -r line; do
@@ -162,6 +173,8 @@ gate_reasons() {
     fi
     if ! grep -qx '## Data' "$f"; then
       echo "no '## Data' section (paste plan/data-section.md, fill it or one 'Not touched:' line)"
+    elif [ -z "$(section_body "$f" "Data" | tr -d '[:space:]')" ]; then
+      echo "'## Data' section is empty (fill it, or one 'Not touched: <why>' line)"
     fi
   fi
 
@@ -169,21 +182,30 @@ gate_reasons() {
     body="$(section_body "$f" "UI/UX and screens")"
     if ! grep -qx '## UI/UX and screens' "$f"; then
       echo "x-ui: true but no '## UI/UX and screens' section (paste plan/ui-section.md)"
-    elif ! printf '%s\n' "$body" | grep -q '^Not touched:'; then
-      for lab in "${UI_LABELS[@]}"; do
-        printf '%s\n' "$body" | grep -qF "**${lab}:**" || echo "UI block lacks: ${lab}"
-      done
+    else
+      case "
+$body" in
+        *"
+Not touched:"*) ;;
+        *)
+          for lab in "${UI_LABELS[@]}"; do
+            case "$body" in *"**${lab}:**"*) ;; *) echo "UI block lacks: ${lab}" ;; esac
+          done ;;
+      esac
     fi
   fi
 
   # A locked contract named on the Data block's Contract stamp line stops the task.
   line="$(section_body "$f" "Data" | grep -F '**Contract stamp:**' | head -1 || true)"
   if [ -n "$line" ] && [ -d "$root/contracts/stamps" ]; then
+    # Whole words only: every character that cannot be in a stamp name becomes
+    # a space, so "user" does not match "username".
+    line=" $(printf '%s' "$line" | tr -c 'A-Za-z0-9_-' ' ') "
     for p in "$root"/contracts/stamps/*.md; do
       [ -f "$p" ] || continue
       name="$(basename "$p" .md)"
       case "$line" in
-        *"$name"*)
+        *" $name "*)
           (cd "$root" && bash "$CONTRACT_SH" check "contracts/stamps/$name.md" >/dev/null 2>&1) \
             || echo "locked contract: $name (unlock it deliberately with /contract, or change the plan)" ;;
       esac
@@ -203,7 +225,40 @@ cmd_gate() {
     printf '%s\n' "$reasons" | sed 's/^/  - /' >&2
     return 3
   fi
+  if [ -z "$(fm "$f" x-plan)" ] && [ "$(fm "$f" priority)" != "now" ]; then
+    echo "note: no x-plan, audit/plan link not checked (develop.sh link <id> --audit <path> --plan <path>)"
+  fi
   echo "ok"
+}
+
+cmd_link() {
+  local id="${1:-}" audit="" plan="" ui="" root f p sh
+  [ -n "$id" ] || { echo "error: link needs <id>" >&2; return 2; }
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --audit) audit="${2:-}"; shift 2 ;;
+      --plan) plan="${2:-}"; shift 2 ;;
+      --ui) ui="${2:-}"; shift 2 ;;
+      *) echo "error: unknown flag: $1" >&2; return 2 ;;
+    esac
+  done
+  [ -n "$audit" ] && [ -n "$plan" ] || { echo "error: link needs --audit <path> and --plan <path>" >&2; return 2; }
+  case "$ui" in ""|true|false) ;; *) echo "error: --ui is true or false" >&2; return 2 ;; esac
+  root="$(rasa_root)" || return 1
+  f="$(find_task "$root" "$id")" || { echo "error: no $id in tasks/backlog or tasks/active" >&2; return 1; }
+  # Paths are kept relative to the repository root.
+  audit="${audit#"$root"/}"; plan="${plan#"$root"/}"
+  [ -f "$root/$audit" ] && bash "$AUDIT_SH" validate "$root/$audit" >/dev/null 2>&1 \
+    || { echo "refused: audit does not exist or does not validate: $audit" >&2; return 3; }
+  [ -f "$root/$plan" ] && bash "$PLAN_SH" validate "$root/$plan" >/dev/null 2>&1 \
+    || { echo "refused: plan does not exist or does not validate: $plan" >&2; return 3; }
+  if [ -n "$ui" ]; then
+    rfm_set "$f" x-audit "$audit" x-plan "$plan" x-ui "$ui" updated "$(date '+%Y-%m-%d')"
+  else
+    rfm_set "$f" x-audit "$audit" x-plan "$plan" updated "$(date '+%Y-%m-%d')"
+  fi
+  echo "linked $id: x-audit $audit, x-plan $plan${ui:+, x-ui $ui}"
 }
 
 cmd_start() {
@@ -223,6 +278,7 @@ main() {
     -h|--help|help|"") usage ;;
     sources) cmd_sources ;;
     check-unfilled) cmd_check_unfilled "$@" ;;
+    link) cmd_link "$@" ;;
     gate) cmd_gate "$@" ;;
     start) cmd_start "$@" ;;
     *) echo "error: unknown action: $action" >&2; usage >&2; return 2 ;;

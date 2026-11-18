@@ -11,10 +11,10 @@ leaves, and the gate between stages. Read with `ui-rules.md`.
 |---|---|---|
 | Audit | `/audit` | `docs/audits/<date>-<slug>.md`, Kind `request` |
 | Plan | `/plan` | `docs/plans/<date>-<slug>.md`, Kind `request`, citing the audit |
-| Task | `/task` | a task carrying `x-audit`, `x-plan`, and `x-ui` when a screen is touched |
+| Task | `/task`, then `develop.sh link` | a task carrying `x-audit`, `x-plan`, and `x-ui` when a screen is touched; `/task` does not write them, `develop.sh link <id> --audit <path> --plan <path> [--ui true\|false]` does |
 | Develop | `/develop` | a branch and a PR; the task moves to `review/` |
 
-After the PR merges, `/reconcile <id>` runs the trunk done-gate and
+After the PR merges, `/reconcile` runs the trunk done-gate and
 lands the move to `completed/` through the one sanctioned path. There
 is no other way to a `pass`.
 
@@ -23,7 +23,7 @@ is no other way to a `pass`.
 - `/develop` checks the task before it starts: the audit and the plan
   named by `x-audit` and `x-plan` exist and validate; the task body
   has no unfilled `<to-fill …>` blanks; the UI block is filled when
-  `x-ui: true`; the Data block is filled.
+  `x-ui: true`; the Data block is filled (checked for tasks that carry `x-plan`).
 - A task whose Data block names a **locked contract** stops there.
 - Every template marks a blank with `<to-fill …>`, and every
   `validate` fails while one remains. A slot that does not apply is
@@ -31,8 +31,9 @@ is no other way to a `pass`.
 
 ## Exemptions
 
-- `priority: now` defects and stub-depth tasks skip the audit and plan
-  link.
+- `priority: now` defects skip the audit and plan link. A stub-depth
+  task (no checkbox under `## Acceptance criteria`) is not developed:
+  expand it first.
 - `/auto-develop` keeps its own entry. It reuses only the unfilled-blank
   check and the sources-of-truth read; the audit and plan link applies
   to `/develop`, and only to tasks that carry `x-plan`.
