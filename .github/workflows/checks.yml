@@ -168,6 +168,12 @@ jobs:
       - name: Develop gate, request audit and plan
         run: bash bin/test-develop
 
+      # The design flow: style-source discovery, design audit and plan
+      # validation per size class and back target, evidence checks, and the
+      # screenshot guards (no production, no unignored path, no browser).
+      - name: Design audit, plan and build
+        run: bash bin/test-design
+
       # The merge manifest every PR body carries, and /auto-merge's
       # eligibility rules, lock and post-merge actions (prod is never run).
       - name: Merge manifest and auto-merge
@@ -233,6 +239,9 @@ jobs:
 
       - name: Develop gate, request audit and plan (bash 3.2)
         run: /bin/bash bin/test-develop
+
+      - name: Design audit, plan and build (bash 3.2)
+        run: /bin/bash bin/test-design
 
       - name: Merge manifest and auto-merge (bash 3.2)
         run: /bin/bash bin/test-auto-merge

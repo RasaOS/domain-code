@@ -1,0 +1,228 @@
+#!/usr/bin/env bash
+# bin/test-design — regression tests for the design flow: /design-audit
+# (design-audit.sh), /design-plan (design-plan.sh) and /design-build
+# (design-build.sh).
+# Repo tooling: lives in bin/, is not registered in rasa.json, and is never
+# installed into a consumer.
+#
+# Installs the Element into a fresh project with bin/init and asserts:
+#
+#   discover   an empty project prints "none found" (exit 0); a fixture with a
+#              docs/design dir, a theme file, a CSS file with custom
+#              properties, an asset catalog and a chart library lists all
+#   audit      design-audit validate fails on a fresh scaffold, passes filled,
+#              fails on a missing section; a request audit's UI section too
+#   plan       design-plan refuses an unvalidated audit; validate fails fresh,
+#              on a missing size class and on a missing back target, passes
+#              filled
+#   build      check fails without evidence, passes with a PNG or a described
+#              layout; shoot refuses a non-local URL, a production env and an
+#              unignored folder; with no browser it prints skipped, exit 0
+#   one source the request audit and plan carry the same UI text as the
+#              standalone files (the fragments are one file each)
+#
+# Usage: bin/test-design
+#        TEST_DESIGN_BUILD_SH=<file> bin/test-design   gate with another design-build.sh
+#
+# Portable on purpose: bash 3.2, POSIX tools. Exit 0 only if every case passes.
+
+set -u
+here="$(cd "$(dirname "$0")" && pwd -P)"
+ELEMENT="$(cd "$here/.." && pwd -P)"
+
+T="$(mktemp -d "${TMPDIR:-/tmp}/test-design.XXXXXX")" || exit 2
+T="$(cd "$T" && pwd -P)"
+trap 'rm -rf "$T"' EXIT
+export GIT_CONFIG_GLOBAL=/dev/null HOME="$T/home"
+mkdir -p "$HOME"
+unset RASA_ROOT RASA_TENANT CLAUDECODE DESIGN_BROWSER
+export RASA_ACTOR=tester
+
+pass=0; fail=0
+ok()  { pass=$((pass + 1)); printf '  ok    %s\n' "$1"; }
+bad() { fail=$((fail + 1)); printf '  FAIL  %s\n        %s\n' "$1" "$2"; }
+# expect <name> <want-rc> <got-rc> [<pattern> <output>]
+expect() {
+  if [ "$3" != "$2" ]; then bad "$1" "want rc=$2, got rc=$3${5:+ — $(printf '%s' "$5" | tr '\n' '|' | cut -c1-400)}"; return; fi
+  if [ -n "${4:-}" ] && ! printf '%s\n' "${5:-}" | grep -q -- "$4"; then
+    bad "$1" "output lacks /$4/: $(printf '%s' "${5:-}" | tr '\n' '|' | cut -c1-400)"; return
+  fi
+  ok "$1"
+}
+fill() { perl -pe 's/<to-fill[^>]*>/filled/g' "$1" > "$2"; }
+# has <name> <pattern> <output>
+has() {
+  if printf '%s\n' "$3" | grep -q -- "$2"; then ok "$1"; else bad "$1" "output lacks /$2/: $(printf '%s' "$3" | tr '\n' '|' | cut -c1-400)"; fi
+}
+
+P="$T/proj"
+mkdir -p "$P"; cd "$P" || exit 2
+git init -q .
+bash "$ELEMENT/bin/init" . >"$T/init.log" 2>&1 || { echo "test-design: bin/init failed"; tail -5 "$T/init.log"; exit 2; }
+[ -n "${TEST_DESIGN_BUILD_SH:-}" ] && cp "$TEST_DESIGN_BUILD_SH" .claude/skills/design-build/design-build.sh
+S=.claude/skills
+DA="bash $S/design-audit/design-audit.sh"
+DP="bash $S/design-plan/design-plan.sh"
+DB="bash $S/design-build/design-build.sh"
+AU="bash $S/audit/audit.sh"
+
+# --- discover ----------------------------------------------------------
+out="$($DA discover 2>&1)"; rc=$?
+expect "discover: an empty project prints none found" 0 "$rc" "^none found" "$out"
+
+mkdir -p docs/design src app/Assets.xcassets node_modules/x
+printf ':root {\n  --brand: #123456;\n}\n' > src/app.css
+printf '%s\n' '--ignored: 1;' > node_modules/x/a.css
+echo 'export default {}' > src/theme.js
+echo '{"dependencies":{"recharts":"1.0.0"}}' > package.json
+out="$($DA discover 2>&1)"; rc=$?
+expect "discover: lists a design dir" 0 "$rc" "docs/design/ | design-dir" "$out"
+has "discover: lists a theme file" "src/theme.js | token-file" "$out"
+has "discover: lists a CSS file with custom properties" "src/app.css | css-variables" "$out"
+has "discover: lists an asset catalog" "Assets.xcassets/ | asset-catalog" "$out"
+has "discover: lists a chart library" "package.json | chart-library" "$out"
+printf '%s\n' "$out" | grep -q 'node_modules' && bad "discover: skips node_modules" "$out" || ok "discover: skips node_modules"
+printf '%s\n' "$out" | grep -q '123456' && bad "discover: never prints a value" "$out" || ok "discover: never prints a value"
+
+# --- design audit ------------------------------------------------------
+$DA scaffold shop > da.md
+out="$($DA validate da.md 2>&1)"; rc=$?
+expect "design audit: a fresh scaffold fails validate" 3 "$rc" "placeholder" "$out"
+fill da.md da-ok.md
+out="$($DA validate da-ok.md 2>&1)"; rc=$?
+expect "design audit: filled passes" 0 "$rc" "^ok" "$out"
+grep -v '^## Uniformity' da-ok.md > da-miss.md
+out="$($DA validate da-miss.md 2>&1)"; rc=$?
+expect "design audit: a missing section fails" 3 "$rc" "missing section: Uniformity" "$out"
+
+$AU scaffold-request shop > ra.md
+out="$($DA validate ra.md 2>&1)"; rc=$?
+expect "request audit: UI section fails while unfilled" 3 "$rc" "placeholder" "$out"
+fill ra.md ra-ok.md
+out="$($DA validate ra-ok.md 2>&1)"; rc=$?
+expect "request audit: UI section passes filled" 0 "$rc" "^ok" "$out"
+
+# --- design plan -------------------------------------------------------
+out="$($DP scaffold shop --audit da.md 2>&1)"; rc=$?
+expect "design plan: refuses an audit that does not validate" 3 "$rc" "does not validate" "$out"
+$DP scaffold shop --audit da-ok.md > dp.md
+out="$($DP validate dp.md 2>&1)"; rc=$?
+expect "design plan: a fresh scaffold fails validate" 3 "$rc" "placeholder" "$out"
+fill dp.md dp-ok.md
+out="$($DP validate dp-ok.md 2>&1)"; rc=$?
+expect "design plan: filled passes" 0 "$rc" "^ok" "$out"
+grep -v '^- \*\*medium:\*\*' dp-ok.md > dp-nosize.md
+out="$($DP validate dp-nosize.md 2>&1)"; rc=$?
+expect "design plan: a screen missing a size class fails" 3 "$rc" "missing size class medium" "$out"
+grep -v '^- \*\*Back target:\*\*' dp-ok.md > dp-noback.md
+out="$($DP validate dp-noback.md 2>&1)"; rc=$?
+expect "design plan: a screen with no back target fails" 3 "$rc" "no Back target" "$out"
+
+# --- design build ------------------------------------------------------
+sed 's/^### Screen: .*/### Screen: home/' dp-ok.md > bp.md
+perl -pi -e 's/^- \*\*medium:\*\*.*/- **medium:** <to-fill>/' bp.md
+out="$($DB check bp.md --slug shop 2>&1)"; rc=$?
+expect "check: a size class with no evidence fails" 3 "$rc" "home' at medium" "$out"
+mkdir -p .claude/scratch/design/shop; : > .claude/scratch/design/shop/home-medium.png
+out="$($DB check bp.md --slug shop 2>&1)"; rc=$?
+expect "check: a PNG for that class is evidence" 0 "$rc" "^ok" "$out"
+rm -f .claude/scratch/design/shop/home-medium.png
+out="$($DB check dp-ok.md --slug shop 2>&1)"; rc=$?
+expect "check: described layouts are evidence" 0 "$rc" "^ok" "$out"
+
+echo '<html></html>' > page.html
+out="$($DB shoot https://example.com --screen home 2>&1)"; rc=$?
+expect "shoot: a non-local URL with no --env is refused" 3 "$rc" "not local" "$out"
+out="$($DB shoot https://example.com --screen home --env prod 2>&1)"; rc=$?
+expect "shoot: a production environment is refused" 3 "$rc" "production environment" "$out"
+out="$($DB shoot https://example.com --screen home --env nowhere 2>&1)"; rc=$?
+expect "shoot: an unregistered environment is refused" 3 "$rc" "not a registered" "$out"
+out="$(DESIGN_BROWSER=none $DB shoot page.html --screen home --slug t 2>&1)"; rc=$?
+expect "shoot: refuses a folder git does not ignore" 3 "$rc" "not git-ignored" "$out"
+echo '.claude/scratch/' > .gitignore
+out="$(DESIGN_BROWSER=none $DB shoot page.html --screen home --slug t 2>&1)"; rc=$?
+expect "shoot: no browser is skipped, exit 0" 0 "$rc" "skipped (no browser)" "$out"
+
+# --- shoot: --env is bound to the address ------------------------------
+cat > .claude/environments.json <<'JSON'
+{"default": "local", "environments": {
+  "local": {"class": "dev"},
+  "qa": {"class": "staging", "url": "https://qa.example.com/app"},
+  "nourl": {"class": "staging"},
+  "prod": {"class": "prod", "url": "https://www.example.com"}}}
+JSON
+out="$(DESIGN_BROWSER=none $DB shoot https://qa.example.com:8443/x --screen home --slug t --env qa 2>&1)"; rc=$?
+expect "shoot: a target on the environment's own host is allowed" 0 "$rc" "skipped (no browser)" "$out"
+out="$(DESIGN_BROWSER=none $DB shoot https://www.example.com/ --screen home --slug t --env qa 2>&1)"; rc=$?
+expect "shoot: a different host than the environment's url is refused" 3 "$rc" "not the address of qa" "$out"
+out="$(DESIGN_BROWSER=none $DB shoot https://qa.example.com/ --screen home --slug t --env nourl 2>&1)"; rc=$?
+expect "shoot: an environment with no url is refused" 3 "$rc" "has no url" "$out"
+out="$(DESIGN_BROWSER=none $DB shoot https://www.example.com/ --screen home --slug t --env prod 2>&1)"; rc=$?
+expect "shoot: the production environment is refused even on its own host" 3 "$rc" "production environment" "$out"
+out="$(DESIGN_BROWSER=none $DB shoot 'http://evil.com#@localhost/' --screen home --slug t 2>&1)"; rc=$?
+expect "shoot: evil.com#@localhost is evil.com, refused" 3 "$rc" "not local" "$out"
+out="$(DESIGN_BROWSER=none $DB shoot 'http://evil.com\@localhost/' --screen home --slug t 2>&1)"; rc=$?
+expect "shoot: evil.com backslash @localhost is evil.com, refused" 3 "$rc" "not local" "$out"
+out="$(DESIGN_BROWSER=none $DB shoot 'http://evil.com?@localhost/' --screen home --slug t 2>&1)"; rc=$?
+expect "shoot: evil.com?@localhost is evil.com, refused" 3 "$rc" "not local" "$out"
+out="$(DESIGN_BROWSER=none $DB shoot 'http://user@localhost:5173/' --screen home --slug t 2>&1)"; rc=$?
+expect "shoot: user@localhost:5173 is local" 0 "$rc" "skipped (no browser)" "$out"
+out="$(DESIGN_BROWSER=none $DB shoot 'http://[::1]:8080/' --screen home --slug t 2>&1)"; rc=$?
+expect "shoot: [::1] with a port is local" 0 "$rc" "skipped (no browser)" "$out"
+
+# --- check: a request plan, and blank-ish layouts ----------------------
+{ printf '# Plan\n\n**Kind.** request\n\n## Goal\n\nx\n\n'; cat "$S/plan/ui-section.md"; } > rq.md
+out="$($DB check rq.md --slug rq 2>&1)"; rc=$?
+expect "check: a request plan with an unfilled UI section fails" 3 "$rc" "no evidence at compact" "$out"
+fill rq.md rq-ok.md
+perl -pi -e 's/^- \*\*Size classes:\*\*.*/- **Size classes:** compact stacks, medium two columns, expanded three/' rq-ok.md
+out="$($DB check rq-ok.md --slug rq 2>&1)"; rc=$?
+expect "check: a request plan describing each class passes" 0 "$rc" "^ok" "$out"
+perl -pi -e 's/, expanded three//' rq-ok.md
+out="$($DB check rq-ok.md --slug rq 2>&1)"; rc=$?
+expect "check: a class not described and without a PNG fails" 3 "$rc" "no evidence at expanded" "$out"
+mkdir -p .claude/scratch/design/rq; : > .claude/scratch/design/rq/home-expanded.png
+out="$($DB check rq-ok.md --slug rq 2>&1)"; rc=$?
+expect "check: a PNG for that class is request-plan evidence" 0 "$rc" "^ok" "$out"
+printf '# Plan\n\n**Kind.** request\n\n## UI/UX and screens\n\nNot touched: no screen.\n' > rq-none.md
+out="$($DB check rq-none.md --slug rq 2>&1)"; rc=$?
+expect "check: a request plan with UI not touched passes" 0 "$rc" "UI not touched" "$out"
+perl -pe 's/^- \*\*compact:\*\*.*/- **compact:** -/' bp.md > bp-blank.md
+out="$($DB check bp-blank.md --slug shop 2>&1)"; rc=$?
+expect "check: a layout of no words is not evidence" 3 "$rc" "at compact" "$out"
+
+# --- x-design: link writes it, the gate re-validates it ----------------
+printf '\n## Phase P1 — P1\n\nScope.\n' >> tasks/ROADMAP.md
+tid="$(.claude/bin/task new --type change --phase P1 "Design task" 2>&1 | grep -o 'TASK-[0-9]*' | head -1)"
+DV="bash $S/develop/develop.sh"
+out="$($DV link "$tid" --design dp.md 2>&1)"; rc=$?
+expect "link --design: refuses a design plan that does not validate" 3 "$rc" "does not validate" "$out"
+out="$($DV link "$tid" --design dp-ok.md --ui true 2>&1)"; rc=$?
+expect "link --design: --ui alone with it is a usage error" 2 "$rc" "goes with" "$out"
+out="$($DV link "$tid" --design dp-ok.md 2>&1)"; rc=$?
+expect "link --design: writes x-design" 0 "$rc" "x-design dp-ok.md" "$out"
+tf="$(ls tasks/backlog/"$tid"-*.md | head -1)"
+grep -q '^x-design: dp-ok.md' "$tf" && ok "link --design: the frontmatter carries x-design" || bad "link --design: the frontmatter carries x-design" "$(head -20 "$tf")"
+out="$($DV gate "$tid" 2>&1)"
+printf '%s\n' "$out" | grep -q 'x-design does not' && bad "gate: a valid x-design raises no reason" "$out" || ok "gate: a valid x-design raises no reason"
+mv dp-ok.md dp-ok.gone
+out="$($DV gate "$tid" 2>&1)"
+has "gate: a missing x-design file is a reason" "x-design does not exist or does not validate" "$out"
+mv dp-ok.gone dp-ok.md
+
+# --- one source per subject --------------------------------------------
+frag_a="$S/audit/ui-audit-section.md"; frag_p="$S/plan/ui-section.md"
+$DA scaffold --in ra.md | diff -q - "$frag_a" >/dev/null \
+  && ok "design-audit --in prints audit/ui-audit-section.md" || bad "design-audit --in prints audit/ui-audit-section.md" "differs"
+$DP scaffold --in ra.md | diff -q - "$frag_p" >/dev/null \
+  && ok "design-plan --in prints plan/ui-section.md" || bad "design-plan --in prints plan/ui-section.md" "differs"
+# the request audit carries the audit fragment verbatim
+if awk 'NR==FNR{f[++n]=$0; next} {a[++m]=$0} END{for(i=1;i<=m;i++){ok=1;for(j=1;j<=n;j++) if(a[i+j-1]!=f[j]){ok=0;break} if(ok) exit 0} exit 1}' "$frag_a" ra.md; then
+  ok "request audit carries ui-audit-section.md verbatim"
+else
+  bad "request audit carries ui-audit-section.md verbatim" "fragment not found in scaffold-request output"
+fi
+
+echo
+echo "$pass passed, $fail failed"
+[ "$fail" -eq 0 ]

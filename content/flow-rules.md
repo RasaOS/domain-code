@@ -14,6 +14,17 @@ leaves, and the gate between stages. Read with `ui-rules.md`.
 | Task | `/task`, then `develop.sh link` | a task carrying `x-audit`, `x-plan`, and `x-ui` when a screen is touched; `/task` does not write them, `develop.sh link <id> --audit <path> --plan <path> [--ui true\|false]` does |
 | Develop | `/develop` | a branch and a PR; the task moves to `review/` |
 
+When a screen is touched, the design stages run beside the flow, and
+each has one source: `/design-audit` fills the request audit's
+**UI/UX and screens** section (or writes a standalone `**Kind.** design`
+audit when there is no request audit), `/design-plan` fills the request
+plan's (or a standalone design plan), and `/design-build` builds the
+screens inside the `/develop` task, between `start` and `/open-pr`,
+and checks the evidence per size class. There is one audit and one plan
+per request, never a second pair. A standalone design plan is linked to
+its task with `develop.sh link <id> --design <path>`; the gate then
+validates `x-design`.
+
 After the PR merges, `/reconcile` runs the trunk done-gate and
 lands the move to `completed/` through the one sanctioned path. There
 is no other way to a `pass`.
