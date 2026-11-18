@@ -148,7 +148,7 @@ The carve-out:
   `land.py` classify every file, and nothing else does. Docs class
   is the `tasks/**` ledger (`tasks/**/*.md`, `tasks/history.tsv`)
   and the records
-  (`docs/{audits,decisions,postmortems,retros,notes,handoff,blast-radius,scope,exports,regrets,mvp,wrangle,refinement}/**/*.md`,
+  (`docs/{audits,decisions,postmortems,retros,notes,handoff,blast-radius,scope,exports,regrets,mvp,wrangle,refinement,plans}/**/*.md`,
   `docs/glossary.md`); the full table is in `land/SKILL.md`.
   Never docs class, whatever the path: any `CLAUDE.md` /
   `CLAUDE.local.md` / `AGENTS.md`, anything `CLAUDE.md`

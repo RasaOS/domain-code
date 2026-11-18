@@ -24,6 +24,36 @@ a consumer, and an entry without it is invisible in that report.
 
 ---
 
+## v0.63.0 — 2026-11-18
+
+**A request is audited, planned, filed and developed in order, and a screen is built for every size.** `/audit` gains a
+request kind, `/plan` gains a request plan, a new `/develop` skill holds a task to both before it starts, and the Element
+ships UI/UX rules (compact, medium and expanded views, the navigation back stack, the five states) that the plan and the
+task carry.
+
+New:
+- `/develop` (`develop.sh sources|check-unfilled|gate|start`): reads the tenant's and the repo's sources of truth, refuses
+  a task with an unfilled template, a missing or invalid audit/plan link, an unfilled UI or Data block, or a locked
+  contract, then starts it. It ends at `/open-pr`; after the merge `/reconcile` passes the task to `completed`.
+- `/audit` request kind (`audit.sh scaffold-request`) and `/plan` request plan (`plan.sh scaffold|validate|save`, saved to
+  `docs/plans/`). Every blank is `<to-fill>` and `validate` fails while one remains; a slot that does not apply is one
+  `Not touched: <why>` line.
+- `ui-rules.md` and `flow-rules.md`; size-class sections in `web-conventions.md` and `ios-conventions.md`.
+- A commented `tenant:` line in the `rasa-deployment.md` seed; `RASA_TENANT` also works. No pointer means `tenant: none`.
+- `/land`: `docs/plans/` is docs class (plans land by themselves). `docs/design/` is not: it is a project's style
+  source and goes by PR.
+- `bin/test-develop`; ADR 0001.
+
+Known limit: the UI and Data blocks are enforced at `/develop` only. The task templates are vendored from
+RasaOS/module-tasks and are not edited here; the blocks move into them when that module ships them
+(RasaOS/module-tasks#2, filed 2026-11-18). A task without
+`x-plan` (hotfix, bug, mission) has no audit/plan link to check, and `/auto-develop` reuses only `sources` and
+`check-unfilled`.
+
+To migrate: `/sync`. Existing installs add a `tenant:` line to `.claude/rasa-deployment.md` by hand if they have a tenant.
+
+---
+
 ## v0.61.0 — 2026-09-29
 
 **Nothing lost, nothing straight in: `/land`.** A skill's doc outputs

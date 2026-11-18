@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # audit.sh — deterministic scaffolding + persistence for the /audit skill.
 #
-# The auditor agent (kit/agents/auditor.md) produces the judgment;
+# The auditor agent (.claude/agents/auditor.md) produces the judgment;
 # this script handles everything mechanical: target resolution,
 # library detection, scaffold rendering, validation, and persistence.
 #
@@ -36,6 +36,26 @@ declare -a AUDIT_SECTIONS=(
   "⚖️ Tradeoffs worth naming"
   "❓ Open questions"
   "🎯 Bottom line"
+)
+
+# Sections of a request audit (`**Kind.** request`), in render order. Plain
+# titles, no glyphs. A request audit is read before a plan: it answers one
+# person's ask, not a slice of code. Data and "UI/UX and screens" render as
+# several <to-fill> lines (see render_request_scaffold) so a half-filled
+# section fails validate; one `Not touched: <why>` line replaces them all.
+declare -a REQUEST_SECTIONS=(
+  "TL;DR"
+  "Prior art"
+  "What exists"
+  "Sources of truth"
+  "Data"
+  "UI/UX and screens"
+  "Conventions"
+  "Traps"
+  "Risks"
+  "Approaches"
+  "Open questions"
+  "Bottom line"
 )
 
 # Severity tiers in render order. Append at the appropriate severity
@@ -108,9 +128,16 @@ USAGE:
       markdown. The header, library table, and section H2s are
       script-rendered (deterministic).
 
+  audit.sh scaffold-request <slug>
+      Emit the scaffolded markdown of a request audit: a fixed
+      "**Kind.** request" header (the agent does not edit it) and the
+      REQUEST_SECTIONS, with Data and UI/UX and screens split into one
+      <to-fill> line per sub-part. Save with: audit.sh save <slug> <file>.
+
   audit.sh validate <content-file>
       Check that the agent's completed scaffold has all required
-      sections (per AUDIT_SECTIONS) and no remaining <to-fill>
+      sections (per AUDIT_SECTIONS, or REQUEST_SECTIONS when the file
+      carries a "**Kind.** request" line) and no remaining <to-fill>
       placeholders. Exit 0 if compliant, 3 if not (caller decides).
 
   audit.sh save <target> <content-file>
@@ -378,6 +405,51 @@ EOF
 EOF
 }
 
+# A request audit. Separate from render_scaffold so the code-slice scaffold
+# stays byte-identical. The Kind line is the contract validate reads.
+render_request_scaffold() {
+  local slug="$1" section
+  cat <<EOF
+# Audit — ${slug}
+
+**Kind.** request
+**Request.** <to-fill — the person's words, quoted>
+**Confidence.** <to-fill — high / mixed / low + one-line why>
+
+---
+
+EOF
+  for section in "${REQUEST_SECTIONS[@]}"; do
+    echo "## ${section}"
+    echo ""
+    case "$section" in
+      "TL;DR")
+        echo "<to-fill — one specific sentence on the read: what the request needs and what is in the way.>" ;;
+      "Sources of truth")
+        echo "<to-fill — the repo's CLAUDE.md, docs and conventions read, and the tenant's (\`tenant: none\` when there is none). A tenant contract wins over the repo.>" ;;
+      "Data")
+        echo "Fill each line, or replace all of them with one line: \`Not touched: <why>\`."
+        echo ""
+        echo "- **Entities and fields:** <to-fill — read or changed>"
+        echo "- **Schema owner:** <to-fill — per CLAUDE.md and code-task-rules.md §8>"
+        echo "- **Contract stamp:** <to-fill — the stamp, and whether it is locked>"
+        echo "- **Migration file:** <to-fill — name per migration-rules.md>"
+        echo "- **/schema-check:** <to-fill — runs or not, and why>" ;;
+      "UI/UX and screens")
+        # One source for the UI block: design-audit shares this fragment.
+        cat "$(dirname "${BASH_SOURCE[0]}")/ui-audit-section.md" ;;
+      *)
+        echo "<to-fill>" ;;
+    esac
+    echo ""
+  done
+  cat <<EOF
+---
+
+*Audit produced by \`auditor\` agent on $(date '+%Y-%m-%d %H:%M %Z').*
+EOF
+}
+
 # ============================================================
 # Validation
 # ============================================================
@@ -389,8 +461,15 @@ cmd_validate() {
     return 1
   fi
 
+  # The Kind line picks the section list; a file without it is a code-slice
+  # audit and validates exactly as before.
+  local -a sections=("${AUDIT_SECTIONS[@]}")
+  if grep -qx '\*\*Kind\.\*\* request' "$f" 2>/dev/null; then
+    sections=("${REQUEST_SECTIONS[@]}")
+  fi
+
   local missing=0 section
-  for section in "${AUDIT_SECTIONS[@]}"; do
+  for section in "${sections[@]}"; do
     if ! grep -qF "## ${section}" "$f" 2>/dev/null; then
       echo "missing section: ${section}" >&2
       missing=$(( missing + 1 ))
@@ -525,6 +604,10 @@ main() {
     scaffold)
       [ $# -ge 1 ] || { echo "error: scaffold needs <target>" >&2; return 2; }
       cmd_scaffold "$@"
+      ;;
+    scaffold-request)
+      [ $# -ge 1 ] || { echo "error: scaffold-request needs <slug>" >&2; return 2; }
+      render_request_scaffold "$1"
       ;;
     validate)
       [ $# -ge 1 ] || { echo "error: validate needs <content-file>" >&2; return 2; }

@@ -31,7 +31,7 @@ class.
 
 | Class | Paths | How it lands |
 |---|---|---|
-| **docs** | `docs/{audits,decisions,postmortems,retros,notes,handoff,blast-radius,scope,exports,regrets,mvp,wrangle,refinement}/**/*.md`, `docs/glossary.md`, `tasks/**/*.md`, `tasks/history.tsv` | `land.sh docs`: merges itself after CI |
+| **docs** | `docs/{audits,decisions,postmortems,retros,notes,handoff,blast-radius,scope,exports,regrets,mvp,wrangle,refinement,plans}/**/*.md`, `docs/glossary.md`, `tasks/**/*.md`, `tasks/history.tsv` | `land.sh docs`: merges itself after CI |
 | **code** | everything else, and always: any `CLAUDE.md` / `CLAUDE.local.md` / `AGENTS.md`, anything a `CLAUDE.md` or `CLAUDE.local.md` anywhere in the repository `@`-imports (in the checkout or on the trunk, transitively, anywhere in their prose; e.g. `docs/notes/INDEX.md`, `.claude/welcome.md`), a `.claude/` or `.github/` folder at any depth, `tasks/tasks.config.yml`, `tasks/proto/**`, `docs/proto/**`, symlinks, executable files | `land.sh pr`: a PR the skill never merges |
 
 `bash .claude/skills/land/land.sh classify <path>...` shows the class and
